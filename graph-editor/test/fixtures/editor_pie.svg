@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 450" width="600" height="450">
+  <!-- E2E 用の最小フィクスチャ。getPieGeometry が最初の slice の d から cx,cy,r を、
+       sliceMidAnchor が楔形 (M…L…A) から中心角リム点を取得できる構造。
+       埋め込みフォントは不要 — 不変条件はテスト時の実 getBBox に対して判定するため。
+       パイ中心 (300,225) / 半径 135。 -->
+  <g id="slices">
+    <g class="slice" data-name="Alpha">
+      <path d="M300,225 L300,90 A135,135 0 0 1 435,225 Z" fill="#4e79a7"/>
+    </g>
+    <g class="slice" data-name="Beta">
+      <path d="M300,225 L435,225 A135,135 0 0 1 165,225 Z" fill="#f28e2b"/>
+    </g>
+  </g>
+  <g id="labels">
+    <g class="label" data-name="Alpha" data-line-count="1" data-percent="50">
+      <path d="M405,129 L529,68" fill="none" stroke="#111111" stroke-width="1"/>
+      <text x="529" y="68" font-size="15" fill="#111111" dominant-baseline="middle"><tspan x="529" dy="0em">Alpha 50%</tspan></text>
+    </g>
+    <!-- Beta は引出線なし・円内に配置: 円外へ動かすと自動生成、円内へ戻すと自動削除を検証する。 -->
+    <g class="label" data-name="Beta" data-line-count="1" data-percent="50">
+      <text x="281" y="231" font-size="15" fill="#111111" dominant-baseline="middle"><tspan x="281" dy="0em">Beta</tspan></text>
+    </g>
+  </g>
+</svg>

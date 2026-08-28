@@ -1,0 +1,12 @@
+# pytest の設定のみを持つ最小ファイル。graph-editor は「実行時依存ゼロ・標準ライブラリのみ・
+# 単一 app.py + resources/」が設計前提なので、`requirements.txt` は触らず、ここにも
+# `[project]` (配布パッケージ定義) を書かない。pytest は開発時だけ端末の Python で入れる
+# (`python -m pip install pytest`)。pdf-to-svg 側と同じく `python -m pytest` で走る。
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["."]
+addopts = "--strict-markers -m \"not e2e\""
+markers = [
+    "browser: 実ブラウザ(Edge channel)を要するテスト。CI で Edge を導入できない環境は -m \"not browser\" で除外する",
+    "e2e: 実ブラウザ + 実バックエンドの E2E（既定収集から除外。-m e2e で明示実行）",
+]

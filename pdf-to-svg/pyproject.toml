@@ -1,0 +1,36 @@
+[project]
+name = "pdftosvg"
+version = "0.1.0"
+description = "PDF を SVG 化し、表ヘッダの用語統一(辞書)と不要箇所のトリミングを非エンジニアでも行えるデスクトップツール"
+requires-python = ">=3.13"
+# ここは互換性の下限宣言のみ。インストールの正（== 完全固定）は requirements.txt 側。
+dependencies = [
+    "PyMuPDF>=1.28",
+    "Pillow>=12.3",
+    "fonttools>=4.63",
+    "brotli>=1.2",
+]
+# UI は OS 標準の Edge をアプリモードで開く方式 (web.server + resources/web) のため
+# PySide6 / QtWebEngine への依存は撤廃した (配布物が大幅に小さくなる)。
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1", "pyinstaller>=6.22"]
+
+[project.scripts]
+pdftosvg = "app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["src"]
+addopts = "--strict-markers -m \"not e2e\""
+markers = [
+    "browser: 実ブラウザ(Edge channel)を要するテスト。CI で Edge を導入できない環境は -m \"not browser\" で除外する",
+    "e2e: 実ブラウザ + 実バックエンドの E2E（既定収集から除外。-m e2e で明示実行）",
+]

@@ -1,0 +1,6 @@
+# docs 閲覧 HTML ビルド(docs/_build/build_all.py)の Python 依存。
+# build_all.bat が導入する(オフライン時は同梱 python-wheelhouse から --no-index)。
+# markdown-it-py=Markdown 解析 / python-frontmatter=front-matter(PyYAML を推移依存で導入)。
+# 版は == で完全固定する（ピンの正典。設計書 §8.5）。
+markdown-it-py==4.2.0
+python-frontmatter==1.3.0

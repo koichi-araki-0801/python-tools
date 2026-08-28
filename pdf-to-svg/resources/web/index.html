@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PdfToSvg</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--paper); }
+  /* 実ページ (SVG) のホスト */
+  .page-host {
+    background: #fff; border-radius: 3px; line-height: 0; position: relative;
+    box-shadow: 0 1px 1px oklch(0.4 0.02 262/0.08), 0 18px 50px oklch(0.4 0.02 262/0.16);
+  }
+  .page-host svg { display: block; }
+  .page-host.empty { display: grid; place-items: center; width: 300px; height: 400px; }
+  /* 手順3 のページ土台も手順2 と同じ白カードに（背景が透けないように） */
+  #trim-stage {
+    background: #fff; border-radius: 3px;
+    box-shadow: 0 1px 1px oklch(0.4 0.02 262/0.08), 0 18px 50px oklch(0.4 0.02 262/0.16);
+  }
+  #trim-stage svg { display: block; }
+  .page-loading { color: var(--faint); font-size: 12px; font-family: var(--font-ui); line-height: 1.5; }
+  .sel-box { position: absolute; border: 1.5px solid var(--accent);
+    background: oklch(0.58 0.105 240/0.14); pointer-events: none; border-radius: 2px; }
+  .crop-rubber { position: absolute; border: 2px solid var(--accent);
+    background: oklch(0.58 0.105 240/0.12); pointer-events: none; border-radius: 2px; }
+  .editor.tool-crop .page-host, .editor.tool-crop .doc-stage,
+  .editor.tool-border .page-host, .editor.tool-border .doc-stage { cursor: crosshair; }
+  .editor.tool-select .page-host [data-el] { cursor: pointer; }
+  /* 手順2: 文字クリックで「元の語」に取り込めることを示す */
+  .screen[data-screen="2"] .page-host text[data-el] { cursor: pointer; }
+  .el-hot { outline: 2px solid var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="app" class="app">
+
+  <!-- アプリバー -->
+  <div class="topbar">
+    <div class="brand"><span class="brand-mark">P</span>PdfToSvg</div>
+    <div class="file-chip">
+      <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M6 3.5A1.5 1.5 0 0 1 7.5 2h6L19 7.5v13A1.5 1.5 0 0 1 17.5 22h-10A1.5 1.5 0 0 1 6 20.5V3.5Z"></path><path d="M13 2v6h6"></path></svg>
+      <b id="ctx-text">ファイル未選択</b>
+    </div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="btn-undo" title="元に戻す (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 4 12l5 5"></path><path d="M4 12h11a5 5 0 0 1 0 10h-1"></path></svg></button>
+    <button class="iconbtn" id="btn-redo" title="やり直し (Ctrl+Y)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m15 7 5 5-5 5"></path><path d="M20 12H9a5 5 0 0 0 0 10h1"></path></svg></button>
+  </div>
+
+  <!-- ステップバー -->
+  <div class="stepbar" id="stepbar">
+    <div class="step" data-step="1"><span class="n">1</span>PDFを選ぶ</div>
+    <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
+    <div class="step" data-step="2"><span class="n">2</span>用語を置換</div>
+    <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
+    <div class="step" data-step="3"><span class="n">3</span>削除・枠線の編集</div>
+    <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
+    <div class="step" data-step="4"><span class="n">4</span>SVGに書き出す</div>
+  </div>
+
+  <div class="stage">
+
+    <!-- (1) 選択画面 -->
+    <section class="screen" data-screen="1">
+      <div class="center-scroll">
+        <div class="sheet">
+          <h1>変換する PDF を選ぶ</h1>
+          <p class="lead">複数のPDFをまとめて選べます。選んだ順に処理されます。</p>
+          <div class="dropzone" id="dropzone" tabindex="0" role="button"
+               aria-label="PDF ファイルを選択（ドラッグ＆ドロップも可）">
+            <div class="dz-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5"></path><path d="m7 10 5-5 5 5"></path><path d="M5 16v2.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V16"></path></svg></div>
+            <!-- D&D は実装済み (app.js の drop ハンドラ) — graph-editor と同じ文言で機能を告知する。 -->
+            <div class="dz-t">ここに PDF をドラッグ＆ドロップ</div>
+            <div class="dz-s">またはクリック / 下のボタンから選びます</div>
+            <button class="btn primary" id="btn-pick" style="margin:0 auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.2H19.5A1.5 1.5 0 0 1 21 9.7V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V7.5Z"></path></svg>ファイルを選ぶ…</button>
+          </div>
+          <div class="filelist">
+            <div class="lbl"><span>選択中のPDF</span><span id="filelist-count">0 ファイル</span></div>
+            <div id="file-cards"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- (2) 用語を置換（全ページ） -->
+    <section class="screen" data-screen="2">
+      <nav class="pagenav-rail" id="pagenav"></nav>
+      <div class="editor">
+        <div class="canvas-scroll"><div class="page-host empty" id="doc-master"><span class="page-loading">PDFを選ぶと<br>ここにページが表示されます</span></div></div>
+        <div class="page-nav"><span class="pg" id="pgnav-2"></span></div>
+        <div class="zoom-ctrl">
+          <button class="zb" data-zoomact="out" title="縮小"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path></svg></button>
+          <button class="zb zlabel" data-zoomact="reset" title="フィットに戻す"><span class="zpct">100%</span></button>
+          <button class="zb" data-zoomact="in" title="拡大"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+      </div>
+      <aside class="panel">
+        <div class="panel-head">
+          <div class="panel-tabs" role="tablist">
+            <button class="panel-tab" role="tab" aria-selected="true" data-tab="confirm">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.7 9 19 10.7 13.7 12.4 12 18l-1.7-5.6L5 10.7 10.3 9 12 3.5Z"></path></svg>
+              確認
+            </button>
+            <button class="panel-tab" role="tab" aria-selected="false" data-tab="dict">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5V4.5Z"></path><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19"></path><path d="M12 3v15"></path></svg>
+              辞書
+            </button>
+          </div>
+        </div>
+
+        <div class="tabpane on" data-pane="confirm">
+          <div class="panel-body">
+            <div class="statusbar" id="sum-2"></div>
+            <div id="confirm-dyn" style="display:flex;flex-direction:column;min-height:0;flex:1;gap:14px;"></div>
+          </div>
+          <div class="panel-foot" id="pageact-2"></div>
+        </div>
+
+        <div class="tabpane" data-pane="dict">
+          <div class="panel-body">
+            <div class="addform">
+              <div class="field-label" style="color:var(--accent-ink)">用語を追加</div>
+              <div class="row">
+                <input class="input" id="dict-src" placeholder="元の語">
+                <span class="arrow-mini"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="M4 12h15"></path><path d="m13 6 6 6-6 6"></path></svg></span>
+                <input class="input" id="dict-tgt" placeholder="置換後">
+              </div>
+              <button class="btn primary" id="dict-add" style="width:100%;justify-content:center;margin-top:10px;height:36px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>辞書に追加</button>
+            </div>
+            <div class="dict-list">
+              <div class="dict-head"><span id="dict-count">登録済みの用語（0）</span><span>有効</span></div>
+              <div id="dict-rows"></div>
+            </div>
+          </div>
+          <div class="panel-foot">
+            <div style="display:flex;gap:8px">
+              <button class="btn outline" id="btn-dict-export" style="flex:1;justify-content:center;height:34px;font-size:12.5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M12 4v10"></path><path d="m8 10 4 4 4-4"></path><path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"></path></svg>JSON書き出し</button>
+              <button class="btn outline" id="btn-dict-import" style="flex:1;justify-content:center;height:34px;font-size:12.5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><path d="M12 14V4"></path><path d="m8 8 4-4 4 4"></path><path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"></path></svg>JSON読み込み</button>
+            </div>
+            <label class="check" id="chk-suggest-join"><span class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5 10-11"></path></svg></span>クリック取り込みで折返しを連結</label>
+            <button class="btn primary" id="btn-reapply-page" style="justify-content:center;height:38px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.7 9 19 10.7 13.7 12.4 12 18l-1.7-5.6L5 10.7 10.3 9 12 3.5Z"></path></svg>このページのみ再適用</button>
+            <button class="btn outline" id="btn-reapply" style="justify-content:center;height:38px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.7 9 19 10.7 13.7 12.4 12 18l-1.7-5.6L5 10.7 10.3 9 12 3.5Z"></path></svg>全ファイルに再適用</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- (3) 不要範囲を削除（全ページ） -->
+    <section class="screen" data-screen="3">
+      <nav class="pagenav-rail" id="pagenav-3"></nav>
+      <div class="editor">
+        <div class="float-tools">
+          <div class="segment">
+            <button data-tool="select" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 19 12l-6.2 1.4L9.5 20 5.5 3.5Z"></path></svg>選択</button>
+            <button data-tool="crop" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v13.5A1.5 1.5 0 0 0 8.5 18H21"></path><path d="M3 7h13.5A1.5 1.5 0 0 1 18 8.5V21"></path></svg>範囲削除</button>
+            <button data-tool="border" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1.5"></rect></svg>枠線</button>
+          </div>
+          <div class="ft-div"></div>
+          <div class="border-opts" id="border-opts" hidden="">
+            <input type="color" id="border-color" value="#000000" title="枠線の色">
+            <label class="bo-w"><input type="number" id="border-width" value="1" min="0.5" max="20" step="0.5" title="線の太さ（pt）">pt</label>
+          </div>
+          <button class="btn ghost" id="btn-deletesel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"></path><path d="M6 7v12.5A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7"></path><path d="M10 11v6M14 11v6"></path></svg>削除</button>
+        </div>
+        <div class="canvas-scroll"><div class="doc-stage" id="trim-stage"></div></div>
+        <div class="page-nav"><span class="pg" id="pgnav-3"></span></div>
+        <div class="zoom-ctrl">
+          <button class="zb" data-zoomact="out" title="縮小"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path></svg></button>
+          <button class="zb zlabel" data-zoomact="reset" title="フィットに戻す"><span class="zpct">100%</span></button>
+          <button class="zb" data-zoomact="in" title="拡大"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+      </div>
+      <aside class="panel">
+        <div class="panel-head">
+          <h2><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px"><path d="M7 3v13.5A1.5 1.5 0 0 0 8.5 18H21"></path><path d="M3 7h13.5A1.5 1.5 0 0 1 18 8.5V21"></path></svg>削除・枠線の編集</h2>
+          <p class="desc">要らない要素は選んで削除、範囲削除でドラッグした領域内の要素をまとめて削除、枠線で罫線枠を追加できます。</p>
+        </div>
+        <div class="panel-body">
+          <div class="statusbar" id="sum-3"></div>
+          <div id="trim-dyn" style="display:flex;flex-direction:column;min-height:0;flex:1;"></div>
+        </div>
+        <div class="panel-foot" id="pageact-3"></div>
+      </aside>
+    </section>
+
+    <!-- (4) SVGに書き出す -->
+    <section class="screen" data-screen="4">
+      <div class="center-scroll">
+        <div class="sheet">
+          <h1>SVG に書き出す</h1>
+          <p class="lead">設定を確認して書き出します。書き出しはこの画面だけで行います。</p>
+
+          <div class="opt" style="display:flex;align-items:center;gap:16px">
+            <div class="big-tally"><span class="num" id="exp-num">0</span><span class="u">個のSVG</span></div>
+            <div style="flex:1"></div>
+            <div style="text-align:right;color:var(--muted);font-size:12.5px" id="export-summary"></div>
+          </div>
+
+          <div class="opt">
+            <div class="ot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5A1.5 1.5 0 0 1 7.5 2h6L19 7.5v13A1.5 1.5 0 0 1 17.5 22h-10A1.5 1.5 0 0 1 6 20.5V3.5Z"></path><path d="M13 2v6h6"></path></svg>書き出す範囲</div>
+            <div class="segment">
+              <button id="exp-page" data-mode="page" aria-pressed="false">表示中のページのみ</button>
+              <button id="exp-all" data-mode="all" aria-pressed="true">全ページ</button>
+              <button id="exp-noskip" data-mode="noskip" aria-pressed="false">スキップを除く</button>
+              <button id="exp-spec-btn" data-mode="spec" aria-pressed="false">ページを指定</button>
+            </div>
+            <div id="exp-spec-row" style="display:none;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+              <select id="exp-file" style="font-size:13px;padding:5px 8px"></select>
+              <input id="exp-spec" type="text" placeholder="例: 1-5, 8" style="font-size:13px;padding:5px 8px;width:140px">
+              <span style="font-size:12px;color:var(--muted)">ページ</span>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:10px">ファイル名：<b style="color:var(--ink)">元ファイル名_p1.svg, _p2.svg …</b></div>
+          </div>
+
+          <div class="opt" style="background:var(--good-soft);border-color:var(--good-line)">
+            <div class="ot" style="color:var(--good-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:17px;height:17px"><path d="m4.5 12.5 5 5 10-11"></path></svg>テキストは本物の文字のまま</div>
+            <div style="font-size:12.5px;color:var(--muted)">後から検索・再編集できます。使用フォントのみ埋め込むので出力は軽量です。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- 確認バー -->
+  <div class="guard" id="guard" hidden="">
+    <span class="gi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.5"></path><path d="M10.3 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path></svg>まだ確認していないページが <b id="guard-n">0</b> 件あります</span>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="guard-back">最初の未確認へ</button>
+    <button class="btn primary" id="guard-skip">未確認をすべてスキップして進む</button>
+  </div>
+
+  <!-- フッター -->
+  <div class="footer">
+    <button class="btn outline" id="btn-back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"></path></svg>戻る</button>
+    <div class="nav-hint" id="nav-hint"></div>
+    <div class="spacer"></div>
+    <button class="btn primary" id="btn-next">次へ<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"></path></svg></button>
+    <!-- 書き出しの determinate 進捗 (i/N はフッター文字 nav-hint にも出す)。 -->
+    <progress class="exp-progress" id="exp-progress" hidden></progress>
+    <button class="btn good lg" id="btn-export"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"></path><path d="m8 8 4-4 4 4"></path><path d="M4 14v4.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V14"></path></svg>SVGに書き出す</button>
+  </div>
+</div>
+
+<!-- role/aria-live: 書き出し完了などの通知をスクリーンリーダーにも読み上げさせる。 -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="rpc.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

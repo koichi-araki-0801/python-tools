@@ -1,0 +1,16 @@
+__pycache__/
+.venv*/
+dist/
+build/
+out/
+test-results/
+coverage/
+docs/_build/vendor/mermaid.min.js
+docs/_build/vendor/mermaid-layout-elk.min.js
+python-wheelhouse/
+offline-deps-bundle.tar.gz*
+bundle.key
+*.key.pem
+CLAUDE.md
+.claude/
+.mcp.json

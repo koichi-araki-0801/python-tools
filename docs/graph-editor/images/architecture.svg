@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460">
+  <!-- SVG ラベル位置エディタ 全体アーキテクチャ図（正典）。変更後は docs/_build/svg2png.py で PNG を再生成する。 -->
+  <style>
+    text { font-family: 'BIZ UDPGothic', sans-serif; fill: #20242C; }
+    .mono { font-family: 'BIZ UDGothic', monospace; }
+    .title { font-size: 20px; font-weight: bold; }
+    .item { font-size: 16px; }
+    .small { font-size: 14px; fill: #606874; }
+    .box { fill: #FFFFFF; stroke: #1F5C99; stroke-width: 2; }
+    .panel { fill: #F4F6F8; stroke: #DCE3EA; stroke-width: 1.5; }
+    .edge { stroke: #1F5C99; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .dep { stroke: #606874; stroke-width: 1.8; stroke-dasharray: 6 5; fill: none; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1F5C99"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="460" fill="#FFFFFF"/>
+
+  <!-- 入力 -->
+  <rect class="panel" x="50" y="170" width="250" height="110" rx="8"/>
+  <text class="item" x="175" y="212" text-anchor="middle">pie-chart 生成 SVG</text>
+  <text class="small" x="175" y="240" text-anchor="middle">フォント base64 内包（WYSIWYG）</text>
+
+  <!-- Edge アプリ窓 -->
+  <rect class="box" x="390" y="60" width="460" height="250" rx="8"/>
+  <text class="title" x="420" y="100">Edge アプリ窓（<tspan class="mono">ui.html</tspan> + js/ 13 モジュール）</text>
+  <text class="item" x="420" y="140">・ラベル <tspan class="mono">&lt;text&gt;</tspan> / 引出線 <tspan class="mono">&lt;path&gt;</tspan> をドラッグ編集</text>
+  <text class="item" x="420" y="174">・未信頼 SVG は <tspan class="mono">svg-policy.js</tspan> の許可リストで濾す</text>
+  <rect class="panel" x="420" y="212" width="400" height="72" rx="6"/>
+  <text class="item mono" x="620" y="242" text-anchor="middle">lib/leader_geom.cjs</text>
+  <text class="small" x="620" y="268" text-anchor="middle">引出線幾何の DOM 非依存な純粋関数（UMD）</text>
+
+  <!-- app.py -->
+  <rect class="box" x="390" y="350" width="460" height="70" rx="8"/>
+  <text class="item" x="620" y="380" text-anchor="middle"><tspan class="mono">app.py</tspan>　標準ライブラリ HTTP サーバ（127.0.0.1）</text>
+  <text class="small" x="620" y="405" text-anchor="middle">UI を配信し既定 Edge を --app で起動（実行時の外部依存なし）</text>
+
+  <!-- 出力 -->
+  <rect class="panel" x="940" y="170" width="210" height="110" rx="8"/>
+  <text class="item" x="1045" y="212" text-anchor="middle">クリーン SVG 保存</text>
+  <text class="small" x="1045" y="240" text-anchor="middle">補助要素を除去しダウンロード</text>
+
+  <!-- エッジ -->
+  <line class="edge" x1="304" y1="225" x2="384" y2="225"/>
+  <text class="small" x="344" y="210" text-anchor="middle">読込</text>
+  <line class="edge" x1="854" y1="225" x2="934" y2="225"/>
+  <text class="small" x="894" y="210" text-anchor="middle">保存</text>
+  <line class="edge" x1="620" y1="348" x2="620" y2="316"/>
+  <text class="small" x="645" y="338">配信</text>
+  <line class="dep" x1="824" y1="248" x2="985" y2="395"/>
+  <text class="small" x="1010" y="380">graph-editor の vitest と</text>
+  <text class="small" x="1010" y="400">同一実装を共有</text>
+  <text class="small" x="1010" y="420">（pie-chart とは並行実装）</text>
+</svg>

@@ -1,0 +1,5 @@
+# 開発・テスト専用の依存（pytest + playwright-python。exe ビルド venv へは入れない）。
+# 命名を「*requirements.txt」に合わせるのは、オフラインバンドルの content-key・
+# wheelhouse 収集・許可リスト検査の対象グロブに乗せるため（設計書 §4.5）。
+pytest==9.1.1
+playwright==1.62.0

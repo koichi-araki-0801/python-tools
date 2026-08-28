@@ -1,0 +1,10 @@
+# docs mermaid vendor manifest。
+# mermaid.min.js と mermaid-layout-elk.min.js は git に入れず offline 重量物バンドル
+# (offline-deps-bundle.tar.gz)へ同梱し、setup が docs/_build/vendor/ へ展開する。build 時は
+# md2html.py がそこから読んで HTML へインラインする(mermaid 未配置時は <pre class="mermaid">
+# フォールバック + 警告 / elk 未配置時は dagre + step へフォールバック)。下の有意行(版 + sha256)が
+# content-key に折り込まれ、いずれかを差し替えるとバンドルが再生成される。
+# mermaid-layout-elk は `@mermaid-js/layout-elk` を esbuild で単一 IIFE へ自前バンドルしたもの
+# (global mermaidLayoutElk)。差し替えは同手順で再バンドルする。
+mermaid.min.js             version=11.12.2  sha256=d0830a6c05546e9edb8fe20a8f545f3e0dc7c4c3134d584bad9c13a99d7a71e0
+mermaid-layout-elk.min.js  source=@mermaid-js/layout-elk@0.2.2  sha256=d03c00d1044b77bac0a794d8223de3721f6095b3eadaae094c4c406e5e0484b7
