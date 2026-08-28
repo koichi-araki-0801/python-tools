@@ -38,6 +38,11 @@ ROOT = Path(__file__).resolve().parent.parent
 #   shell_shim_prefixes : 拡張子なしファイルをシェルスクリプト扱いする前方一致集合
 #                          (例: git hook シム)
 #   docs_src_pattern : docs 原稿側の所見番号検査を当てるパスの正規表現
+#   finding_id_skip_prefixes : §5 所見番号検査だけを免除する前方一致パス集合
+#                               (ディレクトリ自体は §4 等の走査対象に残る点が
+#                               `skip_dir_names` と違う)。monorepo 側では PDF 抽出の
+#                               生テキストサンプルを置く `("docs/_samples/",)` を使う。
+#                               python-tools では該当ディレクトリが無いため空。
 REPO_CONFIGS: dict[str, dict] = {
     "python-tools": {
         "skip_dir_names": frozenset(
@@ -62,6 +67,7 @@ REPO_CONFIGS: dict[str, dict] = {
         "box_header_roots": None,
         "shell_shim_prefixes": ("scripts/hooks/",),
         "docs_src_pattern": re.compile(r"^docs/[^/]+/src/"),
+        "finding_id_skip_prefixes": (),
     },
 }
 ACTIVE_REPO = "python-tools"
@@ -324,8 +330,11 @@ def _check_finding_ids(errors: list[str], r: str, text: str, syntax_key: str, pa
 
 def check_finding_ids_all(errors: list[str], all_files: list[Path]) -> None:
     docs_pattern = CFG["docs_src_pattern"]
+    skip_prefixes = CFG["finding_id_skip_prefixes"]
     for f in all_files:
         r = rel(f)
+        if any(r.startswith(p) for p in skip_prefixes):
+            continue
         ext = f.suffix
         key = _syntax_key_for(r, ext)
         if key:
