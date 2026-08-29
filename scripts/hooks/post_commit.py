@@ -36,7 +36,13 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 
 def default_runner(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, **kwargs)
+    # `encoding` を明示しないと Windows既定ロケール (cp932 等) で decode され、`git push` /
+    # `publish_bundle.py` が出す UTF-8 出力 (pre-push フック自身が出す日本語メッセージを含む)
+    # で `UnicodeDecodeError` が読み取りスレッド内で発生し、出力が欠落したまま呼び出し元へ
+    # 戻ってしまう (実機で auto-push のメッセージが空文字になる形で再現)。
+    return subprocess.run(
+        cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", **kwargs
+    )
 
 
 # ── 1. auto-push ──
