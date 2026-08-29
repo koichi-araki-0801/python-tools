@@ -1032,13 +1032,33 @@ def test_main_raises_when_signing_key_missing_and_bundle_changed(monkeypatch, tm
 
 # ── main: bundle_hash フォールバック(重量物未更新時。M-5) ──
 def test_main_falls_back_to_sha_file_when_pin_is_unreadable_and_unchanged(monkeypatch, tmp_path):
-    # 実リポジトリの pin (offline/pinned-release.txt) を読めない状態を装い、実在する
-    # .sha256 ファイルへフォールバックすることを確認する(どちらも読み取り専用の実ファイル
-    # なので repo を変更しない)。
+    # pin (offline/pinned-release.txt) を読めない状態を装い、.sha256 ファイルへ
+    # フォールバックすることを確認する。sha_path は main() 内のローカル変数
+    # (ROOT / f"{BUNDLE_NAME}.sha256") で外から差し替えられないため、Path.is_file /
+    # read_text をこの特定パスにだけ差し込む(実リポジトリの残置ファイルの有無に
+    # 依存させない。clean checkout の CI では存在しない)。
     _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
     monkeypatch.setattr(
         bundle_common, "read_pin", lambda path: (_ for _ in ()).throw(ValueError("no pin"))
     )
+
+    sha_path = publish_bundle.ROOT / f"{publish_bundle.BUNDLE_NAME}.sha256"
+    fake_sha_content = f"{'a' * 64}  {publish_bundle.BUNDLE_NAME}"
+    real_is_file = pathlib.Path.is_file
+    real_read_text = pathlib.Path.read_text
+
+    def fake_is_file(self):
+        if self == sha_path:
+            return True
+        return real_is_file(self)
+
+    def fake_read_text(self, *args, **kwargs):
+        if self == sha_path:
+            return fake_sha_content
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "is_file", fake_is_file)
+    monkeypatch.setattr(pathlib.Path, "read_text", fake_read_text)
     monkeypatch.setattr(
         publish_bundle,
         "generate_pin",
@@ -1289,6 +1309,13 @@ def test_main_staged_passes_clean_tree(tmp_path, monkeypatch, capsys):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# `_restrict_to_owner` は icacls / USERDOMAIN・USERNAME を使う Windows 専用実装
+# (new_signing_key.py の docstring 参照)。`_restrict_to_owner` をモックせずに実行する
+# 以下 2 件は CI (ubuntu-latest) では成立しないため、非 Windows ではスキップする。
+_WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="icacls は Windows 専用")
+
+
+@_WINDOWS_ONLY
 def test_create_signing_key_pair_writes_usable_key_pair(tmp_path):
     priv = tmp_path / "sub" / "bundle-signing.key.pem"
     pub = tmp_path / "bundle-signing.pub.pem"
@@ -1301,6 +1328,8 @@ def test_create_signing_key_pair_writes_usable_key_pair(tmp_path):
 
 
 def test_create_signing_key_pair_refuses_overwrite_without_force(tmp_path):
+    # `_restrict_to_owner` (Windows 専用) へ到達する前に、既存ファイル検査で RuntimeError
+    # になる経路なのでプラットフォームを問わず実行できる。
     priv = tmp_path / "key.pem"
     pub = tmp_path / "pub.pem"
     priv.write_bytes(b"existing-private-key")
@@ -1308,6 +1337,7 @@ def test_create_signing_key_pair_refuses_overwrite_without_force(tmp_path):
         new_signing_key.create_signing_key_pair(priv, pub)
 
 
+@_WINDOWS_ONLY
 def test_create_signing_key_pair_force_overwrites_existing(tmp_path):
     priv = tmp_path / "key.pem"
     pub = tmp_path / "pub.pem"
