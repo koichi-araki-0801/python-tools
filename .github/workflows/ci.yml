@@ -30,6 +30,13 @@ jobs:
         with:
           python-version: '3.13'
 
+      # コメント規約 (`docs/コメント規約.md`) の機械判定項目を検査する。pre-commit フック
+      # (`scripts/hooks/pre_commit.py`)は `--staged` でステージ済みファイルだけを見るため、
+      # `--no-verify`・`core.hooksPath` 未設定 clone・非 ASCII パスの quotepath 問題(I-1)の
+      # いずれでも素通りしうる(実証済み)。CI では全ツリーを対象に強制点をもう 1 つ置く(I-5)。
+      - name: Check comment conventions
+        run: python scripts/check_comments.py
+
       # requirements の形式検査(`check_requirements.py`)を pip install の**前**に行う。
       # `--find-links <URL>` 等のオプション行が 1 行でも混入すると pip の解決先そのものを
       # 差し替えられるため、検査を経ない pip 入口を作らない(正典は `offline/publish_bundle.py`
