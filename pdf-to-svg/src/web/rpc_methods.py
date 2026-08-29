@@ -443,6 +443,28 @@ def rpc_exportSvg(s: WebSession, args: dict) -> dict:
 
 # ---- ZIP 集約 (複数 SVG の一括保存) ----
 
+def _unique_entry_name(name: str, used: set[str]) -> str:
+    """ZIP 内で一意なエントリ名を返し、``used`` へ登録する。
+
+    推奨ファイル名は ``<元ファイル名>_pN.svg`` なので、**同名の PDF を複数選ぶと名前が
+    丸ごと重なる**。``zipfile`` は同名エントリを警告だけで受け入れてしまい、展開時に
+    片方が失われるため、拡張子の手前へ ``_2`` から始まる連番を足して避ける。
+    """
+    if name not in used:
+        used.add(name)
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot:  # 拡張子が無い名前は末尾へ足す
+        stem, ext = name, ""
+    suffix = "." + ext if dot else ""
+    n = 2
+    while f"{stem}_{n}{suffix}" in used:
+        n += 1
+    unique = f"{stem}_{n}{suffix}"
+    used.add(unique)
+    return unique
+
+
 def rpc_zipEntries(_s: WebSession, args: dict) -> dict:
     """``{name, text}`` のリストを ZIP 1 本へ固め base64 で返す。
 
@@ -453,9 +475,10 @@ def rpc_zipEntries(_s: WebSession, args: dict) -> dict:
     """
     entries = args.get("entries") or []
     buf = io.BytesIO()
+    used: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for e in entries:
-            zf.writestr(str(e["name"]), str(e["text"]))
+            zf.writestr(_unique_entry_name(str(e["name"]), used), str(e["text"]))
     return {
         "zipBase64": base64.b64encode(buf.getvalue()).decode("ascii"),
         "count": len(entries),

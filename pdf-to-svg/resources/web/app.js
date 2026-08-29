@@ -991,9 +991,11 @@ import { initRail, buildRail } from "./rail.js";
         if (prog) prog.value = i + 1;
       }
       if (entries.length === 1) {
+        // `downloadBlob` はブラウザ任せの保存で、ブロックされたかを Web API から検知できない。
+        // 保存先を選ぶ FSA 経路 (上の `saveTextFile`) と違い、完了を断定しない文言にする。
         downloadBlob(entries[0].name, entries[0].text, "image/svg+xml");
-        setHint('<b style="color:var(--good-ink)">1個のSVGを書き出しました。</b>');
-        toast("1個のSVGを書き出しました");
+        setHint('<b style="color:var(--good-ink)">1個のSVGのダウンロードを開始しました。</b>');
+        toast("1個のSVGのダウンロードを開始しました");
         return;
       }
       // 複数ページは ZIP へ集約する — N 個の個別ダウンロード (Edge の連続 DL 確認に
@@ -1010,9 +1012,9 @@ import { initRail, buildRail } from "./rail.js";
           b64ToBytes(z.zipBase64), "application/zip");
         total += z.count;
       }
-      var suffix = chunks.length === 1 ? " ZIP で書き出しました。" : " ZIP " + chunks.length + " 本に分けて書き出しました。";
+      var suffix = chunks.length === 1 ? " ZIP でダウンロード開始しました。" : " ZIP " + chunks.length + " 本に分けてダウンロード開始しました。";
       setHint('<b style="color:var(--good-ink)">' + total + "個のSVGを" + suffix + "</b>");
-      toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "書き出しました");
+      toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "ダウンロード開始しました");
     } catch (e) {
       // 失敗を握り潰すと「押しても何も起きない」になる。理由を出して再試行できる状態へ戻す。
       toast(String((e && e.message) || "書き出しに失敗しました"));
