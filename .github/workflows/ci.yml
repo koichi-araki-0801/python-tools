@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 既定の GITHUB_TOKEN は読み取りだけに絞る。この job は検査しかしないため書き込み権限は不要で、
+# 依存やアクションの侵害でトークンが悪用されても push / release へは届かない。
+permissions:
+  contents: read
+
+# アクションは可変タグでなく**コミット SHA で pin** する。`@v5` のようなタグは指す先が
+# 動くため、上流のタグ移動 1 つで CI ランナー上の任意コード実行に到達する。版は末尾の
+# コメントで残し、更新時は SHA とコメントの両方を書き換える(monorepo `.github/workflows/ci.yml`
+# と同じ方針。SHA はそちらから流用)。
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # この job は remote へ git しない。既定では checkout が認証情報を
+          # .git/config へ残すため、後続ステップ(requirements のインストール等)から
+          # トークンを使われないよう明示的に無効化する。
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # requirements の形式検査(`check_requirements.py`)を pip install の**前**に行う。
+      # `--find-links <URL>` 等のオプション行が 1 行でも混入すると pip の解決先そのものを
+      # 差し替えられるため、検査を経ない pip 入口を作らない(正典は `offline/publish_bundle.py`
+      # の `KNOWN_PIP_ENTRYPOINTS` — このファイルもそこへ登録済みで、ガードテスト
+      # `scripts/test_python_tools_scripts.py` が検査経由を機械確認する)。
+      - name: Check requirements files
+        run: python scripts/check_requirements.py $(git ls-files -- '*requirements.txt')
+
+      # `git ls-files -- '*requirements.txt'` で動的に列挙する(`setup_dev.py` の
+      # `list_requirements` と同じ考え方。ファイルが増減しても追随する)。
+      - name: Install Python dependencies
+        run: |
+          set -eu
+          for req in $(git ls-files -- '*requirements.txt'); do
+            python -m pip install -r "$req"
+          done
+
+      # pdf-to-svg / graph-editor の `browser` マーカー付きテスト(既定収集に含む)は
+      # 実 Edge を要する。CI ランナーに msedge は無いため明示導入する。
+      - name: Install Edge for browser-marked tests
+        run: python -m playwright install --with-deps msedge
+
+      # scripts/ 自身の単体テスト(pip 入口ガード・requirements 検査・offline 一式)を
+      # 先に走らせる(依存が薄く早期に失敗を検出できるため)。pdf-to-svg / graph-editor /
+      # docs/_build は `test/` に同名モジュール(`test_edge_launch.py` 等)を含むため
+      # 1 回の `pytest` 呼び出しへまとめない(import file mismatch。個別実行はローカルの
+      # 検証コマンドと同じ)。既定収集のため addopts の `-m "not e2e"` により e2e は
+      # 走らない(`browser` マーカー単体は既定収集に乗る)。
+      - name: Test (pytest)
+        run: |
+          python -m pytest scripts
+          python -m pytest pdf-to-svg
+          python -m pytest graph-editor
+          python -m pytest docs/_build

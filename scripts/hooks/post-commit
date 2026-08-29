@@ -1,0 +1,7 @@
+#!/bin/sh
+# post-commit フック本体 (scripts/hooks/post_commit.py) を py -3.13 で起動する薄いシム。
+# Git for Windows は core.hooksPath 配下のフックを sh.exe (MinGW) 経由で実行するため、
+# .py を直接フックには置けない (実行属性/インタプリタ解決の両方が絡む)。
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec py -3.13 "$DIR/post_commit.py" "$@"
