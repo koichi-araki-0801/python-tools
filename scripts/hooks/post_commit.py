@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -79,7 +80,12 @@ def publish_tag_only(*, runner: Runner = default_runner, publish_bundle_path: Pa
         # 配布物の同梱状況によっては offline/ 一式が無いチェックアウトもありうる
         # (本リポでは常時同梱だが、契約としてここで踏み倒さない)。
         return
-    result = runner([sys.executable, str(publish_bundle_path), "--tag-only"])
+    # `publish_bundle.py` 自身は自分の標準出力を UTF-8 へ固定していないため、パイプ経由
+    # (非コンソール)で起動すると Windows既定ロケール(cp932)で出力される。呼び出し元の
+    # `default_runner` は UTF-8 で decode するため、子の出力エンコーディングを明示的に
+    # UTF-8 へ揃える(実機でメッセージが文字化けする形で再現)。
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    result = runner([sys.executable, str(publish_bundle_path), "--tag-only"], env=env)
     output = "\n".join(s for s in (result.stdout, result.stderr) if s and s.strip())
     if output:
         print(output.strip())
