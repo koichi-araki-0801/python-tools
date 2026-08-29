@@ -87,20 +87,38 @@ def test_check_requirements_file_passes_clean_file(tmp_path):
 
 
 def test_assert_requirements_file_raises_on_violation(tmp_path):
+    # `RuntimeError` を送出すること (`SystemExit` にしない)。`SystemExit` は `BaseException`
+    # 直系で `Exception` を継承しないため、呼び出し側の通常の `except Exception` (build.py)
+    # を素通りしてしまう。
     path = tmp_path / "requirements.txt"
     path.write_text("--find-links https://evil/\n", encoding="utf-8")
     try:
         check_requirements.assert_requirements_file(path)
-    except SystemExit:
+    except RuntimeError:
         pass
     else:
-        raise AssertionError("違反ファイルで SystemExit が送出されなかった")
+        raise AssertionError("違反ファイルで RuntimeError が送出されなかった")
 
 
 def test_assert_requirements_file_passes_clean_file(tmp_path):
     path = tmp_path / "requirements.txt"
     path.write_text("markdown-it-py\n", encoding="utf-8")
     check_requirements.assert_requirements_file(path)  # 例外を送出しないことを確認
+
+
+def test_assert_requirements_file_exception_is_caught_by_except_exception(tmp_path):
+    """`graph-editor` / `pdf-to-svg` の `scripts/build.py` が持つ通常の `except Exception`
+    で確実に捕まることを回帰的に確認する。`SystemExit` を送出していた版では
+    `BaseException` 直系のため `except Exception` を素通りし、`[エラー] ...` 表示と
+    ダブルクリック起動時の一時停止 (`_pause()`) が飛んでいた。"""
+    path = tmp_path / "requirements.txt"
+    path.write_text("-e .\n", encoding="utf-8")
+    caught = False
+    try:
+        check_requirements.assert_requirements_file(path)
+    except Exception:
+        caught = True
+    assert caught is True
 
 
 # ── CLI: -Path / 位置引数 ──

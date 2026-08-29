@@ -65,17 +65,23 @@ def check_requirements_file(path: Path) -> list[str]:
 
 
 def assert_requirements_file(path: Path) -> None:
-    """検査に落ちたら `SystemExit`。**pip へ渡すすべての入口から呼ぶこと。**
+    """検査に落ちたら `RuntimeError`。**pip へ渡すすべての入口から呼ぶこと。**
 
     ガードが一部の入口にしか無いと、そこを迂回する経路 (別のビルドスクリプト・
     別のドキュメントビルド等) が素通りする。`--no-index` は requirements 内の
     `--find-links <URL>` を止めないので「オフラインだから安全」も成立しない。
+
+    `SystemExit` でなく `RuntimeError` を送出する: `SystemExit` は `BaseException` 直系で
+    `Exception` を継承しないため、呼び出し側 (`build_venv.py` 経由の `graph-editor` /
+    `pdf-to-svg` の `scripts/build.py`) が持つ通常の `except Exception` を素通りしてしまう
+    (捕まらないと `[エラー] ...` 表示とダブルクリック起動時の一時停止が飛ぶ)。CLI (`main`)
+    側でこの例外を受けて終了コード化する。
     """
     violations = check_requirements_file(path)
     if violations:
         for v in violations:
             print(f"[requirements] {v}", file=sys.stderr)
-        raise SystemExit(f"requirements の形式検査に失敗しました: {path}")
+        raise RuntimeError(f"requirements の形式検査に失敗しました: {path}")
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
