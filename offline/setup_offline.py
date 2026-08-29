@@ -15,20 +15,25 @@
      フォールバックし、その場合はリポジトリの一時 Public 化が前提 — README-offline.md 参照)
   3. **pin の bundle-sha256 と実ファイルを標準ライブラリ hashlib だけで照合**
      (主アンカー。まだ `cryptography` が無い段階でも判定できる経路を先に置く)
-  4. 展開(python-wheelhouse / docs/_build/vendor)+ **手元のソースが重量物と対の組で
-     あることを bundle.key(content-key)で確認**(不一致・手順6の署名検証失敗は
-     どちらも展開済みの内容を削除して非ゼロ終了する)
-  5. wheelhouse から `cryptography` を `--no-index` で導入
+  4. **展開の前に**、手元のソース(git 管理下の requirements.txt / manifest.txt)が
+     重量物と対の組であることを bundle.key(content-key)で確認する。`docs/_build/vendor/
+     manifest.txt` は git 追跡下のファイルで clean clone に必ず存在するため、展開前でも
+     算出できる。**展開の後**に測ると、バンドル自身が同梱する manifest.txt が git 管理下の
+     実体を上書きしてしまい、以後の照合はバンドル自身と比較する堂々巡りになって
+     manifest の差分を構造的に検知できなくなる(実証済み)。
+  5. 展開(python-wheelhouse / docs/_build/vendor)。手順4の照合を通過済みの組み合わせ
+     だけを展開する。
+  6. wheelhouse から `cryptography` を `--no-index` で導入
      (`check_requirements` でのファイル検査を経てから pip を呼ぶ)
-  6. **Ed25519 分離署名を検証**(多層防御。失敗したら手順4で展開した内容を削除して
+  7. **Ed25519 分離署名を検証**(多層防御。失敗したら手順5で展開した内容を削除して
      非ゼロ終了する)
-  7. pin の source-zip-sha256 を、pin の source-commit のアーカイブ(codeload)を取得して
+  8. pin の source-zip-sha256 を、pin の source-commit のアーカイブ(codeload)を取得して
      照合する(手元の git checkout とは独立の経路で「公開時に生成された pin」と
      整合することを確かめる追加確認。展開・書き込みは行わない)
 
-手順3までは `cryptography` に一切依存しない(`bundle_common.py` は署名系の 3 関数だけが
+手順5までは `cryptography` に一切依存しない(`bundle_common.py` は署名系の 3 関数だけが
 個別に遅延 import する設計になっている。モジュール冒頭で import すると、`cryptography` が
-まだ無い配布先での手順1-4の実行自体が import エラーで止まってしまうため)。
+まだ無い配布先での手順1-5の実行自体が import エラーで止まってしまうため)。
 
 gh を呼ぶ関数・HTTP 取得を行う関数はすべて呼び出し側から差し替え可能にしている(単体テストは
 偽 runner・偽ダウンロード関数を注入し、実ネットワークへは一切アクセスしない)。
@@ -220,7 +225,7 @@ def fetch_bundle_assets(
 ) -> tuple[Path, Path, Path]:
     """Release からバンドル本体(.tar.gz)・分離署名(.sig)・`bundle.key` を取得する(手順2)。
 
-    戻り値は `(bundle_path, sig_path, key_path)`。`bundle.key` は手順4付随の内容キー照合
+    戻り値は `(bundle_path, sig_path, key_path)`。`bundle.key` は手順4の内容キー照合
     (`verify_local_checkout_matches_bundle_key`)で使う。
 
     gh CLI を先に試し(認証済みなら private のまま取得できる)、失敗したら無認証 HTTPS の
@@ -261,7 +266,7 @@ def verify_bundle_sha256(bundle_path: Path, pin: bundle_common.PublishPin) -> No
     """pin の bundle-sha256 と実ファイルを hashlib だけで照合する(手順3)。
 
     まだ展開していない段階で行う(不一致のバンドルを万一にもリポジトリ直下へ展開しない
-    ため)。`cryptography`(手順5で導入)を使わずに判定できる唯一の照合であり、これが
+    ため)。`cryptography`(手順6で導入)を使わずに判定できる唯一の照合であり、これが
     ブートストラップの主アンカーになる。
     """
     actual = publish_bundle.sha256_file(bundle_path)
@@ -272,11 +277,16 @@ def verify_bundle_sha256(bundle_path: Path, pin: bundle_common.PublishPin) -> No
         )
 
 
-# ── 手順4: 展開 ──
+# ── 手順5: 展開 ──
 
 
 def extract_bundle(bundle_path: Path, repo_root: Path = ROOT) -> None:
-    """バンドルを repo_root 直下へ展開する(python-wheelhouse / docs/_build/vendor)。"""
+    """バンドルを repo_root 直下へ展開する(python-wheelhouse / docs/_build/vendor)。
+
+    手順4(`verify_local_checkout_matches_bundle_key`)の照合を通過した後に呼ぶこと。
+    先に展開すると、バンドル同梱の manifest.txt が手元の git 管理下の実体を上書きしてしまう
+    (I-3)。
+    """
     tar_exe = publish_bundle.resolve_tar_exe()
     result = subprocess.run([tar_exe, "-xzf", str(bundle_path), "-C", str(repo_root)])
     if result.returncode != 0:
@@ -290,7 +300,7 @@ def extract_bundle(bundle_path: Path, repo_root: Path = ROOT) -> None:
 def remove_extracted_bundle(repo_root: Path = ROOT) -> None:
     """展開済みの重量物(python-wheelhouse / docs/_build/vendor の JS 2 件)を削除する。
 
-    手順6の署名検証・手順4付随の内容キー照合に失敗したときの後始末(多層防御。展開物を
+    手順7の署名検証・手順4の内容キー照合に失敗したときの後始末(多層防御。展開物を
     残さない)。`docs/_build/vendor/manifest.txt` は git 管理下のファイル(バンドルにも
     同梱されるがリポジトリのコミット内容が正)なので消さない。JS 2 ファイルだけがバンドル
     由来で `.gitignore` 対象になっている(`publish_bundle.VENDOR_JS_ASSET_NAMES` と対で持つ)。
@@ -305,26 +315,34 @@ def remove_extracted_bundle(repo_root: Path = ROOT) -> None:
             p.unlink(missing_ok=True)
 
 
-# ── 手順4付随: 手元のソースが重量物と対の組であることの確認(bundle.key) ──
+# ── 手順4: 手元のソースが重量物と対の組であることの確認(bundle.key。展開の前に行う) ──
 
 
 def verify_local_checkout_matches_bundle_key(key_path: Path, repo_root: Path = ROOT) -> None:
-    """展開後の手元チェックアウトが、取得した重量物と対の組であることを確かめる。
+    """手元のチェックアウトが、取得した重量物と対の組であることを確かめる。
 
     PS 原典(monorepo `setup-offline.ps1` の lockfile 整合チェック)に相当する検査。
-    手順7は「GitHub 上の source-commit アーカイブ」と「pin」を突き合わせるだけで、
+    手順8は「GitHub 上の source-commit アーカイブ」と「pin」を突き合わせるだけで、
     **手元の git checkout(requirements.txt 等)が pin と一致するか**は見ていない。
     pin より新しいコミットへ進んだ作業ツリーで setup を実行すると、ここまでの手順は
     すべて緑のまま通り、後続の `setup-dev.bat` が `--no-index` の解決失敗という分かり
     にくい形で初めて症状が出る。ここで content-key(`bundle_common.compute_content_key`。
     `publish_bundle.py` が公開のたびに算出しているものと同一ロジック)を比較して早期に
-    止める。展開直後(`docs/_build/vendor/manifest.txt` が揃った状態)で行う必要がある
-    (揃う前に測ると manifest を欠いて publish 側の値と必ずズレる)。
+    止める。
+
+    **必ず `extract_bundle` の前に呼ぶこと(I-3)。** `docs/_build/vendor/manifest.txt` は
+    git 追跡下のファイルで clean clone に必ず存在するため、展開前でも算出できる。一方で
+    展開後に測ると、バンドル自身が同梱する manifest.txt が git 管理下の実体を上書きして
+    しまい、以後の算出は「バンドル自身の manifest」対「バンドルの bundle.key」という
+    堂々巡りの比較になって常に一致してしまう(manifest 更新のみを含む差分を構造的に
+    検知できなくなる。旧実装で実証済み)。
 
     不一致は改ざんの兆候ではなく「バンドルとソースの組み合わせ違い」であり、算出は
-    hashlib だけで完結して `cryptography` を必要としない(手順6より前に安全に置ける)。
-    展開済みの内容は信用できる組ではないため、手順6の失敗時と同様に
-    `remove_extracted_bundle` で削除してから中止する。
+    hashlib だけで完結して `cryptography` を必要としない(手順6の cryptography 導入より
+    前に安全に置ける)。
+    本関数は展開前に呼ぶため、通常は削除対象の展開物は存在しないが、`remove_extracted_bundle`
+    の呼び出し自体は(前回の中断等で展開済みの残骸が残っていた場合の後始末として)
+    べき等に保つ。
     """
     bundle_key = bundle_common.read_bundle_key(key_path)
     local_key = bundle_common.compute_content_key(repo_root)
@@ -339,7 +357,7 @@ def verify_local_checkout_matches_bundle_key(key_path: Path, repo_root: Path = R
         )
 
 
-# ── 手順5: wheelhouse から cryptography を導入 ──
+# ── 手順6: wheelhouse から cryptography を導入 ──
 
 
 def build_pip_install_command(
@@ -366,10 +384,10 @@ def build_pip_install_command(
 def install_cryptography_from_wheelhouse(
     repo_root: Path = ROOT, *, python_exe: list[str] | None = None
 ) -> None:
-    """wheelhouse から `cryptography` を `--no-index` で導入する(手順5)。
+    """wheelhouse から `cryptography` を `--no-index` で導入する(手順6)。
 
-    手順6(Ed25519 署名検証)は `cryptography` に依存するが、その `cryptography` 自体は
-    このバンドル(手順4で展開した wheelhouse)にしか無い。requirements の形式検査
+    手順7(Ed25519 署名検証)は `cryptography` に依存するが、その `cryptography` 自体は
+    このバンドル(手順5で展開した wheelhouse)にしか無い。requirements の形式検査
     (`check_requirements`)は pip へ渡すすべての入口で必須のため、ここでも pip を呼ぶ前に
     必ず通す。
     """
@@ -384,17 +402,17 @@ def install_cryptography_from_wheelhouse(
         raise RuntimeError("cryptography の導入(pip install --no-index)に失敗しました。")
 
 
-# ── 手順6: Ed25519 署名検証(失敗したら展開物を削除) ──
+# ── 手順7: Ed25519 署名検証(失敗したら展開物を削除) ──
 
 
 def verify_bundle_signature_or_cleanup(
     bundle_path: Path, sig_path: Path, public_key_pem: bytes, *, repo_root: Path = ROOT
 ) -> None:
-    """Ed25519 分離署名を検証する(手順6・多層防御)。
+    """Ed25519 分離署名を検証する(手順7・多層防御)。
 
     手順3(sha256)は転送破損・単純な取得ミスを弾く一方、hashlib だけの照合は「秘密鍵の
     所持」までは要求しない。署名検証はそれより一段強い根拠になる。失敗したら、たとえ
-    手順3を通っていても手順4で展開済みの内容を信用せず削除してから処理を中止する。
+    手順3を通っていても手順5で展開済みの内容を信用せず削除してから処理を中止する。
     """
     if not sig_path.is_file():
         raise RuntimeError(f"分離署名ファイルがありません: {sig_path}")
@@ -404,13 +422,13 @@ def verify_bundle_signature_or_cleanup(
         raise RuntimeError(
             "分離署名の検証に失敗しました。改ざん・すり替え、または公開鍵と署名鍵の不一致の"
             "可能性があります。展開済みの重量物(python-wheelhouse / vendor の JS)は削除しました。"
-            "ただし手順5で site-packages へ導入済みの cryptography パッケージ自体は削除の対象外です"
+            "ただし手順6で site-packages へ導入済みの cryptography パッケージ自体は削除の対象外です"
             "(署名未検証の wheelhouse から入れたものが残るため、`py -3.13 -m pip uninstall -y "
             "cryptography` を実行して手動で削除してください)。"
         )
 
 
-# ── 手順7: source zip の sha256 照合(追加確認。展開はしない) ──
+# ── 手順8: source zip の sha256 照合(追加確認。展開はしない) ──
 
 
 SourceZipDownloader = Callable[[str, str, str, Path], bool]
@@ -474,12 +492,12 @@ def verify_source_zip_sha256(
     gh_download: SourceZipDownloader = default_gh_authenticated_source_zip_download,
     http_download: Downloader = default_source_zip_http_download,
 ) -> None:
-    """pin の source-commit のアーカイブを取得し、source-zip-sha256 と照合する(手順7)。
+    """pin の source-commit のアーカイブを取得し、source-zip-sha256 と照合する(手順8)。
 
     ソースコード自体は既に手元にある前提(git clone 等の別経路)なので、取得したアーカイブを
     展開はしない。「公開時に `publish_bundle.py` が生成した pin」と「今 GitHub 上にある
     同一コミットのアーカイブ」を独立な経路で突き合わせる追加確認であり、この照合結果は
-    手順3-6で確定したバンドルの正当性そのものには影響しない(源が異なる問題の切り分けの
+    手順3-7で確定したバンドルの正当性そのものには影響しない(源が異なる問題の切り分けの
     ため、失敗時は展開済みの重量物を削除せずに処理を中止する)。
     """
     with tempfile.TemporaryDirectory(prefix="python-tools-setup-src-") as tmp_name:
@@ -524,36 +542,40 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    print("[1/7] pin と公開鍵を読み込みます...")
+    print("[1/8] pin と公開鍵を読み込みます...")
     pin, public_key_pem = load_pin_and_public_key()
     print(f"[info] pinned source commit: {pin.source_commit}")
 
     with tempfile.TemporaryDirectory(prefix="python-tools-setup-") as tmp_name:
         tmp_dir = Path(tmp_name)
 
-        print(f"[2/7] Release {args.tag} からバンドルを取得します...")
+        print(f"[2/8] Release {args.tag} からバンドルを取得します...")
         bundle_path, sig_path, key_path = fetch_bundle_assets(
             args.tag, tmp_dir, owner=args.owner, repo=args.repo
         )
 
-        print("[3/7] バンドルの sha256 を pin と照合します(主アンカー)...")
+        print("[3/8] バンドルの sha256 を pin と照合します(主アンカー)...")
         verify_bundle_sha256(bundle_path, pin)
         print("[info] sha256 OK。")
 
-        print("[4/7] バンドルを展開します(python-wheelhouse / docs/_build/vendor)...")
-        extract_bundle(bundle_path)
-        print("[info] 手元のソースが重量物と対の組であることを bundle.key で確認します...")
+        # I-3: 展開の前に照合する。展開後だと bundle 同梱の manifest.txt が git 管理下の
+        # 実体を上書きし、以後の照合が「バンドル自身との堂々巡り」になって manifest の
+        # 差分を検知できなくなる(verify_local_checkout_matches_bundle_key の docstring 参照)。
+        print("[4/8] 手元のソースが重量物と対の組であることを bundle.key で確認します...")
         verify_local_checkout_matches_bundle_key(key_path)
         print("[info] content key 一致。")
 
-        print("[5/7] wheelhouse から cryptography を導入します...")
+        print("[5/8] バンドルを展開します(python-wheelhouse / docs/_build/vendor)...")
+        extract_bundle(bundle_path)
+
+        print("[6/8] wheelhouse から cryptography を導入します...")
         install_cryptography_from_wheelhouse()
 
-        print("[6/7] Ed25519 分離署名を検証します(多層防御)...")
+        print("[7/8] Ed25519 分離署名を検証します(多層防御)...")
         verify_bundle_signature_or_cleanup(bundle_path, sig_path, public_key_pem)
         print("[info] 署名 OK。")
 
-        print("[7/7] ソース ZIP の sha256 を pin と照合します(追加確認)...")
+        print("[8/8] ソース ZIP の sha256 を pin と照合します(追加確認)...")
         verify_source_zip_sha256(pin, owner=args.owner, repo=args.repo)
         print("[info] ソース ZIP の sha256 OK。")
 

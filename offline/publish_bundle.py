@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """offline 重量物バンドル(`python-wheelhouse/` + `docs/_build/vendor/`)を GitHub Releases
 (ローリングタグ `offline-bundle-v1`)へ公開する。署名は Ed25519(`cryptography`)で行い、
-pin 生成用のソース取得は一時的な Public 化 + 無認証 codeload で行う(このリポは private で、
-配布先の端末は gh 未認証を前提とするため。取得後は必ず元の可視性へ戻す)。
+pin 生成用のソース取得は一時的な Public 化 + 無認証 HTTPS(`github.com/.../archive/` 経由。
+実体は `codeload.github.com` への 302 リダイレクト)で行う(このリポは private で、配布先の
+端末は gh 未認証を前提とするため。取得後は必ず元の可視性へ戻す)。
 
 行うこと(概要。詳細は各関数の docstring):
   1. HEAD が origin へ push 済みであることを確認する(codeload は GitHub 上のコミットしか
@@ -10,15 +11,19 @@ pin 生成用のソース取得は一時的な Public 化 + 無認証 codeload �
   2. content-key(`bundle_common.compute_content_key`)を算出し、Release 側の `bundle.key`
      と比較して重量物を再生成するか判定する(`--force` は常に再生成、`--tag-only` は
      一致時のみタグ移動・不一致は何もせず終了)。
-  3. 再生成が必要なら requirements を検査(`check_requirements.assert_requirements_file`)
-     してから `pip download` で wheelhouse を組み、`docs/_build/vendor` と合わせて tar.gz へ
-     固め、Ed25519 で署名する(公開鍵が無ければ即失敗。署名の無い重量物は公開しない)。
-  4. Release が無ければ作成、あれば notes を更新。アセット(tar.gz / .sig / .sha256 /
+  3. 再生成が必要なら、まず vendor 前提(mermaid JS 2 件 + manifest.txt)を検査してから
+     (`assert_vendor_assets_present`。I-6: 74MB の `pip download` より前に軽い検査を
+     済ませ、揃っていない端末での無駄な download を避ける)requirements を検査
+     (`check_requirements.assert_requirements_file`)し、`pip download` で wheelhouse を
+     組み、`docs/_build/vendor` と合わせて tar.gz へ固め、Ed25519 で署名する
+     (公開鍵が無ければ即失敗。署名の無い重量物は公開しない)。
+  4. `--tag-only` でなければ pin(`offline/pinned-release.txt`)を更新する(I-4: Release
+     反映より先に行う。pin 生成の失敗で「新バンドル(Release)× 旧 pin」の不整合を
+     確定させないため)。ソース zip の sha256 を得るために一時的にリポジトリを Public 化し、
+     無認証で codeload から取得する(取得後は必ず finally で元の可視性へ戻す)。
+  5. Release が無ければ作成、あれば notes を更新。アセット(tar.gz / .sig / .sha256 /
      bundle.key)は「先に upload、最後にタグ移動」の順で反映し、中断しても旧の組が生きる
      ようにする。
-  5. `--tag-only` でなければ pin(`offline/pinned-release.txt`)を更新する。ソース zip の
-     sha256 を得るために一時的にリポジトリを Public 化し、無認証で codeload から取得する
-     (取得後は必ず finally で元の可視性へ戻す)。
 
 gh/git を実際に呼ぶ関数はすべて `runner` を受け取り、既定は実 `subprocess.run` だが呼び出し側
 から差し替えられる(単体テストは偽 runner を注入し、実 gh/git は一切起動しない)。
@@ -458,7 +463,13 @@ _MAX_SOURCE_ZIP_BYTES = 200 * 1024 * 1024
 
 
 def download_source_zip(owner_repo: str, commit_sha: str, dest: Path) -> None:
-    """`owner_repo`(`owner/name`)の `commit_sha` アーカイブを無認証 codeload から取得する。
+    """`owner_repo`(`owner/name`)の `commit_sha` アーカイブを無認証 HTTPS で取得する。
+
+    URL は `github.com/<owner_repo>/archive/<sha>.zip`(**`codeload.github.com` を直接
+    叩いているわけではない**)。実機確認では `codeload.github.com` への 302 リダイレクトを
+    経由し、最終的に得られるバイト列は codeload 直叩きと一致する(setup 側の
+    `default_gh_authenticated_source_zip_download` が使う URL 形とは綴りが異なる同一実体。
+    README-offline.md「setup 側の gh 認証 vs 無認証」参照)。
 
     `temporarily_public_repo` の中でのみ呼ぶこと(private のままでは 404 になる)。
     """
@@ -549,14 +560,21 @@ def find_pip_call_files(repo_root: Path, *, runner: Runner = default_runner) -> 
 
     走査対象は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
     ガード自身のテストファイルは除外する。
+
+    列挙は `-z`(NUL 区切り)出力を使う。git は既定(`core.quotepath=true`)では非 ASCII
+    パスを引用符 + 8 進エスケープした文字列で返し、`rel.endswith(_PIP_SCAN_EXTENSIONS)` が
+    末尾の `"` に阻まれて一致しなくなる(検査対象から黙って落ちる。実証済み)。`-z` は
+    `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
+    この問題が構造的に起きない。同型の修正が `scripts/check_comments.py`
+    (`_staged_files`)・`offline/lib/bundle_common.py`(`list_requirements_files_via_git`)・
+    `scripts/setup_dev.py`(`list_requirements`)の計 4 箇所にある。
     """
-    result = runner(["git", "-C", str(repo_root), "ls-files"])
+    result = runner(["git", "-C", str(repo_root), "ls-files", "-z"])
     if result.returncode != 0:
         raise RuntimeError("git ls-files に失敗しました(pip 入口ガードを実行できません)。")
 
     hits: set[str] = set()
-    for rel in result.stdout.splitlines():
-        rel = rel.strip()
+    for rel in result.stdout.split("\0"):
         if not rel or rel in _GUARD_SELF_EXCLUDE:
             continue
         if not rel.endswith(_PIP_SCAN_EXTENSIONS):
@@ -642,9 +660,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if changed:
             print("[info] 重量物を更新します(--force / 初回 / 変更検知)。")
+            # I-6: vendor 前提(mermaid JS 2 件 + manifest.txt)の検査は `build_wheelhouse`
+            # (74MB の pip download を伴う)より前に行う。検査を後段に置くと、vendor が
+            # 揃っていない新規 publisher 端末で download を丸ごと無駄にしてから失敗する
+            # (README-offline.md に publisher 側 bootstrap 手順を成文化済み)。
+            assert_vendor_assets_present(ROOT)
             py_exe = [sys.executable]
             build_wheelhouse(ROOT, ROOT / WHEELHOUSE_DIR_NAME, requirements_files, python_exe=py_exe)
-            assert_vendor_assets_present(ROOT)
             build_bundle_tar(ROOT, bundle_path)
             assert_release_asset_size_ok(bundle_path.stat().st_size)
 
@@ -668,19 +690,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("[info] 重量物は最新の Release と一致。ソース(タグ)のみ更新します。")
 
-        notes = build_release_notes(args.tag, current_key)
-        notes_path = tmp_dir / "notes.md"
-        notes_path.write_text(notes, encoding="utf-8")
-
-        sync_release(
-            tag=args.tag,
-            head_sha=head_sha,
-            release_exists_flag=exists,
-            changed=changed,
-            notes_path=notes_path,
-            assets=[bundle_path, sha_path, key_path, sig_path],
-        )
-
         if bundle_hash is None:
             # 重量物を更新していない回は既存 pin の bundle-sha256 を引き継ぐ。
             try:
@@ -694,9 +703,30 @@ def main(argv: list[str] | None = None) -> int:
                         "どちらも読めません。初回は --force を付けて重量物ごと公開してください。"
                     )
 
+        # I-4: pin 生成(generate_pin)を Release 反映(sync_release)より先に行う。
+        # pin 生成の失敗(visibility 復帰失敗・codeload 落ち・上限・タイムアウト等)は
+        # 従来の順序(sync_release が先)だと「新バンドル(Release)× 旧 pin」の不整合を
+        # 確定させ、以後の配布先が手順3(主アンカー)で必ず失敗する形になっていた
+        # (--tag-only は pin を見ないため検知経路も無い)。ここで先に pin を確定させれば、
+        # 失敗時は Release/タグとも旧のままで済み、不整合な組を配らない。
+        # `assert_head_pushed` を main() 冒頭で通しているため、この時点で HEAD は既に
+        # origin 上に存在する(generate_pin の前提を満たす)。
         pin = generate_pin(ROOT, head_sha, bundle_hash)
         print(f"[info] pin を更新: {ROOT / 'offline' / 'pinned-release.txt'}(source-commit={pin.source_commit})")
         print("       ※ この pin ファイルをコミットしてください(offline/ ごと配布先へ運ぶ前提)。")
+
+        notes = build_release_notes(args.tag, current_key)
+        notes_path = tmp_dir / "notes.md"
+        notes_path.write_text(notes, encoding="utf-8")
+
+        sync_release(
+            tag=args.tag,
+            head_sha=head_sha,
+            release_exists_flag=exists,
+            changed=changed,
+            notes_path=notes_path,
+            assets=[bundle_path, sha_path, key_path, sig_path],
+        )
 
     print(f"[OK] 公開完了: {args.tag}")
     return 0
