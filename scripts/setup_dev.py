@@ -33,7 +33,7 @@ HOOKS_PATH = "scripts/hooks"
 # `sys.path[0]` は既に `scripts/` になっているが、`pytest` 等の別経路からの import でも
 # 同様に解決できるよう明示しておく。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_requirements import check_requirements_file  # noqa: E402
+from check_requirements import assert_requirements_file  # noqa: E402
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -112,9 +112,17 @@ def list_requirements() -> list[Path]:
 
     content-key 算出 (将来のオフラインバンドル構築) と同一集合を保つため、パス列は
     ここ 1 箇所からしか作らない。
+
+    列挙は `-z` (NUL 区切り) 出力を使う。git は既定 (`core.quotepath=true`) では非 ASCII
+    パスを引用符 + 8 進エスケープした文字列で返し、`ROOT / line` が実在しないパスになって
+    黙って install 対象から落ちる (実証済み)。`-z` は `core.quotepath` の設定に関わらず
+    エスケープなしの生バイト列を NUL 区切りで返すため、この問題が構造的に起きない。
+    同型の修正が `scripts/check_comments.py` (`_staged_files`)・
+    `offline/publish_bundle.py` (`find_pip_call_files`)・`offline/lib/bundle_common.py`
+    (`list_requirements_files_via_git`) の計 4 箇所にある。
     """
     out = subprocess.run(
-        ["git", "ls-files", "--", "*requirements.txt"],
+        ["git", "ls-files", "-z", "--", "*requirements.txt"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -125,7 +133,7 @@ def list_requirements() -> list[Path]:
         encoding="utf-8",
         errors="replace",
     )
-    files = [ROOT / line for line in out.stdout.splitlines() if line.strip()]
+    files = [ROOT / p for p in out.stdout.split("\0") if p]
     return sorted(files, key=lambda p: p.relative_to(ROOT).as_posix())
 
 
@@ -134,19 +142,13 @@ def check_requirements(requirements: list[Path]) -> None:
 
     `--find-links` / 直 URL 参照 / ローカルパス等のオプション行が 1 行でも混入すると、
     pip の解決先そのものを差し替えられる。検査本体は `check_requirements.py` の
-    `check_requirements_file` に集約する (venv ビルド (`scripts/lib/build_venv.py`) と
-    実装を共有し、入口ごとに検査ロジックが drift するのを防ぐ)。
+    `assert_requirements_file` に集約する(venv ビルド (`scripts/lib/build_venv.py`) 等の
+    他の pip 入口と**同じ契約**(検査に落ちたら `RuntimeError` を送出する。`SystemExit` に
+    しない理由は `assert_requirements_file` の docstring 参照)。呼び出し側 (`main`) が
+    `RuntimeError` を捕捉して終了コード化する。
     """
-    ok = True
     for req in requirements:
-        violations = check_requirements_file(req)
-        if violations:
-            ok = False
-            for v in violations:
-                print(f"[error] [requirements] {v}", file=sys.stderr)
-    if not ok:
-        print("[error] requirements の形式検査に失敗しました。上記を修正してください。", file=sys.stderr)
-        sys.exit(1)
+        assert_requirements_file(req)
 
 
 # ── 3. セットアップ本体 ──
@@ -198,4 +200,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except RuntimeError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        sys.exit(1)

@@ -373,9 +373,19 @@ def _staged_files() -> frozenset[str]:
     """`git diff --cached` のステージ済みファイル一覧を `/` 区切り相対パスで返す。
 
     削除 (`D`) はここでは対象外にする (ファイル実体が無く検査できないため)。
+
+    列挙は `-z` (NUL 区切り) 出力を使う。git は既定 (`core.quotepath=true`) では非 ASCII
+    パスを `"docs/\350\250\255..."` のように引用符 + 8 進エスケープした文字列で返し、
+    後続の `(ROOT / p).is_file()` 判定が常に偽になって検査対象から黙って落ちる (実証済み。
+    本リポの docs 原稿 14 件は全件日本語ファイル名でこれに該当していた)。`-z` は
+    `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
+    この問題が構造的に起きない。同型の修正が `offline/publish_bundle.py`
+    (`find_pip_call_files`)・`offline/lib/bundle_common.py`
+    (`list_requirements_files_via_git`)・`scripts/setup_dev.py`(`list_requirements`)の
+    計 4 箇所にある。
     """
     out = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -386,7 +396,7 @@ def _staged_files() -> frozenset[str]:
         encoding="utf-8",
         errors="replace",
     )
-    return frozenset(line.strip() for line in out.stdout.splitlines() if line.strip())
+    return frozenset(p for p in out.stdout.split("\0") if p)
 
 
 def main() -> int:

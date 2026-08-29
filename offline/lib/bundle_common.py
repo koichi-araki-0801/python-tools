@@ -35,11 +35,28 @@ from pathlib import Path
 
 # ── requirements.txt の列挙 ──
 
-# FS フォールバックが除外するディレクトリ。`.git`(git 管理領域)と `python-wheelhouse`
-# (重量物置き場。gitignore 対象)は git 経路でも最初から候補に入らないため、ここで除いておけば
-# 「git が使えない環境」でも同じ集合になる。`.venv*` は `setup_dev.py` / `check_comments.py` と
-# 同じ命名規約(ビルド用隔離venv は `.venv-build`)。
-_FS_EXCLUDED_DIR_NAMES = frozenset({".git", "python-wheelhouse"})
+# FS フォールバックが除外するディレクトリ(M-6)。`.git`(git 管理領域)・`python-wheelhouse`
+# (重量物置き場)・`dist`/`build`/`out`/`coverage`/`test-results`/`__pycache__`/
+# `.pytest_cache` はいずれもリポジトリ直下の `.gitignore` に列挙されている(= git 経路
+# (`git ls-files`)では最初から候補に入らない)。FS フォールバックだけがこの集合を持たないと、
+# 「git が使えない環境」でこれらの配下に requirements.txt 相当のファイルが紛れ込んだ場合に
+# 2 経路が異なる集合を返しうる(FS 側だけ拾う非対称)。`.gitignore` および
+# `scripts/check_comments.py` の `REPO_CONFIGS["python-tools"]["skip_dir_names"]` と
+# 手動で揃える(これらは独立した列挙であり自動で同期しない。増減時は 3 箇所とも見直すこと)。
+# `.venv*` は `setup_dev.py` と同じ命名規約(ビルド用隔離venv は `.venv-build`)。
+_FS_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        ".git",
+        "python-wheelhouse",
+        "__pycache__",
+        ".pytest_cache",
+        "dist",
+        "build",
+        "out",
+        "coverage",
+        "test-results",
+    }
+)
 _FS_EXCLUDED_DIR_PREFIXES = (".venv",)
 
 VENDOR_MANIFEST_REL = Path("docs") / "_build" / "vendor" / "manifest.txt"
@@ -50,10 +67,18 @@ def list_requirements_files_via_git(repo_root: Path) -> list[Path] | None:
 
     git が使えない、または `repo_root` が git 管理外なら `None` を返す(呼び出し元に
     FS フォールバックへの切り替えを促す)。
+
+    列挙は `-z`(NUL 区切り)出力を使う。git は既定(`core.quotepath=true`)では非 ASCII
+    パスを引用符 + 8 進エスケープした文字列で返し、`repo_root / line` が実在しないパスに
+    なって黙って候補から落ち、FS フォールバックだけが拾う非対称(「2 経路一致」不変則の
+    破れ)を生む(実証済み)。`-z` は `core.quotepath` の設定に関わらずエスケープなしの
+    生バイト列を NUL 区切りで返すため、この問題が構造的に起きない。同型の修正が
+    `scripts/check_comments.py`(`_staged_files`)・`offline/publish_bundle.py`
+    (`find_pip_call_files`)・`scripts/setup_dev.py`(`list_requirements`)の計 4 箇所にある。
     """
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "--", "*requirements.txt"],
+            ["git", "-C", str(repo_root), "ls-files", "-z", "--", "*requirements.txt"],
             capture_output=True,
             text=True,
             # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、
@@ -67,7 +92,7 @@ def list_requirements_files_via_git(repo_root: Path) -> list[Path] | None:
         return None
     if result.returncode != 0:
         return None
-    files = [repo_root / line for line in result.stdout.splitlines() if line.strip()]
+    files = [repo_root / p for p in result.stdout.split("\0") if p]
     return sorted(files, key=lambda p: p.relative_to(repo_root).as_posix())
 
 
