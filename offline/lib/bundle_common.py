@@ -2,18 +2,19 @@
 """共通ライブラリ: offline 重量物バンドルの content-key 算出・pin 読み書き・Ed25519 署名。
 
 `offline/publish_bundle.py` / `offline/setup_offline.py`(次タスク)から import して使う。
-monorepo `offline/lib/content-key.ps1` / `offline/lib/verify.ps1` の移植だが、鍵形式は
-RSA-XML から Ed25519-PEM(`cryptography`)へ、content-key の算出は「行単位の正規化 + 有意行
-抽出」から「ファイル内容そのものの連結」へ単純化している(このリポは `pnpm-lock.yaml` の
-ような機械生成の巨大 lockfile を持たず、対象は少数の `requirements.txt` と 1 つの
-manifest.txt だけのため、行単位の正規化を持ち込む必要が無い)。
+署名鍵は Ed25519-PEM(`cryptography`)を使う。content-key はファイル内容の連結を基本とし、
+行末(CR)だけは正規化する(`_read_normalized_bytes` 参照)。Windows worktree(既定
+`core.autocrlf=true`)は CRLF、GitHub の archive zip(codeload)は LF になるため、正規化
+しないと同じ内容でも worktree ごとに異なる key を生み、配布先での bundle.key 突き合わせが
+恒久的に不一致になる。対象が少数の `requirements.txt` と 1 つの manifest.txt だけであることから、
+行コメント・空行の除去までは行わない(内容そのものを比較する方が変更検知として素直なため)。
 
 content-key = 追跡中の全 `*requirements.txt` の内容 + `docs/_build/vendor/manifest.txt` の
-内容、を列挙順に連結したバイト列の SHA256。列挙は git 経路(`git ls-files -- '*requirements.txt'`)
-を既定とし、git が使えない/管理外なら FS フォールバック(`name.endswith('requirements.txt')`
-のグロブ相当)へ切り替える。2 経路は除外ディレクトリの数え合わせで一致させるのではなく、
-「追跡されないディレクトリ(`.git` / `python-wheelhouse` / `.venv*`)は最初から両経路とも
-候補に入らない」形で構造的に同一集合になるよう作る。
+内容(いずれも CR 除去後)を列挙順に連結したバイト列の SHA256。列挙は git 経路
+(`git ls-files -- '*requirements.txt'`)を既定とし、git が使えない/管理外なら FS フォールバック
+(`name.endswith('requirements.txt')` のグロブ相当)へ切り替える。2 経路は除外ディレクトリの
+数え合わせで一致させるのではなく、「追跡されないディレクトリ(`.git` / `python-wheelhouse` /
+`.venv*`)は最初から両経路とも候補に入らない」形で構造的に同一集合になるよう作る。
 """
 
 from __future__ import annotations
@@ -93,6 +94,17 @@ def list_requirements_files(repo_root: Path) -> list[Path]:
 # ── content-key 算出 ──
 
 
+def _read_normalized_bytes(path: Path) -> bytes:
+    """CR(0x0D)を除去して読む(CRLF/LF worktree 差を吸収する行末正規化)。
+
+    Windows worktree(既定 `core.autocrlf=true`)はテキストファイルを CRLF で書き出す一方、
+    GitHub の archive zip(codeload)や LF 前提のビルド機は同じ内容を LF のまま持つ。CR を
+    残したまま content-key を測ると、改行コードだけの違いで別の key になり、配布先での
+    `bundle.key` 突き合わせが恒久的に不一致になる。
+    """
+    return path.read_bytes().replace(b"\r", b"")
+
+
 def compute_content_key(repo_root: Path, *, requirements_files: list[Path] | None = None) -> str:
     """content-key(重量物バンドルの変更検知キー)を算出する。
 
@@ -101,15 +113,16 @@ def compute_content_key(repo_root: Path, *, requirements_files: list[Path] | Non
     `docs/_build/vendor/manifest.txt` が存在すれば内容を折り込む(mermaid 同梱 JS の版が
     変わればバンドルの再生成が要るため)。存在しない場合はそのまま requirements のみで
     算出する(このリポでは常に存在する想定だが、フォールバック時に例外で落とさない)。
+    各ファイルは `_read_normalized_bytes` で CR を除去してから連結する。
     """
     if requirements_files is None:
         requirements_files = list_requirements_files(repo_root)
     hasher = hashlib.sha256()
     for req in requirements_files:
-        hasher.update(req.read_bytes())
+        hasher.update(_read_normalized_bytes(req))
     manifest_path = repo_root / VENDOR_MANIFEST_REL
     if manifest_path.is_file():
-        hasher.update(manifest_path.read_bytes())
+        hasher.update(_read_normalized_bytes(manifest_path))
     return hasher.hexdigest()
 
 
@@ -208,22 +221,31 @@ def generate_signing_key_pair() -> tuple[bytes, bytes]:
     return private_pem, public_pem
 
 
-def sign_file(path: Path, private_key_pem: bytes) -> str:
-    """`path` の内容へ Ed25519 署名し、64 byte 署名の base64 文字列(`.sig` の中身)を返す。
+def sign_bytes(data: bytes, private_key_pem: bytes) -> str:
+    """`data` へ Ed25519 署名し、64 byte 署名の base64 文字列(`.sig` の中身)を返す。
 
     Ed25519 は incremental signing API を持たない(pure EdDSA はメッセージ全体を要求する)ため
-    全内容をメモリへ読む。重量物バンドル(tar.gz)は数百 MB 級になりうるが、署名は publish 時に
-    1 回だけ行う操作であり許容する。
+    全内容をメモリへ持つ必要がある。バイト列版を公開しておくと、呼び出し側が同一内容を
+    署名・検証の両方で使う場合(例: 自己検証)に読み込みを 1 回で済ませられる。
     """
     private_key = serialization.load_pem_private_key(private_key_pem, password=None)
     if not isinstance(private_key, ed25519.Ed25519PrivateKey):
         raise ValueError("秘密鍵が Ed25519 形式ではありません。")
-    signature = private_key.sign(path.read_bytes())
+    signature = private_key.sign(data)
     return base64.b64encode(signature).decode("ascii")
 
 
-def verify_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> bool:
-    """`path` の内容を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。
+def sign_file(path: Path, private_key_pem: bytes) -> str:
+    """`path` の内容へ Ed25519 署名し、64 byte 署名の base64 文字列(`.sig` の中身)を返す。
+
+    重量物バンドル(tar.gz)は数百 MB 級になりうるが、署名は publish 時に 1 回だけ行う
+    操作であり全読みを許容する。
+    """
+    return sign_bytes(path.read_bytes(), private_key_pem)
+
+
+def verify_signature_bytes(data: bytes, signature_b64: str, public_key_pem: bytes) -> bool:
+    """`data` を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。
 
     署名・鍵の形式不正(base64 でない・PEM でない等)も「検証失敗」に倒す(fail closed)。
     """
@@ -235,12 +257,17 @@ def verify_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> b
         public_key = serialization.load_pem_public_key(public_key_pem)
         if not isinstance(public_key, ed25519.Ed25519PublicKey):
             return False
-        public_key.verify(signature, path.read_bytes())
+        public_key.verify(signature, data)
         return True
     except InvalidSignature:
         return False
     except (ValueError, TypeError):
         return False
+
+
+def verify_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> bool:
+    """`path` の内容を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。"""
+    return verify_signature_bytes(path.read_bytes(), signature_b64, public_key_pem)
 
 
 def assert_bundle_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> None:

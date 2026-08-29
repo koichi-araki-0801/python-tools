@@ -8,8 +8,7 @@
 既存の鍵がある場合は上書きしない(`--force` で明示的に置き換える)。鍵を作り直すと過去に
 公開した署名は検証できなくなるため、置き換え時は重量物の再公開が必要になる。
 
-monorepo `offline/new-bundle-signing-key.ps1` の移植だが、鍵形式は RSA-XML から
-Ed25519-PEM(`cryptography`)へ変えている。
+鍵形式は Ed25519-PEM(`cryptography`)を使う。
 """
 
 from __future__ import annotations

@@ -8,9 +8,11 @@ Python ランチャ解決) だけを単体対象とする。実際にビルド�
 `graph-editor/scripts/build.bat` / `pdf-to-svg/scripts/build.bat` の実行で確認する。
 
 `offline/lib/bundle_common.py` / `offline/publish_bundle.py` は content-key 2 経路一致・
-pin round-trip・署名生成/検証/改竄検出・pip 入口列挙ガードを対象とする。gh/git を呼ぶ
-関数は本ファイルでは実行せず、注入した偽の runner (`subprocess.run` 互換の呼び出し記録)
-で検証する (実 publish の実行は本テストの対象外)。
+pin round-trip・署名生成/検証/改竄検出・pip 入口列挙ガードを対象とする。requirements 列挙の
+テストは実 git (`ls-files`/`init`/`add`/`commit`) をローカルで実行する (ネットワークには
+一切アクセスしない)。`offline/publish_bundle.py` の gh/git を呼ぶ関数は注入した偽の runner
+(`subprocess.run` 互換の呼び出し記録) で検証し、実 gh/git コマンドは呼ばない
+(実 publish の実行は本テストの対象外)。
 """
 
 import pathlib
@@ -293,6 +295,29 @@ def test_compute_content_key_via_git_and_filesystem_paths_agree(tmp_path):
     assert key_via_git == key_via_fs
 
 
+def test_compute_content_key_is_line_ending_invariant(tmp_path):
+    # Windows worktree (既定 core.autocrlf=true) は CRLF、GitHub の archive zip (codeload) は
+    # LF になる。同じ内容が改行コードだけの違いで別の content-key を生むと、配布先での
+    # bundle.key 突き合わせが恒久的に不一致になる。
+    repo_crlf = tmp_path / "crlf"
+    repo_lf = tmp_path / "lf"
+    for repo, newline in ((repo_crlf, "\r\n"), (repo_lf, "\n")):
+        repo.mkdir()
+        content = f"pkgA==1.0{newline}pkgB==2.0{newline}"
+        (repo / "requirements.txt").write_bytes(content.encode("utf-8"))
+        vendor = repo / "docs" / "_build" / "vendor"
+        vendor.mkdir(parents=True)
+        (vendor / "manifest.txt").write_bytes(f"mermaid.min.js version=1{newline}".encode("utf-8"))
+
+    key_crlf = bundle_common.compute_content_key(
+        repo_crlf, requirements_files=[repo_crlf / "requirements.txt"]
+    )
+    key_lf = bundle_common.compute_content_key(
+        repo_lf, requirements_files=[repo_lf / "requirements.txt"]
+    )
+    assert key_crlf == key_lf
+
+
 # ── bundle_common: pin (offline/pinned-release.txt) の round-trip ──
 def test_pin_round_trip(tmp_path):
     pin = bundle_common.PublishPin(
@@ -307,7 +332,7 @@ def test_pin_round_trip(tmp_path):
 
 
 def test_read_pin_missing_file_raises(tmp_path):
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         bundle_common.read_pin(tmp_path / "no-such-pin.txt")
 
 
@@ -541,16 +566,241 @@ def test_move_rolling_tag_raises_on_failure(tmp_path):
         publish_bundle.move_rolling_tag("offline-bundle-v1", "a" * 40, cwd=tmp_path, runner=runner)
 
 
+# ── publish_bundle: Release アセットサイズ上限(2GB) ──
+def test_assert_release_asset_size_ok_passes_under_limit():
+    publish_bundle.assert_release_asset_size_ok(1024)  # 例外を送出しないことを確認
+
+
+def test_assert_release_asset_size_ok_raises_at_2gb_limit():
+    with pytest.raises(RuntimeError):
+        publish_bundle.assert_release_asset_size_ok(2 * 1024 * 1024 * 1024)
+
+
+def test_assert_release_asset_size_ok_raises_above_limit():
+    with pytest.raises(RuntimeError):
+        publish_bundle.assert_release_asset_size_ok(3 * 1024 * 1024 * 1024)
+
+
+# ── publish_bundle: gh_set_repo_visibility(常に --accept-visibility-change-consequences) ──
+def test_gh_set_repo_visibility_always_includes_accept_flag():
+    # gh 2.93.0 実測: このフラグは public 化のときだけでなく private への復帰でも必須。
+    # 欠けるとクライアント側検証でリポジトリ解決より前に exit 1 になる。
+    for visibility in ("public", "private"):
+        runner = _FakeRunner([_completed(returncode=0)])
+        publish_bundle.gh_set_repo_visibility(visibility, runner=runner)
+        assert "--accept-visibility-change-consequences" in runner.calls[0]
+        assert visibility in runner.calls[0]
+
+
+def test_gh_set_repo_visibility_raises_on_failure():
+    runner = _FakeRunner([_completed(returncode=1, stderr="boom")])
+    with pytest.raises(RuntimeError):
+        publish_bundle.gh_set_repo_visibility("private", runner=runner)
+
+
+# ── publish_bundle: temporarily_public_repo(一時的な Public 化と検証付き復帰) ──
+def test_temporarily_public_repo_skips_when_already_public():
+    runner = _FakeRunner([_completed(stdout="public\n")])
+    with publish_bundle.temporarily_public_repo(runner=runner):
+        pass
+    # 初期取得のみ。既に public のときは public 化も復帰も呼ばない。
+    assert len(runner.calls) == 1
+
+
+def test_temporarily_public_repo_makes_public_and_restores_private():
+    runner = _FakeRunner(
+        [
+            _completed(stdout="private\n"),  # 初期取得
+            _completed(returncode=0),  # public 化
+            _completed(returncode=0),  # private への復帰
+            _completed(stdout="private\n"),  # 復帰後の再取得 (検証)
+        ]
+    )
+    with publish_bundle.temporarily_public_repo(runner=runner):
+        pass
+    assert len(runner.calls) == 4
+    assert "public" in runner.calls[1]
+    assert "private" in runner.calls[2]
+    assert "--accept-visibility-change-consequences" in runner.calls[1]
+    assert "--accept-visibility-change-consequences" in runner.calls[2]
+
+
+def test_temporarily_public_repo_reverts_on_body_exception():
+    runner = _FakeRunner(
+        [
+            _completed(stdout="private\n"),
+            _completed(returncode=0),
+            _completed(returncode=0),
+            _completed(stdout="private\n"),
+        ]
+    )
+    with pytest.raises(ValueError):
+        with publish_bundle.temporarily_public_repo(runner=runner):
+            raise ValueError("body failed")
+    # 本体が例外を送出しても finally の復帰 call (public化・復帰・検証) は発行される。
+    assert len(runner.calls) == 4
+    assert "private" in runner.calls[2]
+
+
+def test_temporarily_public_repo_reverts_on_keyboardinterrupt():
+    runner = _FakeRunner(
+        [
+            _completed(stdout="private\n"),
+            _completed(returncode=0),
+            _completed(returncode=0),
+            _completed(stdout="private\n"),
+        ]
+    )
+    with pytest.raises(KeyboardInterrupt):
+        with publish_bundle.temporarily_public_repo(runner=runner):
+            raise KeyboardInterrupt
+    # KeyboardInterrupt は BaseException (Exception を継承しない) だが、finally は
+    # BaseException でも必ず実行されるため復帰 call が発行される。
+    assert len(runner.calls) == 4
+    assert "private" in runner.calls[2]
+
+
+def test_temporarily_public_repo_raises_when_restore_command_fails():
+    runner = _FakeRunner(
+        [
+            _completed(stdout="private\n"),
+            _completed(returncode=0),
+            _completed(returncode=1, stderr="boom"),  # private への復帰コマンドが失敗
+        ]
+    )
+    with pytest.raises(RuntimeError):
+        with publish_bundle.temporarily_public_repo(runner=runner):
+            pass
+
+
+def test_temporarily_public_repo_raises_when_restore_verify_mismatches():
+    runner = _FakeRunner(
+        [
+            _completed(stdout="private\n"),
+            _completed(returncode=0),
+            _completed(returncode=0),
+            _completed(stdout="public\n"),  # 復帰コマンドは成功したが再取得が public のまま
+        ]
+    )
+    with pytest.raises(RuntimeError):
+        with publish_bundle.temporarily_public_repo(runner=runner):
+            pass
+
+
+# ── publish_bundle: sync_release(初回/既存の 2 分岐の call 順序) ──
+def test_sync_release_first_time_creates_then_uploads():
+    runner = _FakeRunner([_completed(returncode=0)] * 3)
+    publish_bundle.sync_release(
+        tag="offline-bundle-v1",
+        head_sha="a" * 40,
+        release_exists_flag=False,
+        changed=True,
+        notes_path=pathlib.Path("notes.md"),
+        assets=[pathlib.Path("a"), pathlib.Path("b")],
+        runner=runner,
+    )
+    # 順序: タグ移動(git push) -> release create(gh) -> release upload(gh)。
+    assert runner.calls[0][0] == "git"
+    assert runner.calls[1][:3] == ["gh", "release", "create"]
+    assert runner.calls[2][:3] == ["gh", "release", "upload"]
+
+
+def test_sync_release_first_time_skips_upload_when_unchanged():
+    runner = _FakeRunner([_completed(returncode=0)] * 2)
+    publish_bundle.sync_release(
+        tag="offline-bundle-v1",
+        head_sha="a" * 40,
+        release_exists_flag=False,
+        changed=False,
+        notes_path=pathlib.Path("notes.md"),
+        assets=[],
+        runner=runner,
+    )
+    assert len(runner.calls) == 2
+    assert runner.calls[0][0] == "git"
+    assert runner.calls[1][:3] == ["gh", "release", "create"]
+
+
+def test_sync_release_existing_uploads_then_moves_tag():
+    runner = _FakeRunner([_completed(returncode=0)] * 3)
+    publish_bundle.sync_release(
+        tag="offline-bundle-v1",
+        head_sha="a" * 40,
+        release_exists_flag=True,
+        changed=True,
+        notes_path=pathlib.Path("notes.md"),
+        assets=[pathlib.Path("a")],
+        runner=runner,
+    )
+    # 順序: notes 更新(gh) -> release upload(gh, --clobber) -> タグ移動(git push)。
+    # アセットを出し切ってからタグを進めることで、upload 途中失敗時はタグが旧コミットの
+    # ままとなり、ソースと重量物が旧版どうしで整合する。
+    assert runner.calls[0][:3] == ["gh", "release", "edit"]
+    assert runner.calls[1][:3] == ["gh", "release", "upload"]
+    assert runner.calls[2][0] == "git"
+
+
+def test_sync_release_existing_skips_upload_when_unchanged():
+    runner = _FakeRunner([_completed(returncode=0)] * 2)
+    publish_bundle.sync_release(
+        tag="offline-bundle-v1",
+        head_sha="a" * 40,
+        release_exists_flag=True,
+        changed=False,
+        notes_path=pathlib.Path("notes.md"),
+        assets=[],
+        runner=runner,
+    )
+    assert len(runner.calls) == 2
+    assert runner.calls[0][:3] == ["gh", "release", "edit"]
+    assert runner.calls[1][0] == "git"
+
+
+# ── publish_bundle: generate_pin(repo_root を実際に使うことの確認) ──
+def test_generate_pin_writes_to_repo_root_offline_dir(tmp_path, monkeypatch):
+    repo_root = tmp_path
+    (repo_root / "offline").mkdir()
+
+    def _fake_download(owner_repo, commit_sha, dest):
+        dest.write_bytes(b"fake source zip contents")
+
+    monkeypatch.setattr(publish_bundle, "download_source_zip", _fake_download)
+
+    runner = _FakeRunner(
+        [
+            _completed(stdout="owner/repo\n"),  # gh_repo_name_with_owner
+            _completed(stdout="public\n"),  # gh_repo_visibility (既に public なら復帰不要)
+        ]
+    )
+    pin = publish_bundle.generate_pin(repo_root, "a" * 40, "b" * 64, runner=runner)
+    pin_path = repo_root / "offline" / "pinned-release.txt"
+    assert pin_path.is_file()
+    assert bundle_common.read_pin(pin_path) == pin
+
+
 # ── pip 入口列挙ガード ──
 def test_pip_entrypoint_guard_matches_known_set_and_requires_check_requirements():
     found = publish_bundle.find_pip_call_files(REPO_ROOT)
     unknown = found - publish_bundle.KNOWN_PIP_ENTRYPOINTS
     assert not unknown, f"未知の pip 呼び出し箇所 (KNOWN_PIP_ENTRYPOINTS へ追加するか実装を見直す): {unknown}"
-    # 実在するファイルはすべて check_requirements の検査を経由すること。
+    # 実在するファイルはすべて check_requirements の検査を経由すること
+    # (.py は識別子 check_requirements、.bat はランチャ名 check-requirements のどちらか)。
     for rel in found:
         path = REPO_ROOT / rel
         text = path.read_text(encoding="utf-8")
-        assert "check_requirements" in text, f"{rel}: check_requirements の呼び出しが見当たらない"
+        assert publish_bundle.has_check_requirements_marker(text), (
+            f"{rel}: check_requirements の呼び出しが見当たらない"
+        )
+
+
+def test_pip_entrypoint_guard_finds_all_existing_known_entrypoints():
+    # found ⊆ known だけでは _PIP_CALL_RE が壊れて found が空になっても検出できない。
+    # 既知集合のうち実在するファイルは必ず found に入ることも固定する
+    # (ci.yml は Task 6 で新設予定のため path.exists() で絞る)。
+    found = publish_bundle.find_pip_call_files(REPO_ROOT)
+    existing_known = {rel for rel in publish_bundle.KNOWN_PIP_ENTRYPOINTS if (REPO_ROOT / rel).exists()}
+    missing = existing_known - found
+    assert not missing, f"検出漏れ (走査ロジックの劣化の疑い): {missing}"
 
 
 def test_pip_entrypoint_guard_detects_publish_bundle_itself():
@@ -558,3 +808,10 @@ def test_pip_entrypoint_guard_detects_publish_bundle_itself():
     # (検出ロジックが壊れて何も見つからなくなる = ガードが常に無風で通る、を防ぐ)。
     found = publish_bundle.find_pip_call_files(REPO_ROOT)
     assert "offline/publish_bundle.py" in found
+
+
+def test_pip_entrypoint_guard_scans_bat_launchers_too():
+    # `.bat` を走査対象へ含めないと docs/_build/build_all.bat の直接 pip 呼び出しを
+    # 検出できない (未検査の pip 入口が実在するのに無風で通る)。
+    found = publish_bundle.find_pip_call_files(REPO_ROOT)
+    assert "docs/_build/build_all.bat" in found

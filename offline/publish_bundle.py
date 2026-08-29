@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """offline 重量物バンドル(`python-wheelhouse/` + `docs/_build/vendor/`)を GitHub Releases
-(ローリングタグ `offline-bundle-v1`)へ公開する。monorepo `offline/publish-offline-bundle.ps1`
-の移植だが、署名方式は RSA-XML から Ed25519-PEM(`cryptography`)へ、pin 生成用のソース取得は
-「認証済み curl」から「一時的な Public 化 + 無認証 codeload」へ変えている
-(このリポは private で、publish 担当者の端末以外にも配布先が gh 未認証を前提とするため)。
+(ローリングタグ `offline-bundle-v1`)へ公開する。署名は Ed25519(`cryptography`)で行い、
+pin 生成用のソース取得は一時的な Public 化 + 無認証 codeload で行う(このリポは private で、
+配布先の端末は gh 未認証を前提とするため。取得後は必ず元の可視性へ戻す)。
 
 行うこと(概要。詳細は各関数の docstring):
   1. HEAD が origin へ push 済みであることを確認する(codeload は GitHub 上のコミットしか
@@ -200,11 +199,24 @@ def sha256_file(path: Path) -> str:
     return hasher.hexdigest()
 
 
+# GitHub Releases の 1 アセットあたりの上限。
+_MAX_RELEASE_ASSET_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def assert_release_asset_size_ok(size_bytes: int, *, label: str = BUNDLE_NAME) -> None:
+    """アセットが Release の 2GB 上限を超えていないか検査する。超えたら `RuntimeError`。"""
+    if size_bytes >= _MAX_RELEASE_ASSET_BYTES:
+        raise RuntimeError(
+            f"{label} が {_MAX_RELEASE_ASSET_BYTES} bytes(Release の上限)を超えました"
+            f"(実サイズ {size_bytes} bytes)。分割が必要です。"
+        )
+
+
 def resolve_tar_exe() -> str:
     """Windows 標準 tar(`System32\\tar.exe`)を優先解決する。
 
     Git Bash 同梱の MSYS tar が PATH 先頭にあると `-C <Windows パス>` を rsh の
-    host:path と誤認して失敗するため(monorepo `content-key.ps1` の `Resolve-Tar` と同じ理由)。
+    host:path と誤認して失敗するため。
     """
     system_root = os.environ.get("SystemRoot", r"C:\Windows")
     candidate = Path(system_root) / "System32" / "tar.exe"
@@ -296,6 +308,36 @@ def gh_release_upload(tag: str, assets: list[Path], *, runner: Runner = default_
         raise RuntimeError(f"gh release upload に失敗しました: {result.stderr}")
 
 
+def sync_release(
+    *,
+    tag: str,
+    head_sha: str,
+    release_exists_flag: bool,
+    changed: bool,
+    notes_path: Path,
+    assets: list[Path],
+    runner: Runner = default_runner,
+) -> None:
+    """Release の作成/更新とタグ移動を「中断しても旧の組が生きる」順序で行う。
+
+    初回(Release 未作成): タグ作成 → Release 作成 → アセット upload(`changed` のときのみ)。
+    既存: notes 更新 → アセット upload(`changed` のときのみ)→ タグ移動。
+    既存側はアセットを出し切ってからタグを進める。これにより upload 途中で失敗しても
+    タグは旧コミットのままとなり、配布先が取得するソース(タグ)と重量物(アセット)は
+    常に整合した組み合わせになる。
+    """
+    if not release_exists_flag:
+        move_rolling_tag(tag, head_sha, runner=runner)
+        gh_release_create(tag, notes_path, runner=runner)
+        if changed:
+            gh_release_upload(tag, assets, runner=runner)
+    else:
+        gh_release_edit_notes(tag, notes_path, runner=runner)
+        if changed:
+            gh_release_upload(tag, assets, runner=runner)
+        move_rolling_tag(tag, head_sha, runner=runner)
+
+
 def build_release_notes(tag: str, content_key: str) -> str:
     return (
         "別端末(Windows x64)でネット不要に環境構築するための重量物バンドル。\n"
@@ -336,12 +378,43 @@ def gh_repo_visibility(*, runner: Runner = default_runner) -> str:
 
 
 def gh_set_repo_visibility(visibility: str, *, runner: Runner = default_runner) -> None:
-    args = ["repo", "edit", "--visibility", visibility]
-    if visibility == "public":
-        args.append("--accept-visibility-change-consequences")
-    result = gh(args, runner=runner)
+    """`gh repo edit --visibility <visibility>` を実行する。
+
+    `--accept-visibility-change-consequences` は public 化のときだけでなく、
+    `--visibility` を使うすべての呼び出し(private への復帰を含む)で必須
+    (gh 2.93.0 実測。無いとクライアント側検証でリポジトリ解決より前に exit 1 になる)。
+    """
+    result = gh(
+        ["repo", "edit", "--visibility", visibility, "--accept-visibility-change-consequences"],
+        runner=runner,
+    )
     if result.returncode != 0:
         raise RuntimeError(f"gh repo edit --visibility {visibility} に失敗しました: {result.stderr}")
+
+
+def _restore_repo_visibility(original: str, *, runner: Runner = default_runner) -> None:
+    """`temporarily_public_repo` の復帰処理。戻したうえで再取得して検証する。
+
+    復帰コマンド自体の失敗、または戻した後の visibility が `original` と一致しないことは
+    どちらも「リポジトリが Public のまま気づかれない」実害に直結するため、例外を握り潰さず
+    `RuntimeError` を送出する(fail closed)。呼び出し元(`publish_bundle.py` の `__main__`)は
+    これを非ゼロ終了として扱う。
+    """
+    try:
+        gh_set_repo_visibility(original, runner=runner)
+        actual = gh_repo_visibility(runner=runner)
+    except Exception as exc:
+        raise RuntimeError(
+            f"リポジトリを {original} へ戻せませんでした。手動で "
+            f"`gh repo edit --visibility {original} --accept-visibility-change-consequences` "
+            f"を実行し、可視性を確認してください: {exc}"
+        ) from exc
+    if actual != original:
+        raise RuntimeError(
+            f"リポジトリの可視性復帰を確認できません(期待={original} / 実際={actual})。手動で "
+            f"`gh repo edit --visibility {original} --accept-visibility-change-consequences` "
+            "を実行し、可視性を確認してください。"
+        )
 
 
 @contextlib.contextmanager
@@ -349,9 +422,9 @@ def temporarily_public_repo(*, runner: Runner = default_runner):
     """pin 生成のソース zip 取得のため、一時的にリポジトリを Public 化する。
 
     visibility を事前確認し、既に public ならそのまま(何もしない)。private から public へ
-    変えた場合のみ、finally で元(private)へ必ず戻す。復帰に失敗した場合は例外を握り潰さず
-    stderr へ手動導線(`gh repo edit --visibility <元の値>` を手で実行すること)を表示する
-    (「公開されたままになっているのに気づけない」方が pin 生成の失敗より実害が大きいため)。
+    変えた場合のみ、finally で元(private)へ必ず戻し、`_restore_repo_visibility` で戻った
+    ことを再取得して検証する。本体(`yield` の中)が例外(`KeyboardInterrupt` 等の
+    `BaseException` を含む)を送出しても `finally` は必ず実行され、復帰が試みられる。
     """
     original = gh_repo_visibility(runner=runner)
     made_public = original != "public"
@@ -361,15 +434,14 @@ def temporarily_public_repo(*, runner: Runner = default_runner):
         yield
     finally:
         if made_public:
-            try:
-                gh_set_repo_visibility(original, runner=runner)
-            except Exception as exc:  # noqa: BLE001 — 復帰失敗は握り潰さず必ず可視化する
-                print(
-                    "[error] リポジトリを Private へ戻せませんでした。手動で "
-                    f"`gh repo edit --visibility {original} --accept-visibility-change-consequences` "
-                    f"相当を実行し、可視性を確認してください: {exc}",
-                    file=sys.stderr,
-                )
+            _restore_repo_visibility(original, runner=runner)
+
+
+# ソース zip はコード一式のみ(重量物は含まない)なので、これより大きければ想定外として
+# 中断する。`temporarily_public_repo` の内側で待ち続けるとリポジトリが Public のまま無制限に
+# 露出するため、タイムアウトとサイズ上限の両方で「必ず終わる」ことを保証する。
+_SOURCE_ZIP_TIMEOUT_SECONDS = 60
+_MAX_SOURCE_ZIP_BYTES = 200 * 1024 * 1024
 
 
 def download_source_zip(owner_repo: str, commit_sha: str, dest: Path) -> None:
@@ -378,17 +450,30 @@ def download_source_zip(owner_repo: str, commit_sha: str, dest: Path) -> None:
     `temporarily_public_repo` の中でのみ呼ぶこと(private のままでは 404 になる)。
     """
     url = f"https://github.com/{owner_repo}/archive/{commit_sha}.zip"
-    with urllib.request.urlopen(url) as response, dest.open("wb") as out:  # noqa: S310
-        shutil.copyfileobj(response, out)
+    with urllib.request.urlopen(url, timeout=_SOURCE_ZIP_TIMEOUT_SECONDS) as response:  # noqa: S310
+        total = 0
+        with dest.open("wb") as out:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_SOURCE_ZIP_BYTES:
+                    raise RuntimeError(
+                        f"ソース zip のサイズが上限({_MAX_SOURCE_ZIP_BYTES} bytes)を超えました。"
+                        "取得を中断します。"
+                    )
+                out.write(chunk)
 
 
 def generate_pin(
     repo_root: Path, head_sha: str, bundle_sha256: str, *, runner: Runner = default_runner
 ) -> bundle_common.PublishPin:
-    """pin(`offline/pinned-release.txt`)を生成してファイルへ書き出す。
+    """pin(`<repo_root>/offline/pinned-release.txt`)を生成してファイルへ書き出す。
 
     ソース zip の sha256 を得るためだけに一時的な Public 化を挟む(codeload は private
-    リポジトリへ未認証でアクセスできない)。取得後は必ず finally で元の可視性へ戻る。
+    リポジトリへ未認証でアクセスできない)。取得後は必ず finally で元の可視性へ戻る
+    (`temporarily_public_repo` 参照)。
     """
     owner_repo = gh_repo_name_with_owner(runner=runner)
     with tempfile.TemporaryDirectory(prefix="python-tools-pin-") as tmp_name:
@@ -399,30 +484,43 @@ def generate_pin(
     pin = bundle_common.PublishPin(
         source_commit=head_sha, source_zip_sha256=zip_sha256, bundle_sha256=bundle_sha256
     )
-    bundle_common.write_pin(PIN_PATH, pin)
+    bundle_common.write_pin(repo_root / "offline" / "pinned-release.txt", pin)
     return pin
 
 
 # ── pip 入口列挙ガード ──
 
-# 「入口」= リポ内で pip install/download を実行する Python / CI ワークフロー。`.bat` ランチャは
-# Python スクリプトへ委譲するだけの薄いシムなので走査対象にしない(唯一の例外は
-# docs/_build/build_all.bat のような直接 pip 呼び出しだが、これは走査対象拡張子(.py/.yml/.yaml)
-# の外にあるため自然に対象外になる — 個別除外をハードコードしない)。
+# 「入口」= リポ内で pip install/download を実行するファイル。`.py` / `.yml` / `.yaml` に
+# 加えて `.bat` も走査する(`docs/_build/build_all.bat` のように `.bat` から直接 pip を
+# 呼ぶ実例があるため、拡張子で機械的に対象外にはできない)。
 KNOWN_PIP_ENTRYPOINTS = frozenset(
     {
         "scripts/setup_dev.py",
         "scripts/lib/build_venv.py",
         "offline/publish_bundle.py",
+        "docs/_build/build_all.bat",
         ".github/workflows/ci.yml",
     }
 )
 
-# このガードを定義するテストファイル自身は除外する(「pip install」という語を含む説明
-# コメントを持つため、自己参照的に誤検知する)。
+# 除外は「ガード自身の定義・テストファイル」という構造的な 1 件だけ(このファイルは
+# 「pip install」という語を含む説明コメントを持つため、自己参照的に誤検知する)。
+# 個々の pip 呼び出しファイルを見つけてから除外リストへ足す、という運用はしない
+# (それは `KNOWN_PIP_ENTRYPOINTS` へ登録する形で行う)。
 _GUARD_SELF_EXCLUDE = frozenset({"scripts/test_python_tools_scripts.py"})
 
-_PIP_SCAN_EXTENSIONS = (".py", ".yml", ".yaml")
+_PIP_SCAN_EXTENSIONS = (".py", ".yml", ".yaml", ".bat")
+
+# check_requirements の呼び出しを示す語。Python 側は識別子 `check_requirements`
+# (import / 関数名)、`.bat` 側は同ランチャのファイル名 `check-requirements`(ハイフン形。
+# `scripts/check-requirements.bat`)を呼ぶため、どちらの表記でも「検査を経由している」と
+# 判定できるようにする。
+_CHECK_REQUIREMENTS_MARKERS = ("check_requirements", "check-requirements")
+
+
+def has_check_requirements_marker(text: str) -> bool:
+    return any(marker in text for marker in _CHECK_REQUIREMENTS_MARKERS)
+
 
 # `pip`(または `pip3`)の直後、空白・引用符・バッククォート・カンマ・ハイフンだけを挟んで
 # `install`/`download` が続く形を拾う。Python の list リテラル形式(`"pip",\n "install"`)と
@@ -435,8 +533,8 @@ _PIP_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])pip3?[\s\"'`,\-]{0,20}(install|down
 def find_pip_call_files(repo_root: Path, *, runner: Runner = default_runner) -> set[str]:
     """`pip install` / `pip download` を呼ぶ(と読める)追跡ファイルの相対パス集合を返す。
 
-    走査対象は `.py` / `.yml` / `.yaml`(pip を実行する Python コード・CI ワークフローの
-    実際の置き場)に絞る。ガード自身のテストファイルは除外する。
+    走査対象は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
+    ガード自身のテストファイルは除外する。
     """
     result = runner(["git", "-C", str(repo_root), "ls-files"])
     if result.returncode != 0:
@@ -534,17 +632,24 @@ def main(argv: list[str] | None = None) -> int:
             build_wheelhouse(ROOT, ROOT / WHEELHOUSE_DIR_NAME, requirements_files, python_exe=py_exe)
             assert_vendor_assets_present(ROOT)
             build_bundle_tar(ROOT, bundle_path)
+            assert_release_asset_size_ok(bundle_path.stat().st_size)
 
-            bundle_hash = sha256_file(bundle_path)
+            # 署名の自己検証で同じ内容を 2 回全読みしないよう、バイト列を 1 回読んで使い回す。
+            bundle_bytes = bundle_path.read_bytes()
+            bundle_hash = hashlib.sha256(bundle_bytes).hexdigest()
             sha_path.write_text(f"{bundle_hash}  {BUNDLE_NAME}", encoding="ascii")
             bundle_common.write_bundle_key(key_path, current_key)
 
             private_pem = args.signing_key.read_bytes()
-            sig_b64 = bundle_common.sign_file(bundle_path, private_pem)
+            sig_b64 = bundle_common.sign_bytes(bundle_bytes, private_pem)
             sig_path.write_text(sig_b64, encoding="ascii")
 
             public_pem = PUBLIC_KEY_PATH.read_bytes()
-            bundle_common.assert_bundle_signature(bundle_path, sig_b64, public_pem)
+            if not bundle_common.verify_signature_bytes(bundle_bytes, sig_b64, public_pem):
+                raise RuntimeError(
+                    f"分離署名の検証に失敗しました: {bundle_path}\n"
+                    "  改ざん・すり替え、または公開鍵と署名鍵の不一致。処理を中止する。"
+                )
             print("[info] 署名 OK。")
         else:
             print("[info] 重量物は最新の Release と一致。ソース(タグ)のみ更新します。")
@@ -553,16 +658,14 @@ def main(argv: list[str] | None = None) -> int:
         notes_path = tmp_dir / "notes.md"
         notes_path.write_text(notes, encoding="utf-8")
 
-        if not exists:
-            move_rolling_tag(args.tag, head_sha)
-            gh_release_create(args.tag, notes_path)
-            if changed:
-                gh_release_upload(args.tag, [bundle_path, sha_path, key_path, sig_path])
-        else:
-            gh_release_edit_notes(args.tag, notes_path)
-            if changed:
-                gh_release_upload(args.tag, [bundle_path, sha_path, key_path, sig_path])
-            move_rolling_tag(args.tag, head_sha)
+        sync_release(
+            tag=args.tag,
+            head_sha=head_sha,
+            release_exists_flag=exists,
+            changed=changed,
+            notes_path=notes_path,
+            assets=[bundle_path, sha_path, key_path, sig_path],
+        )
 
         if bundle_hash is None:
             # 重量物を更新していない回は既存 pin の bundle-sha256 を引き継ぐ。
@@ -578,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
 
         pin = generate_pin(ROOT, head_sha, bundle_hash)
-        print(f"[info] pin を更新: {PIN_PATH}(source-commit={pin.source_commit})")
+        print(f"[info] pin を更新: {ROOT / 'offline' / 'pinned-release.txt'}(source-commit={pin.source_commit})")
         print("       ※ この pin ファイルをコミットしてください(offline/ ごと配布先へ運ぶ前提)。")
 
     print(f"[OK] 公開完了: {args.tag}")
