@@ -31,6 +31,7 @@ docs ビルドの唯一の成果物系統。原稿を
 from __future__ import annotations
 
 import base64
+import datetime
 import html
 import pathlib
 import re
@@ -618,6 +619,23 @@ def _doc_meta_row(version, revs) -> str:
     return f'<p class="docmeta">{"".join(parts)}</p>' if parts else ""
 
 
+def _canonical_stamp(out_path: pathlib.Path) -> str:
+    """成果 HTML 末尾の正典刻印を返す。
+
+    成果 HTML は閲覧用に monorepo (workspace) 側へ複製されるため、複製のコピー忘れで
+    古い版が正典面を持たないよう、正典リポジトリと生成日を閲覧者が判別できる形で
+    焼き込む。配色は既存 MUTED トークンのみ（新色を増やさない）。
+    """
+    proj = out_path.parent.name
+    today = datetime.date.today().isoformat()
+    return (
+        '<footer style="margin:2rem auto 1rem;max-width:60rem;'
+        "text-align:center;font-size:.75rem;color:var(--muted)\">"
+        f"この文書の正典は python-tools リポジトリ（docs/{esc(proj)}/src/）です。"
+        f"生成日: {today}</footer>"
+    )
+
+
 def _page(book_title: str, body_class: str, nav_html: str, main_html: str,
           has_mermaid: bool, out_path: pathlib.Path, warnings) -> pathlib.Path:
     """冊子 1 枚の HTML 全体を組み立てて保存する（guide / spec 共通の外殻）。"""
@@ -634,6 +652,7 @@ def _page(book_title: str, body_class: str, nav_html: str, main_html: str,
         "</div>\n"
         f"{_mermaid_script(has_mermaid)}\n"
         f"{_scrollspy_script()}\n"
+        f"{_canonical_stamp(out_path)}\n"
         "</body></html>\n"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)

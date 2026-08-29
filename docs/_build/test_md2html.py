@@ -58,3 +58,13 @@ def test_audience_of_tolerates_yaml_bool_value(tmp_path):
     # YAML は `yes` を bool にする。文字列として扱えず落ちるのではなく名前推定へ倒す
     assert md2html.audience_of(src, {"audience": True}) == "spec"
     assert md2html.audience_of(tmp_path / "操作手順書.md", {"audience": True}) == "guide"
+
+
+def test_page_embeds_canonical_stamp(tmp_path):
+    # 成果 HTML は monorepo へ複製されるため、鮮度と正典リポジトリを閲覧者が
+    # 判別できる刻印(正典 = python-tools・生成日)を末尾に必ず埋め込む
+    out = tmp_path / "stamp.html"
+    md2html._page("刻印テスト", "book-guide", "", "<p>本文</p>", False, out, [])
+    html = out.read_text(encoding="utf-8")
+    assert "この文書の正典は python-tools リポジトリ" in html
+    assert "生成日:" in html
