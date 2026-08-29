@@ -1,0 +1,593 @@
+# -*- coding: utf-8 -*-
+"""offline 重量物バンドル(`python-wheelhouse/` + `docs/_build/vendor/`)を GitHub Releases
+(ローリングタグ `offline-bundle-v1`)へ公開する。monorepo `offline/publish-offline-bundle.ps1`
+の移植だが、署名方式は RSA-XML から Ed25519-PEM(`cryptography`)へ、pin 生成用のソース取得は
+「認証済み curl」から「一時的な Public 化 + 無認証 codeload」へ変えている
+(このリポは private で、publish 担当者の端末以外にも配布先が gh 未認証を前提とするため)。
+
+行うこと(概要。詳細は各関数の docstring):
+  1. HEAD が origin へ push 済みであることを確認する(codeload は GitHub 上のコミットしか
+     返さないため、push 前に固めても配布先は取得できない)。
+  2. content-key(`bundle_common.compute_content_key`)を算出し、Release 側の `bundle.key`
+     と比較して重量物を再生成するか判定する(`--force` は常に再生成、`--tag-only` は
+     一致時のみタグ移動・不一致は何もせず終了)。
+  3. 再生成が必要なら requirements を検査(`check_requirements.assert_requirements_file`)
+     してから `pip download` で wheelhouse を組み、`docs/_build/vendor` と合わせて tar.gz へ
+     固め、Ed25519 で署名する(公開鍵が無ければ即失敗。署名の無い重量物は公開しない)。
+  4. Release が無ければ作成、あれば notes を更新。アセット(tar.gz / .sig / .sha256 /
+     bundle.key)は「先に upload、最後にタグ移動」の順で反映し、中断しても旧の組が生きる
+     ようにする。
+  5. `--tag-only` でなければ pin(`offline/pinned-release.txt`)を更新する。ソース zip の
+     sha256 を得るために一時的にリポジトリを Public 化し、無認証で codeload から取得する
+     (取得後は必ず finally で元の可視性へ戻す)。
+
+gh/git を実際に呼ぶ関数はすべて `runner` を受け取り、既定は実 `subprocess.run` だが呼び出し側
+から差し替えられる(単体テストは偽 runner を注入し、実 gh/git は一切起動しない)。
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing import Callable, Iterable
+
+_HERE = Path(__file__).resolve().parent
+ROOT = _HERE.parent
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE / "lib"))
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import bundle_common  # noqa: E402
+from check_requirements import assert_requirements_file  # noqa: E402
+
+DEFAULT_TAG = "offline-bundle-v1"
+BUNDLE_NAME = "offline-deps-bundle.tar.gz"
+WHEELHOUSE_DIR_NAME = "python-wheelhouse"
+VENDOR_DIR_POSIX = "docs/_build/vendor"
+PYTHON_VERSION = "3.13"
+
+DEFAULT_SIGNING_KEY_PATH = (
+    Path(os.environ.get("USERPROFILE", str(Path.home())))
+    / ".python-tools-signing"
+    / "bundle-signing.key.pem"
+)
+PUBLIC_KEY_PATH = ROOT / "offline" / "bundle-signing.pub.pem"
+PIN_PATH = ROOT / "offline" / "pinned-release.txt"
+
+CompletedProcess = subprocess.CompletedProcess
+Runner = Callable[..., CompletedProcess]
+
+
+def default_runner(cmd: list[str], **kwargs) -> CompletedProcess:
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    return subprocess.run(cmd, **kwargs)
+
+
+# ── git / gh の薄いラッパ(runner 注入でテスト可能に保つ) ──
+
+
+def git(args: list[str], *, cwd: Path = ROOT, runner: Runner = default_runner) -> CompletedProcess:
+    return runner(["git", "-C", str(cwd), *args])
+
+
+def gh(args: list[str], *, runner: Runner = default_runner) -> CompletedProcess:
+    return runner(["gh", *args])
+
+
+def require_commands(names: Iterable[str]) -> None:
+    for name in names:
+        if shutil.which(name) is None:
+            raise RuntimeError(f"'{name}' が見つかりません。インストール/認証を確認してください。")
+
+
+def assert_head_pushed(*, cwd: Path = ROOT, runner: Runner = default_runner) -> str:
+    """HEAD が origin の何らかの ref に存在することを確認し、その SHA を返す。
+
+    codeload(GitHub のアーカイブ配信)は GitHub 上に存在するコミットしか返さないため、
+    ローカルにしか無い HEAD で pin/公開を組んでも配布先は取得できない。
+    """
+    head = git(["rev-parse", "HEAD"], cwd=cwd, runner=runner)
+    if head.returncode != 0:
+        raise RuntimeError("git HEAD を取得できません。git リポジトリ内で実行してください。")
+    head_sha = head.stdout.strip()
+
+    remote = git(["ls-remote", "origin"], cwd=cwd, runner=runner)
+    if remote.returncode != 0:
+        raise RuntimeError("git ls-remote origin に失敗しました。")
+    remote_shas = {line.split("\t", 1)[0] for line in remote.stdout.splitlines() if line.strip()}
+    if head_sha not in remote_shas:
+        raise RuntimeError(
+            f"HEAD ({head_sha}) が origin へ push されていません。\n"
+            "  publish は push 済みの HEAD を前提とする"
+            "(codeload は GitHub 上のコミットしか返さない)。先に `git push` を実行してください。"
+        )
+    return head_sha
+
+
+def release_exists(tag: str, *, runner: Runner = default_runner) -> bool:
+    return gh(["release", "view", tag], runner=runner).returncode == 0
+
+
+def fetch_published_key(tag: str, dest_dir: Path, *, runner: Runner = default_runner) -> str | None:
+    """Release `tag` から `bundle.key` を取得して内容を返す。取得できなければ `None`。"""
+    result = gh(
+        ["release", "download", tag, "--pattern", "bundle.key", "--dir", str(dest_dir), "--clobber"],
+        runner=runner,
+    )
+    if result.returncode != 0:
+        return None
+    key_file = dest_dir / "bundle.key"
+    if not key_file.is_file():
+        return None
+    return bundle_common.read_bundle_key(key_file)
+
+
+# ── 純粋な判定/構築部品(runner 不要。単体テストの主対象) ──
+
+
+def bundle_changed(*, force: bool, release_exists: bool, published_key: str | None, current_key: str) -> bool:
+    """重量物の再生成が必要かを判定する。強制 / Release 未作成(初回) / キー不一致のいずれか。"""
+    return force or (not release_exists) or (published_key != current_key)
+
+
+def should_skip_tag_only(*, tag_only: bool, changed: bool) -> bool:
+    """`--tag-only` 経路で「タグも動かさず何もしない」べきかを判定する。
+
+    `--tag-only` は依存解決器(pip download)を一切起動しない契約のため、重量物の更新が
+    要ると判明した時点でタグも進めずに終了する。ここでタグだけ進めると「新ソース × 旧重量物」
+    の不整合ペアを配ることになる。
+    """
+    return tag_only and changed
+
+
+def build_pip_download_command(
+    python_exe: list[str], wheelhouse_dir: Path, requirements_files: list[Path]
+) -> list[str]:
+    """`pip download` の引数列を組み立てる(実行はしない。呼び出し側が subprocess で叩く)。
+
+    `--python-version 3.13 --only-binary=:all:` で wheel の ABI を cp313 に固定し(実行
+    インタプリタ任せだと別 ABI が混入し content-key では検知できない)、sdist を排除する
+    (sdist は取得しただけでビルド = setup.py 実行に至る経路を開くため)。
+    """
+    cmd = [
+        *python_exe,
+        "-m",
+        "pip",
+        "download",
+        "--no-input",
+        "--disable-pip-version-check",
+        "--python-version",
+        PYTHON_VERSION,
+        "--index-url",
+        "https://pypi.org/simple",
+        "--only-binary=:all:",
+        "-d",
+        str(wheelhouse_dir),
+    ]
+    for req in requirements_files:
+        cmd += ["-r", str(req)]
+    return cmd
+
+
+def build_tar_command(tar_exe: str, bundle_path: Path, repo_root: Path) -> list[str]:
+    """重量物を固める `tar -czf` の引数列を組み立てる(実行はしない)。"""
+    return [
+        tar_exe,
+        "-czf",
+        str(bundle_path),
+        "-C",
+        str(repo_root),
+        WHEELHOUSE_DIR_NAME,
+        VENDOR_DIR_POSIX,
+    ]
+
+
+def sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def resolve_tar_exe() -> str:
+    """Windows 標準 tar(`System32\\tar.exe`)を優先解決する。
+
+    Git Bash 同梱の MSYS tar が PATH 先頭にあると `-C <Windows パス>` を rsh の
+    host:path と誤認して失敗するため(monorepo `content-key.ps1` の `Resolve-Tar` と同じ理由)。
+    """
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = Path(system_root) / "System32" / "tar.exe"
+    if candidate.is_file():
+        return str(candidate)
+    found = shutil.which("tar")
+    if found:
+        return found
+    raise RuntimeError("'tar' が見つかりません(Windows 10/11 標準の tar.exe が必要)。")
+
+
+# ── 重量物の生成 ──
+
+
+def build_wheelhouse(
+    repo_root: Path,
+    wheelhouse_dir: Path,
+    requirements_files: list[Path],
+    *,
+    python_exe: list[str],
+) -> None:
+    """`requirements_files` を検査してから `pip download` で `wheelhouse_dir` へ収集する。
+
+    **検査(`assert_requirements_file`)は pip 実行の直前・全ファイルに対して行う。**
+    pip 入口列挙ガード(`find_pip_call_files` / テスト側)はこの呼び出しの存在を検査する。
+    """
+    for req in requirements_files:
+        assert_requirements_file(req)
+
+    if wheelhouse_dir.exists():
+        shutil.rmtree(wheelhouse_dir)
+    wheelhouse_dir.mkdir(parents=True)
+
+    cmd = build_pip_download_command(python_exe, wheelhouse_dir, requirements_files)
+    result = subprocess.run(cmd, cwd=repo_root)
+    if result.returncode != 0:
+        raise RuntimeError("pip download(wheelhouse 収集)に失敗しました。")
+
+
+def assert_vendor_assets_present(repo_root: Path) -> None:
+    vendor_dir = repo_root / "docs" / "_build" / "vendor"
+    required = ["manifest.txt", "mermaid.min.js", "mermaid-layout-elk.min.js"]
+    missing = [name for name in required if not (vendor_dir / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"docs/_build/vendor に不足があります: {missing}\n"
+            "  offline\\setup-offline.bat 等で vendor 一式を展開してから publish してください。"
+        )
+
+
+def build_bundle_tar(repo_root: Path, bundle_path: Path) -> None:
+    tar_exe = resolve_tar_exe()
+    if bundle_path.exists():
+        bundle_path.unlink()
+    cmd = build_tar_command(tar_exe, bundle_path, repo_root)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise RuntimeError("tar による重量物の梱包に失敗しました。")
+
+
+# ── Release 操作 ──
+
+
+def move_rolling_tag(tag: str, commit_sha: str, *, cwd: Path = ROOT, runner: Runner = default_runner) -> None:
+    """ローリングタグを `commit_sha` へ強制移動する(force push)。"""
+    result = git(["push", "origin", f"+{commit_sha}:refs/tags/{tag}"], cwd=cwd, runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError(f"タグの移動(git push)に失敗しました: {result.stderr}")
+
+
+def gh_release_create(tag: str, notes_path: Path, *, runner: Runner = default_runner) -> None:
+    result = gh(
+        ["release", "create", tag, "--title", f"Offline deps bundle ({tag})", "--notes-file", str(notes_path)],
+        runner=runner,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gh release create に失敗しました: {result.stderr}")
+
+
+def gh_release_edit_notes(tag: str, notes_path: Path, *, runner: Runner = default_runner) -> None:
+    result = gh(["release", "edit", tag, "--notes-file", str(notes_path)], runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError(f"gh release edit に失敗しました: {result.stderr}")
+
+
+def gh_release_upload(tag: str, assets: list[Path], *, runner: Runner = default_runner) -> None:
+    result = gh(["release", "upload", tag, *[str(a) for a in assets], "--clobber"], runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError(f"gh release upload に失敗しました: {result.stderr}")
+
+
+def build_release_notes(tag: str, content_key: str) -> str:
+    return (
+        "別端末(Windows x64)でネット不要に環境構築するための重量物バンドル。\n"
+        f"タグ `{tag}` は公開のたびに最新コミットへ移動し、GitHub が自動添付する "
+        "`Source code (zip/tar.gz)` は最新のソースコードと一致します。\n\n"
+        "## 同梱\n"
+        "- python-wheelhouse ... pdf-to-svg / graph-editor / docs ビルド依存の wheel(cp313)\n"
+        "- docs/_build/vendor ... mermaid 描画用 JS(2 ファイル)+ manifest\n\n"
+        "## 完全性・真正性\n"
+        "重量物には分離署名(`.sig`。Ed25519 / base64)を添えています。検証鍵は "
+        "`offline/bundle-signing.pub.pem`、取得すべきソースの不変コミット ID と各 sha256 は "
+        "`offline/pinned-release.txt` にあります(いずれも offline/ ごと手渡しで運ぶ前提)。\n\n"
+        f"content key: `{content_key}`\n"
+    )
+
+
+# ── pin 生成(一時的な Public 化 + 無認証 codeload) ──
+
+
+def gh_repo_name_with_owner(*, runner: Runner = default_runner) -> str:
+    result = gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError("gh repo view でリポジトリ名を取得できません。")
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError("gh repo view の出力が空です(リポジトリ名を取得できません)。")
+    return lines[0]
+
+
+def gh_repo_visibility(*, runner: Runner = default_runner) -> str:
+    result = gh(["repo", "view", "--json", "visibility", "-q", ".visibility"], runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError("gh repo view でリポジトリの visibility を取得できません。")
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError("gh repo view の出力が空です(visibility を取得できません)。")
+    return lines[0].lower()
+
+
+def gh_set_repo_visibility(visibility: str, *, runner: Runner = default_runner) -> None:
+    args = ["repo", "edit", "--visibility", visibility]
+    if visibility == "public":
+        args.append("--accept-visibility-change-consequences")
+    result = gh(args, runner=runner)
+    if result.returncode != 0:
+        raise RuntimeError(f"gh repo edit --visibility {visibility} に失敗しました: {result.stderr}")
+
+
+@contextlib.contextmanager
+def temporarily_public_repo(*, runner: Runner = default_runner):
+    """pin 生成のソース zip 取得のため、一時的にリポジトリを Public 化する。
+
+    visibility を事前確認し、既に public ならそのまま(何もしない)。private から public へ
+    変えた場合のみ、finally で元(private)へ必ず戻す。復帰に失敗した場合は例外を握り潰さず
+    stderr へ手動導線(`gh repo edit --visibility <元の値>` を手で実行すること)を表示する
+    (「公開されたままになっているのに気づけない」方が pin 生成の失敗より実害が大きいため)。
+    """
+    original = gh_repo_visibility(runner=runner)
+    made_public = original != "public"
+    if made_public:
+        gh_set_repo_visibility("public", runner=runner)
+    try:
+        yield
+    finally:
+        if made_public:
+            try:
+                gh_set_repo_visibility(original, runner=runner)
+            except Exception as exc:  # noqa: BLE001 — 復帰失敗は握り潰さず必ず可視化する
+                print(
+                    "[error] リポジトリを Private へ戻せませんでした。手動で "
+                    f"`gh repo edit --visibility {original} --accept-visibility-change-consequences` "
+                    f"相当を実行し、可視性を確認してください: {exc}",
+                    file=sys.stderr,
+                )
+
+
+def download_source_zip(owner_repo: str, commit_sha: str, dest: Path) -> None:
+    """`owner_repo`(`owner/name`)の `commit_sha` アーカイブを無認証 codeload から取得する。
+
+    `temporarily_public_repo` の中でのみ呼ぶこと(private のままでは 404 になる)。
+    """
+    url = f"https://github.com/{owner_repo}/archive/{commit_sha}.zip"
+    with urllib.request.urlopen(url) as response, dest.open("wb") as out:  # noqa: S310
+        shutil.copyfileobj(response, out)
+
+
+def generate_pin(
+    repo_root: Path, head_sha: str, bundle_sha256: str, *, runner: Runner = default_runner
+) -> bundle_common.PublishPin:
+    """pin(`offline/pinned-release.txt`)を生成してファイルへ書き出す。
+
+    ソース zip の sha256 を得るためだけに一時的な Public 化を挟む(codeload は private
+    リポジトリへ未認証でアクセスできない)。取得後は必ず finally で元の可視性へ戻る。
+    """
+    owner_repo = gh_repo_name_with_owner(runner=runner)
+    with tempfile.TemporaryDirectory(prefix="python-tools-pin-") as tmp_name:
+        zip_path = Path(tmp_name) / "source.zip"
+        with temporarily_public_repo(runner=runner):
+            download_source_zip(owner_repo, head_sha, zip_path)
+        zip_sha256 = sha256_file(zip_path)
+    pin = bundle_common.PublishPin(
+        source_commit=head_sha, source_zip_sha256=zip_sha256, bundle_sha256=bundle_sha256
+    )
+    bundle_common.write_pin(PIN_PATH, pin)
+    return pin
+
+
+# ── pip 入口列挙ガード ──
+
+# 「入口」= リポ内で pip install/download を実行する Python / CI ワークフロー。`.bat` ランチャは
+# Python スクリプトへ委譲するだけの薄いシムなので走査対象にしない(唯一の例外は
+# docs/_build/build_all.bat のような直接 pip 呼び出しだが、これは走査対象拡張子(.py/.yml/.yaml)
+# の外にあるため自然に対象外になる — 個別除外をハードコードしない)。
+KNOWN_PIP_ENTRYPOINTS = frozenset(
+    {
+        "scripts/setup_dev.py",
+        "scripts/lib/build_venv.py",
+        "offline/publish_bundle.py",
+        ".github/workflows/ci.yml",
+    }
+)
+
+# このガードを定義するテストファイル自身は除外する(「pip install」という語を含む説明
+# コメントを持つため、自己参照的に誤検知する)。
+_GUARD_SELF_EXCLUDE = frozenset({"scripts/test_python_tools_scripts.py"})
+
+_PIP_SCAN_EXTENSIONS = (".py", ".yml", ".yaml")
+
+# `pip`(または `pip3`)の直後、空白・引用符・バッククォート・カンマ・ハイフンだけを挟んで
+# `install`/`download` が続く形を拾う。Python の list リテラル形式(`"pip",\n "install"`)と
+# シェル形式(`pip install ...`)の両方を捉える一方、`pip は requirements ...` のような
+# 日本語散文中の「pip」への言及(その後に install/download が来ない、または全角文字を挟む)は
+# 拾わない拒否リストの逆(許可する形だけを書く)にしてある。
+_PIP_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])pip3?[\s\"'`,\-]{0,20}(install|download)\b")
+
+
+def find_pip_call_files(repo_root: Path, *, runner: Runner = default_runner) -> set[str]:
+    """`pip install` / `pip download` を呼ぶ(と読める)追跡ファイルの相対パス集合を返す。
+
+    走査対象は `.py` / `.yml` / `.yaml`(pip を実行する Python コード・CI ワークフローの
+    実際の置き場)に絞る。ガード自身のテストファイルは除外する。
+    """
+    result = runner(["git", "-C", str(repo_root), "ls-files"])
+    if result.returncode != 0:
+        raise RuntimeError("git ls-files に失敗しました(pip 入口ガードを実行できません)。")
+
+    hits: set[str] = set()
+    for rel in result.stdout.splitlines():
+        rel = rel.strip()
+        if not rel or rel in _GUARD_SELF_EXCLUDE:
+            continue
+        if not rel.endswith(_PIP_SCAN_EXTENSIONS):
+            continue
+        path = repo_root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _PIP_CALL_RE.search(text):
+            hits.add(rel)
+    return hits
+
+
+# ── CLI ──
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", default=DEFAULT_TAG, help=f"公開先のローリングタグ(既定 {DEFAULT_TAG})")
+    parser.add_argument("--force", action="store_true", help="変更検知を無視して常に重量物を再生成する")
+    parser.add_argument(
+        "--tag-only",
+        action="store_true",
+        help="タグ移動(ソース更新)だけを行う。重量物の更新が必要と判明した場合は何もせず終了する",
+    )
+    parser.add_argument(
+        "--signing-key",
+        type=Path,
+        default=DEFAULT_SIGNING_KEY_PATH,
+        help="Ed25519 秘密鍵(PEM)のパス",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    require_commands(["git", "gh"])
+
+    head_sha = assert_head_pushed()
+    requirements_files = bundle_common.list_requirements_files(ROOT)
+    if not requirements_files:
+        raise RuntimeError("requirements.txt が見つかりません(git ls-files の結果が空)。")
+    current_key = bundle_common.compute_content_key(ROOT, requirements_files=requirements_files)
+    print(f"[info] current content key: {current_key}")
+
+    with tempfile.TemporaryDirectory(prefix="python-tools-publish-") as tmp_name:
+        tmp_dir = Path(tmp_name)
+        exists = release_exists(args.tag)
+        published_key = fetch_published_key(args.tag, tmp_dir) if exists else None
+        print(f"[info] published key: {published_key or '(none)'}")
+
+        changed = bundle_changed(
+            force=args.force, release_exists=exists, published_key=published_key, current_key=current_key
+        )
+
+        if should_skip_tag_only(tag_only=args.tag_only, changed=changed):
+            print("[skip] 重量物の更新が必要ですが --tag-only のため何もしません(タグも動かしません)。")
+            return 0
+
+        bundle_path = ROOT / BUNDLE_NAME
+        sha_path = ROOT / f"{BUNDLE_NAME}.sha256"
+        sig_path = ROOT / f"{BUNDLE_NAME}.sig"
+        key_path = ROOT / "bundle.key"
+        bundle_hash: str | None = None
+
+        if changed:
+            if not args.signing_key.is_file():
+                raise RuntimeError(
+                    f"署名鍵がありません: {args.signing_key}\n"
+                    "  offline\\new_signing_key.py を 1 回実行して鍵ペアを作成してください。"
+                )
+            if not PUBLIC_KEY_PATH.is_file():
+                raise RuntimeError(
+                    f"公開鍵が offline/ にありません: {PUBLIC_KEY_PATH}\n"
+                    "  配布先はこのファイルだけを真正性の根拠にするため、コミットが必要です。"
+                )
+
+        if args.tag_only:
+            move_rolling_tag(args.tag, head_sha)
+            print(f"[OK] タグのみ更新: {args.tag} を {head_sha} へ移動しました。")
+            return 0
+
+        if changed:
+            print("[info] 重量物を更新します(--force / 初回 / 変更検知)。")
+            py_exe = [sys.executable]
+            build_wheelhouse(ROOT, ROOT / WHEELHOUSE_DIR_NAME, requirements_files, python_exe=py_exe)
+            assert_vendor_assets_present(ROOT)
+            build_bundle_tar(ROOT, bundle_path)
+
+            bundle_hash = sha256_file(bundle_path)
+            sha_path.write_text(f"{bundle_hash}  {BUNDLE_NAME}", encoding="ascii")
+            bundle_common.write_bundle_key(key_path, current_key)
+
+            private_pem = args.signing_key.read_bytes()
+            sig_b64 = bundle_common.sign_file(bundle_path, private_pem)
+            sig_path.write_text(sig_b64, encoding="ascii")
+
+            public_pem = PUBLIC_KEY_PATH.read_bytes()
+            bundle_common.assert_bundle_signature(bundle_path, sig_b64, public_pem)
+            print("[info] 署名 OK。")
+        else:
+            print("[info] 重量物は最新の Release と一致。ソース(タグ)のみ更新します。")
+
+        notes = build_release_notes(args.tag, current_key)
+        notes_path = tmp_dir / "notes.md"
+        notes_path.write_text(notes, encoding="utf-8")
+
+        if not exists:
+            move_rolling_tag(args.tag, head_sha)
+            gh_release_create(args.tag, notes_path)
+            if changed:
+                gh_release_upload(args.tag, [bundle_path, sha_path, key_path, sig_path])
+        else:
+            gh_release_edit_notes(args.tag, notes_path)
+            if changed:
+                gh_release_upload(args.tag, [bundle_path, sha_path, key_path, sig_path])
+            move_rolling_tag(args.tag, head_sha)
+
+        if bundle_hash is None:
+            # 重量物を更新していない回は既存 pin の bundle-sha256 を引き継ぐ。
+            try:
+                bundle_hash = bundle_common.read_pin(PIN_PATH).bundle_sha256
+            except ValueError:
+                if sha_path.is_file():
+                    bundle_hash = sha_path.read_text(encoding="ascii").strip().split()[0]
+                else:
+                    raise RuntimeError(
+                        "重量物を更新していないため既存 pin か手元の .sha256 が要りますが、"
+                        "どちらも読めません。初回は --force を付けて重量物ごと公開してください。"
+                    )
+
+        pin = generate_pin(ROOT, head_sha, bundle_hash)
+        print(f"[info] pin を更新: {PIN_PATH}(source-commit={pin.source_commit})")
+        print("       ※ この pin ファイルをコミットしてください(offline/ ごと配布先へ運ぶ前提)。")
+
+    print(f"[OK] 公開完了: {args.tag}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except RuntimeError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        sys.exit(1)
