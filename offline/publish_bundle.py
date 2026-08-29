@@ -69,6 +69,12 @@ Runner = Callable[..., CompletedProcess]
 def default_runner(cmd: list[str], **kwargs) -> CompletedProcess:
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、`git` が出す
+    # UTF-8 出力(日本語を含む警告・メッセージ)で読み取りスレッド内 `UnicodeDecodeError` に
+    # なり、キャプチャ結果が欠落する(`scripts/hooks/post_commit.py` から `--tag-only` を
+    # 呼ぶ経路で実機再現)。呼び出し元が別の `encoding` を明示した場合はそちらを優先する。
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
     return subprocess.run(cmd, **kwargs)
 
 

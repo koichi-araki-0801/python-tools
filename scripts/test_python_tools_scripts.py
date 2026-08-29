@@ -196,11 +196,14 @@ def test_require_wheelhouse_passes_when_present(tmp_path):
 
 
 def test_resolve_python_launcher_finds_py_or_python():
-    # この開発機は `py -3.13` の前提を持つ (README / setup_dev.py と同じ前提)。
+    # この開発機(Windows)は `py -3.13` の前提を持つ (README / setup_dev.py と同じ前提)。
+    # CI(ubuntu)は `py` ランチャが無く `python` へフォールバックし、`shutil.which` は
+    # フルパス(例 `/opt/hostedtoolcache/python/3.13.15/x64/bin/python`)を返すため、
+    # 判定はフルパスそのものでなく basename(`.exe` 有無を問わない)で行う。
     launcher = build_venv.resolve_python_launcher()
     assert launcher is not None
-    exe = launcher[0].lower()
-    assert exe in ("py", "python") or exe.endswith(("py.exe", "python.exe"))
+    exe_name = pathlib.Path(launcher[0]).name.lower()
+    assert exe_name in ("py", "python", "py.exe", "python.exe")
 
 
 # ── bundle_common: requirements.txt 列挙 (git 経路 / FS フォールバック経路の一致) ──
