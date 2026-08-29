@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """共通ライブラリ: offline 重量物バンドルの content-key 算出・pin 読み書き・Ed25519 署名。
 
-`offline/publish_bundle.py` / `offline/setup_offline.py`(次タスク)から import して使う。
+`offline/publish_bundle.py` / `offline/setup_offline.py` から import して使う。
 署名鍵は Ed25519-PEM(`cryptography`)を使う。content-key はファイル内容の連結を基本とし、
 行末(CR)だけは正規化する(`_read_normalized_bytes` 参照)。Windows worktree(既定
 `core.autocrlf=true`)は CRLF、GitHub の archive zip(codeload)は LF になるため、正規化
@@ -26,9 +26,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
+# `cryptography` はここでは import しない(モジュール冒頭での import は署名系の 3 関数
+# だけが必要とする依存を本ファイル全体の import 条件にしてしまう)。配布先の
+# `offline/setup_offline.py` は手順1-4(pin 読込・バンドル取得・sha256 照合・展開)を
+# `cryptography` が入っていない状態で行い、手順5で wheelhouse から導入した後に初めて
+# 署名検証(手順6)を呼ぶ。この順序を成立させるには、署名系の関数だけが個別に
+# 遅延 import する必要がある(関数側の docstring 参照)。
 
 # ── requirements.txt の列挙 ──
 
@@ -207,7 +210,13 @@ def read_bundle_key(path: Path) -> str:
 
 
 def generate_signing_key_pair() -> tuple[bytes, bytes]:
-    """Ed25519 鍵ペアを生成し、`(private_pem, public_pem)` を返す。"""
+    """Ed25519 鍵ペアを生成し、`(private_pem, public_pem)` を返す。
+
+    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
+    """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
     private_key = ed25519.Ed25519PrivateKey.generate()
     private_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -227,7 +236,12 @@ def sign_bytes(data: bytes, private_key_pem: bytes) -> str:
     Ed25519 は incremental signing API を持たない(pure EdDSA はメッセージ全体を要求する)ため
     全内容をメモリへ持つ必要がある。バイト列版を公開しておくと、呼び出し側が同一内容を
     署名・検証の両方で使う場合(例: 自己検証)に読み込みを 1 回で済ませられる。
+
+    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
     """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
     private_key = serialization.load_pem_private_key(private_key_pem, password=None)
     if not isinstance(private_key, ed25519.Ed25519PrivateKey):
         raise ValueError("秘密鍵が Ed25519 形式ではありません。")
@@ -248,7 +262,13 @@ def verify_signature_bytes(data: bytes, signature_b64: str, public_key_pem: byte
     """`data` を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。
 
     署名・鍵の形式不正(base64 でない・PEM でない等)も「検証失敗」に倒す(fail closed)。
+
+    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
     """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
     try:
         signature = base64.b64decode(signature_b64.strip(), validate=True)
     except (binascii.Error, ValueError):

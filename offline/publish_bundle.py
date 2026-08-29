@@ -498,6 +498,7 @@ KNOWN_PIP_ENTRYPOINTS = frozenset(
         "scripts/setup_dev.py",
         "scripts/lib/build_venv.py",
         "offline/publish_bundle.py",
+        "offline/setup_offline.py",
         "docs/_build/build_all.bat",
         ".github/workflows/ci.yml",
     }
