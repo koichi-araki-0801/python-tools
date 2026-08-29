@@ -46,6 +46,11 @@ def _restrict_to_owner(path: Path) -> None:
     result = subprocess.run(
         ["icacls", str(path), "/inheritance:r", "/grant:r", f"{account}:F"],
         capture_output=True,
+        # `icacls` は既定でロケール依存のコードページ (日本語 Windows では cp932) で出力する
+        # (UTF-8 化する `chcp` 等を挟んでいない)。`text=True` かつ `encoding` 未指定のまま
+        # (= プロセスのデフォルトロケールで decode) にしておくのが正しい選択であり、他の
+        # subprocess 呼び出しと同じ規約(`encoding="utf-8"` 明示)へ揃えてはならない
+        # (揃えると `result.stderr` の日本語エラーメッセージが文字化け/デコード例外になる。M-3)。
         text=True,
     )
     if result.returncode != 0:
@@ -62,13 +67,24 @@ def create_signing_key_pair(
                 f"既に鍵があります: {p}(置き換えるなら --force。過去の署名は検証できなくなります)"
             )
 
-    private_key_path.parent.mkdir(parents=True, exist_ok=True)
+    private_key_dir = private_key_path.parent
+    private_key_dir.mkdir(parents=True, exist_ok=True)
+    # ディレクトリ側の ACL も所有者のみへ絞る(M-2)。ファイル単体の ACL だけを絞っても、
+    # 同ディレクトリへ他ユーザーが書き込める状態が残っていれば、鍵ファイルの置き換え
+    # (すり替え)自体は防げない。ここが失敗したら、まだ鍵材料を何も生成・書き込みしていない
+    # 段階なので中止するだけでよい(削除すべき生成物が無い)。
+    _restrict_to_owner(private_key_dir)
+
     private_pem, public_pem = bundle_common.generate_signing_key_pair()
 
-    # 秘密鍵は所有者以外が読めない状態でだけ「存在」させたいため、書き込み直後に ACL を絞る。
-    private_key_path.write_bytes(private_pem)
+    # 秘密鍵の内容は「ACL を絞った後」にしか書かない(M-2)。既定 ACL のまま内容を書いてから
+    # 絞ると、書き込み〜ACL 確定までの間だけ既定 ACL で内容が読める窓ができる。先に空ファイル
+    # を作って ACL を確定させ(空ファイルが既定 ACL で一瞬存在する窓は残るが、そこに秘密鍵の
+    # 内容は無い)、その後で内容を書く。
+    private_key_path.touch(exist_ok=True)
     try:
         _restrict_to_owner(private_key_path)
+        private_key_path.write_bytes(private_pem)
     except Exception:
         private_key_path.unlink(missing_ok=True)
         raise

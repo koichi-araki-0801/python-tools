@@ -10,12 +10,10 @@ pushd "%~dp0" || (
 )
 title PdfToSvg 起動
 
-rem py ランチャ優先、無ければ python
-set "PY=py"
-where py >nul 2>&1 || set "PY=python"
-
+rem py -3.13 を使う(本リポの前提。裸の python は WindowsApps の未導入エイリアスに
+rem 化ける端末があるため、他の入口スクリプト(build.bat 等)と同じく py -3.13 を明示する)。
 echo PdfToSvg を起動します...
-%PY% run.py
+py -3.13 run.py
 
 if errorlevel 1 (
     echo.
