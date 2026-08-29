@@ -44,7 +44,8 @@ GitHub Releases(ローリングタグ `offline-bundle-v1`)へ別配布する。�
    比較になって manifest だけの差分を構造的に検知できなくなる(旧実装で実際に発生した
    バグ)。
 5. **展開**(`python-wheelhouse/` / `docs/_build/vendor/`)。手順4の照合を通過した組み合わせ
-   だけを展開する。不一致・手順7の署名検証失敗は、どちらも展開済みの内容
+   だけを展開する(手順4の不一致は展開前に中止するため、その時点で削除すべき展開物は
+   通常残らない)。手順7の署名検証失敗は、展開済みの内容
    (`python-wheelhouse/` と vendor の JS 2 件。`docs/_build/vendor/manifest.txt` は
    git 管理下なので残す)を削除してから非ゼロ終了する。
 6. **wheelhouse から `cryptography` を `pip install --no-index --find-links` で導入**
@@ -76,16 +77,16 @@ wheelhouse にしか無い(配布先には未導入の状態で届く)。そこ�
 ## 一時 Public 化(gh 未認証環境向けフォールバック)の運用
 
 - **gh CLI が認証済みの環境では、一時 Public 化は不要**である。手順2(バンドル取得)・
-  手順7(source zip 追加確認)とも `gh` を優先し、認証済みなら private のまま完結する。
+  手順8(source zip 追加確認)とも `gh` を優先し、認証済みなら private のまま完結する。
 - gh 未認証の環境(configured されていない別端末等)だけが無認証 HTTPS フォールバックを
   使い、そのときだけリポジトリの一時的な Public 公開が必要になる。手順は次のとおり:
   1. リポジトリ管理者の端末で `gh repo edit koichi-araki-0801/python-tools --visibility
      public --accept-visibility-change-consequences` を実行する。
-  2. 配布先で `offline\setup-offline.bat` を実行する(手順2・手順7 とも無認証 HTTPS
+  2. 配布先で `offline\setup-offline.bat` を実行する(手順2・手順8 とも無認証 HTTPS
      経路を通る)。
   3. 完了を確認したら、必ず `gh repo edit koichi-araki-0801/python-tools --visibility
      private --accept-visibility-change-consequences` で Private へ戻す。
-- **`publish_bundle.py` 自体も pin 生成(手順7で照合する source-zip-sha256 の算出)のために
+- **`publish_bundle.py` 自体も pin 生成(手順8で照合する source-zip-sha256 の算出)のために
   同じ一時 Public 化を自動で行う**(`temporarily_public_repo`)。事前に現在の visibility を
   確認し、既に public ならそのまま(何もしない)。private から public へ変えた場合のみ、
   `finally` で元(private)へ必ず戻し、戻ったことを再取得して検証する。復帰コマンド自体の
@@ -135,7 +136,7 @@ progress.` を返し、`gh repo edit --visibility` そのものが失敗する�
 
 ## setup 側の gh 認証 vs 無認証(source zip 取得の実装上の注意)
 
-手順7(source zip の追加確認)は、GitHub REST API の `zipball` エンドポイント
+手順8(source zip の追加確認)は、GitHub REST API の `zipball` エンドポイント
 (`gh api repos/<owner>/<repo>/zipball/<sha>`)ではなく、**`codeload.github.com` を
 `gh auth token` のトークンを `Authorization` ヘッダへ載せて直接叩く**実装になっている
 (`default_gh_authenticated_source_zip_download`)。理由は、REST API の `zipball`
@@ -162,7 +163,7 @@ publish 側を `zipball` エンドポイントへ変える、setup 側を別の�
 1. `offline\setup-offline.bat` → `setup-dev.bat` → `py -3.13 -m pytest pdf-to-svg -q`
    が緑(285 passed)であることを確認した。
 2. 改ざん検出: 取得したバンドルの 1 byte を書き換えたコピーで `verify_bundle_sha256`
-   を直接呼び、pin との不一致により `RuntimeError` が送出され、展開(手順4)に進まない
+   を直接呼び、pin との不一致により `RuntimeError` が送出され、展開(手順5)に進まない
    ことを確認した。
 3. ログ順序: `setup-offline.bat` の実行ログで `[3/8]`(sha256 照合)が `[6/8]`
    (`cryptography` 導入)より前に出力されることを確認した。
@@ -222,6 +223,10 @@ publish 側を `zipball` エンドポイントへ変える、setup 側を別の�
   visibility には触れない。
 - **手順6(`cryptography` 導入)の対象は `offline/dev-requirements.txt`**
   (`cryptography` 1 件を含む最小構成。`setup-dev.bat` が導入する開発依存一式とは別物)。
+- **requirements ファイル群と `docs/_build/vendor/manifest.txt` の編集は、次の publish と
+  不可分**である。これらは content-key の算出対象なので、コメント 1 行の追記でも公開済みの
+  `bundle.key`・pin と食い違い、配布先の setup が手順4で止まるようになる。編集する場合は
+  同じ作業の中で `publish_bundle.py --force` を実行し、生成された pin をコミットすること。
 - **publish はリポジトリ直下に 74MB 級の生成物を残す** — `offline-deps-bundle.tar.gz`
   (+ `.sha256` / `.sig`)と `bundle.key` は `.gitignore` 対象で git には入らないが、
   実ファイルとしてはディスクに残り続ける(次の publish で上書きされるまで)。作業ツリーの

@@ -1569,7 +1569,7 @@ def test_verify_bundle_sha256_raises_on_mismatch(tmp_path):
         setup_offline.verify_bundle_sha256(bundle_path, pin)
 
 
-# ── extract_bundle / remove_extracted_bundle (手順4) ──
+# ── extract_bundle / remove_extracted_bundle (手順5) ──
 def _make_bundle_tar(tmp_path, *, include_vendor=True):
     stage = tmp_path / "stage"
     wheelhouse = stage / publish_bundle.WHEELHOUSE_DIR_NAME
@@ -1625,7 +1625,7 @@ def test_remove_extracted_bundle_deletes_wheelhouse_and_vendor_js_but_keeps_mani
     assert (vendor / "manifest.txt").is_file()  # git 管理下のファイルは消さない
 
 
-# ── build_pip_install_command / install_cryptography_from_wheelhouse (手順5) ──
+# ── build_pip_install_command / install_cryptography_from_wheelhouse (手順6) ──
 def test_build_pip_install_command_uses_no_index_and_find_links(tmp_path):
     cmd = setup_offline.build_pip_install_command(
         [sys.executable], tmp_path / "python-wheelhouse", tmp_path / "offline" / "dev-requirements.txt"
@@ -1637,7 +1637,7 @@ def test_build_pip_install_command_uses_no_index_and_find_links(tmp_path):
     assert str(tmp_path / "offline" / "dev-requirements.txt") in cmd
 
 
-# ── verify_bundle_signature_or_cleanup (手順6・多層防御) ──
+# ── verify_bundle_signature_or_cleanup (手順7・多層防御) ──
 def test_verify_bundle_signature_or_cleanup_passes_with_matching_key(tmp_path):
     bundle_path = tmp_path / "bundle.tar.gz"
     bundle_path.write_bytes(b"bundle-bytes")
@@ -1690,7 +1690,7 @@ def test_verify_bundle_signature_or_cleanup_raises_on_missing_sig_file(tmp_path)
         )
 
 
-# ── verify_local_checkout_matches_bundle_key (手順4付随・I-3) ──
+# ── verify_local_checkout_matches_bundle_key (手順4・I-3) ──
 def test_verify_local_checkout_matches_bundle_key_passes_on_match(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "same-key")
     key_path = tmp_path / "bundle.key"
@@ -1881,7 +1881,7 @@ def test_verify_source_zip_sha256_passes_via_http_fallback(tmp_path):
     setup_offline.verify_source_zip_sha256(pin, gh_download=fake_gh_download, http_download=fake_http)
 
 
-# ── main: ブートストラップ順序の固定 (手順3の sha256 照合が手順5の cryptography 導入より前) ──
+# ── main: ブートストラップ順序の固定 (手順3の sha256 照合が手順6の cryptography 導入より前) ──
 def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
     calls: list[str] = []
 

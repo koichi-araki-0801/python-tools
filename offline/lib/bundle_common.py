@@ -28,17 +28,19 @@ from pathlib import Path
 
 # `cryptography` はここでは import しない(モジュール冒頭での import は署名系の 3 関数
 # だけが必要とする依存を本ファイル全体の import 条件にしてしまう)。配布先の
-# `offline/setup_offline.py` は手順1-4(pin 読込・バンドル取得・sha256 照合・展開)を
-# `cryptography` が入っていない状態で行い、手順5で wheelhouse から導入した後に初めて
-# 署名検証(手順6)を呼ぶ。この順序を成立させるには、署名系の関数だけが個別に
+# `offline/setup_offline.py` は手順1-5(pin 読込・バンドル取得・sha256 照合・
+# content-key 照合・展開)を `cryptography` が入っていない状態で行い、手順6で
+# wheelhouse から導入した後に初めて
+# 署名検証(手順7)を呼ぶ。この順序を成立させるには、署名系の関数だけが個別に
 # 遅延 import する必要がある(関数側の docstring 参照)。
 
 # ── requirements.txt の列挙 ──
 
 # FS フォールバックが除外するディレクトリ(M-6)。`.git`(git 管理領域)・`python-wheelhouse`
 # (重量物置き場)・`dist`/`build`/`out`/`coverage`/`test-results`/`__pycache__`/
-# `.pytest_cache` はいずれもリポジトリ直下の `.gitignore` に列挙されている(= git 経路
-# (`git ls-files`)では最初から候補に入らない)。FS フォールバックだけがこの集合を持たないと、
+# `.pytest_cache` は git 追跡外の生成物置き場(`.pytest_cache` 以外は `.gitignore` に列挙、
+# `.pytest_cache` は pytest が生成する未追跡キャッシュ)で、git 経路(`git ls-files`)では
+# 最初から候補に入らない。FS フォールバックだけがこの集合を持たないと、
 # 「git が使えない環境」でこれらの配下に requirements.txt 相当のファイルが紛れ込んだ場合に
 # 2 経路が異なる集合を返しうる(FS 側だけ拾う非対称)。`.gitignore` および
 # `scripts/check_comments.py` の `REPO_CONFIGS["python-tools"]["skip_dir_names"]` と
