@@ -65,6 +65,11 @@ def count_ahead_of_upstream(*, cwd: Path = ROOT) -> int | None:
             check=True,
             capture_output=True,
             text=True,
+            # `git` の出力は decimal 数値のみで実害は無いが、`default_runner`
+            # (`post_commit.py`)と同じ規約(Windows既定ロケールでの誤 decode を避ける)へ
+            # 一貫させておく。
+            encoding="utf-8",
+            errors="replace",
         )
     except (subprocess.CalledProcessError, OSError):
         return None

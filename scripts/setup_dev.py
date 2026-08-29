@@ -52,7 +52,14 @@ def resolve_python() -> list[str]:
         )
         sys.exit(1)
     probe = subprocess.run(
-        [launcher, f"-{PYTHON_VERSION}", "--version"], capture_output=True, text=True
+        [launcher, f"-{PYTHON_VERSION}", "--version"],
+        capture_output=True,
+        text=True,
+        # `py --version` の出力は ASCII のみだが、`text=True` かつ `encoding` 未指定は
+        # Windows既定ロケール依存で decode されるため、他の subprocess 呼び出しと同じ
+        # 規約(UTF-8 固定)へ揃えておく(同一クラスの不具合の再発防止)。
+        encoding="utf-8",
+        errors="replace",
     )
     if probe.returncode != 0:
         print(
@@ -112,6 +119,11 @@ def list_requirements() -> list[Path]:
         check=True,
         capture_output=True,
         text=True,
+        # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、`git` が
+        # 出す UTF-8 出力で読み取りスレッド内 `UnicodeDecodeError` になりうる
+        # (`offline/lib/bundle_common.py` の `list_requirements_files_via_git` と同一クラス)。
+        encoding="utf-8",
+        errors="replace",
     )
     files = [ROOT / line for line in out.stdout.splitlines() if line.strip()]
     return sorted(files, key=lambda p: p.relative_to(ROOT).as_posix())

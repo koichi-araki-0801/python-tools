@@ -56,6 +56,12 @@ def list_requirements_files_via_git(repo_root: Path) -> list[Path] | None:
             ["git", "-C", str(repo_root), "ls-files", "--", "*requirements.txt"],
             capture_output=True,
             text=True,
+            # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、
+            # `git` が出す UTF-8 出力で読み取りスレッド内 `UnicodeDecodeError` になり
+            # うる(`scripts/hooks/post_commit.py` 経由の `--tag-only` → この関数の
+            # 呼び出し連鎖で実機確認した不具合と同一クラス)。
+            encoding="utf-8",
+            errors="replace",
         )
     except OSError:
         return None

@@ -1424,6 +1424,34 @@ def test_parse_remote_refs_returns_empty_list_for_blank_stdin():
     assert pre_push.parse_remote_refs("\n\n") == []
 
 
+def test_parse_remote_refs_handles_tag_deletion_push():
+    # `git push origin :refs/tags/<tag>` の削除 push は 1 列目が `(delete)`・2 列目が
+    # 全ゼロ sha1 になる(githooks(5))。3 列目(remote ref)は削除対象そのものの実名なので、
+    # 削除 push でも実際にタグ削除できた(手順書に記載の検証手順)ことが示すとおり、
+    # 1〜2 列目の綴りに関わらず parse_remote_refs は 3 列目だけを見れば正しく動く。
+    stdin_text = (
+        "(delete) 0000000000000000000000000000000000000000 "
+        "refs/tags/offline-bundle-v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    )
+    assert pre_push.parse_remote_refs(stdin_text) == ["refs/tags/offline-bundle-v1"]
+
+
+def test_decide_pre_push_action_skips_for_tag_deletion_push():
+    refs = pre_push.parse_remote_refs(
+        "(delete) 0000000000000000000000000000000000000000 "
+        "refs/tags/offline-bundle-v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    )
+    assert pre_push.decide_pre_push_action(refs, ahead=None) == "skip"
+
+
+def test_decide_pre_push_action_runs_for_branch_deletion_push():
+    refs = pre_push.parse_remote_refs(
+        "(delete) 0000000000000000000000000000000000000000 "
+        "refs/heads/tmp-branch aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    )
+    assert pre_push.decide_pre_push_action(refs, ahead=None) == "run"
+
+
 # ── decide_pre_push_action: タグのみ push はスキップ、ブランチ混在は実行 ──
 def test_decide_pre_push_action_runs_for_branch_ref():
     assert pre_push.decide_pre_push_action(["refs/heads/main"], ahead=None) == "run"
@@ -1613,7 +1641,50 @@ def test_publish_tag_only_warns_but_does_not_raise_on_failure(tmp_path, capsys):
 
 
 # ── main: 常に 0 を返す(post-commit はベストエフォートで非ゼロ終了しない契約) ──
-def test_main_always_returns_zero_even_when_steps_fail(monkeypatch):
-    monkeypatch.setattr(post_commit, "auto_push", lambda: None)
-    monkeypatch.setattr(post_commit, "publish_tag_only", lambda: None)
+def test_main_always_returns_zero_even_when_steps_fail(monkeypatch, capsys):
+    # `auto_push` / `publish_tag_only` 自身が捕捉しない**未想定の例外**(git 未導入時の
+    # `FileNotFoundError` 等)を投げても、`main` はそれを飲み込んで 0 を返すことを確認する
+    # (post-commit はコミット確定後のフックのため、生の traceback を出さない契約)。
+    def failing_auto_push():
+        raise RuntimeError("boom-auto-push")
+
+    def failing_publish_tag_only():
+        raise FileNotFoundError("boom-publish-tag-only")
+
+    monkeypatch.setattr(post_commit, "auto_push", failing_auto_push)
+    monkeypatch.setattr(post_commit, "publish_tag_only", failing_publish_tag_only)
     assert post_commit.main() == 0
+    err = capsys.readouterr().err
+    assert "auto-push" in err
+    assert "publish_bundle.py --tag-only" in err
+
+
+def test_main_still_runs_publish_tag_only_after_auto_push_raises(monkeypatch):
+    # ベストエフォートの各ステップは独立: 1 つ目が未想定の例外で落ちても 2 つ目は
+    # 実行されること(前段の失敗で後段を巻き込んで止めない)。
+    calls: list[str] = []
+
+    def failing_auto_push():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(post_commit, "auto_push", failing_auto_push)
+    monkeypatch.setattr(post_commit, "publish_tag_only", lambda: calls.append("publish_tag_only"))
+    assert post_commit.main() == 0
+    assert calls == ["publish_tag_only"]
+
+
+# ── _run_best_effort_step: 未想定の例外を捕捉して警告のみに倒す ──
+def test_run_best_effort_step_catches_exception_and_warns(capsys):
+    def raiser():
+        raise ValueError("nope")
+
+    post_commit._run_best_effort_step("some-step", raiser)  # 例外を送出しないことを確認
+    err = capsys.readouterr().err
+    assert "some-step" in err
+    assert "未想定の例外" in err
+
+
+def test_run_best_effort_step_runs_step_when_no_exception():
+    calls: list[str] = []
+    post_commit._run_best_effort_step("ok-step", lambda: calls.append("ran"))
+    assert calls == ["ran"]

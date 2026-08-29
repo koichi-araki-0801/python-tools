@@ -97,6 +97,18 @@ def publish_tag_only(*, runner: Runner = default_runner, publish_bundle_path: Pa
         )
 
 
+def _run_best_effort_step(name: str, step: Callable[[], None]) -> None:
+    """ベストエフォート処理 1 件を実行する。`step` 自身が処理する失敗(非ゼロ終了等)は
+    そのまま警告出力に任せるが、`FileNotFoundError`(git 未導入等)のような**未想定の
+    例外**まで `main` へ伝播させると、post-commit というコミット確定後のフックで生の
+    traceback が出てしまう(ベストエフォート設計と矛盾する)。ここで捕捉し、他方の
+    ステップの実行を妨げないようにする。"""
+    try:
+        step()
+    except Exception as exc:  # noqa: BLE001 - ベストエフォートの最終防波堤として意図的に広く捕捉する
+        print(f"[post-commit] {name} で未想定の例外が発生しました(ベストエフォート): {exc!r}", file=sys.stderr)
+
+
 def main() -> int:
     # Windows既定コンソール (cp932 等) では Japanese メッセージが UnicodeEncodeError で
     # 出力を落としうる。案内を確実に出すため UTF-8 へ固定する。
@@ -104,8 +116,8 @@ def main() -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
-    auto_push()
-    publish_tag_only()
+    _run_best_effort_step("auto-push", auto_push)
+    _run_best_effort_step("publish_bundle.py --tag-only", publish_tag_only)
     # post-commit はコミット確定後のフックのため、ベストエフォート処理の失敗を
     # 非ゼロ終了で報告しない(git 側の後始末は無く、非ゼロにしても再試行を促す以上の
     # 効果が無いため。失敗は上記の warning 出力で利用者へ伝える)。

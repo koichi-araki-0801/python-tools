@@ -380,6 +380,11 @@ def _staged_files() -> frozenset[str]:
         check=True,
         capture_output=True,
         text=True,
+        # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、`git` が
+        # 出す UTF-8 出力で読み取りスレッド内 `UnicodeDecodeError` になりうる
+        # (`scripts/hooks/post_commit.py` 等で実機確認した不具合と同一クラス)。
+        encoding="utf-8",
+        errors="replace",
     )
     return frozenset(line.strip() for line in out.stdout.splitlines() if line.strip())
 
