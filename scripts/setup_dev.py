@@ -29,6 +29,12 @@ WHEELHOUSE = ROOT / "python-wheelhouse"
 PYTHON_VERSION = "3.13"
 HOOKS_PATH = "scripts/hooks"
 
+# `setup-dev.bat` はスクリプト直接起動 (`py -3.13 "%~dp0scripts\setup_dev.py"`) のため
+# `sys.path[0]` は既に `scripts/` になっているが、`pytest` 等の別経路からの import でも
+# 同様に解決できるよう明示しておく。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_requirements import check_requirements_file  # noqa: E402
+
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print(f"[setup] $ {' '.join(str(c) for c in cmd)}")
@@ -115,10 +121,20 @@ def check_requirements(requirements: list[Path]) -> None:
     """requirements ファイルが「名前 + バージョン指定子」だけで書かれているかを検査する。
 
     `--find-links` / 直 URL 参照 / ローカルパス等のオプション行が 1 行でも混入すると、
-    pip の解決先そのものを差し替えられる。呼び出し口だけを先に用意した状態で、
-    実際の検査ロジックは未実装 (現状は無条件で許可する)。
+    pip の解決先そのものを差し替えられる。検査本体は `check_requirements.py` の
+    `check_requirements_file` に集約する (venv ビルド (`scripts/lib/build_venv.py`) と
+    実装を共有し、入口ごとに検査ロジックが drift するのを防ぐ)。
     """
-    del requirements  # 現状は未使用 (検査ロジック実装後に使う)。
+    ok = True
+    for req in requirements:
+        violations = check_requirements_file(req)
+        if violations:
+            ok = False
+            for v in violations:
+                print(f"[error] [requirements] {v}", file=sys.stderr)
+    if not ok:
+        print("[error] requirements の形式検査に失敗しました。上記を修正してください。", file=sys.stderr)
+        sys.exit(1)
 
 
 # ── 3. セットアップ本体 ──

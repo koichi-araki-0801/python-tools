@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Playwright(chromium) ラスタライズ・撮影の共通定型部。
+"""Playwright(Edge) ラスタライズ・撮影の共通定型部。
 
 `svg2png.py` / `docs/pie-chart/_build/capture_examples.py` /
 `docs/pdf-to-svg/_build/capture_screens.py` が個別に持っていた
@@ -7,6 +7,11 @@
 集約する。解像度規約（`DEVICE_SCALE_FACTOR` = 印刷時ににじまない 2 倍）の変更を 1 箇所で
 済ませるため。オフライン制約により依存は追加しない（playwright は導入済みのものを遅延
 import）。サーバ起動・UI 操作などスクリプト固有の撮影本体は共通化しない。
+
+ブラウザ実体は Playwright 同梱の chromium でなく OS の Microsoft Edge
+（`channel="msedge"`）を使う。本リポは「ブラウザ DL 無し」方針（Edge シェル UI と同じ
+前提で、`playwright install` によるブラウザ実体のダウンロードを要求しない）のため、
+`playwright` パッケージは入っていても chromium 実体は存在しない。
 
 使い方（`docs/_build` 以外から）: `sys.path.insert(0, str(<repo>/docs/_build))` 後に
 `import shot`。同階層の `svg2png.py` はそのまま `import shot` できる。
@@ -29,11 +34,13 @@ def _is_scheme_allowed(url: str, allowed: frozenset[str]) -> bool:
 
 @contextlib.contextmanager
 def chromium():
-    """`sync_playwright()` + `chromium.launch()` の複合コンテキスト。browser を yield する。"""
+    """`sync_playwright()` + Edge (`channel="msedge"`) `launch()` の複合コンテキスト。
+    browser を yield する。関数名は既存呼び出し元（`svg2png.py` 等）との互換のため据え置く
+    （実体は Playwright 同梱 chromium でなく OS の Edge）。"""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(channel="msedge")
         try:
             yield browser
         finally:
