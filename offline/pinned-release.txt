@@ -1,0 +1,5 @@
+# offline 配布物の pin(publish_bundle.py が自動生成。手で編集しない)。
+# 配布先の setup はこの値だけを真正性の根拠にする。
+source-commit 4014f71a007c4b7a6c295903a52fa552c7c137ee
+source-zip-sha256 e88b0ab4bea238ae463a9463e96c47b2cceb521170e5cf2c086b5540785c4e7e
+bundle-sha256 dc2c5c2a010fce8df5819744b891b660f947d54258f81c93bf3507efb74968a2
