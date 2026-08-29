@@ -98,9 +98,16 @@ _SOURCE_ZIP_DOWNLOAD_TIMEOUT_SECONDS = 60
 _MAX_SOURCE_ZIP_DOWNLOAD_BYTES = 200 * 1024 * 1024
 
 
-def _http_download(url: str, dest: Path, *, timeout: int, max_bytes: int) -> None:
-    """無認証 HTTPS で `url` を `dest` へ取得する(タイムアウト・サイズ上限つき)。"""
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+def _http_download(
+    url: str, dest: Path, *, timeout: int, max_bytes: int, headers: dict[str, str] | None = None
+) -> None:
+    """HTTPS で `url` を `dest` へ取得する(タイムアウト・サイズ上限つき)。
+
+    `headers` を渡さなければ無認証。`Authorization` を載せれば private リポジトリの
+    codeload アーカイブも取得できる(`default_gh_authenticated_source_zip_download` 参照)。
+    """
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         total = 0
         with dest.open("wb") as out:
             while True:
@@ -315,18 +322,51 @@ def verify_bundle_signature_or_cleanup(
 # ── 手順7: source zip の sha256 照合(追加確認。展開はしない) ──
 
 
-def gh_download_source_zip(
+SourceZipDownloader = Callable[[str, str, str, Path], bool]
+
+
+def gh_auth_token(*, runner: Runner = default_runner) -> str | None:
+    """`gh auth token` でアクティブなトークンを取得する。未認証/失敗なら None。"""
+    result = publish_bundle.gh(["auth", "token"], runner=runner)
+    if result.returncode != 0:
+        return None
+    token = (result.stdout or "").strip()
+    return token or None
+
+
+def default_gh_authenticated_source_zip_download(
     owner: str, repo: str, commit_sha: str, dest: Path, *, runner: Runner = default_runner
 ) -> bool:
-    """`gh api` で pin の source-commit のアーカイブを取得する。成功したら True。
+    """`gh auth token` を Authorization ヘッダに載せ、codeload から直接アーカイブを取得する。
 
-    gh が認証済みならリポジトリを Public 化せずに(private のまま)取得できる。
+    成功したら True。**GitHub REST API の `zipball` エンドポイント
+    (`gh api repos/.../zipball/<sha>`)は使わない**: codeload.github.com とは別経路で
+    生成される zip がバイト単位で一致しない(実測: sha256 が食い違う)。pin の
+    source-zip-sha256 は publish 側(`publish_bundle.download_source_zip`)が
+    codeload から取得した値であるため、setup 側も同じ codeload の URL
+    (`https://codeload.github.com/<owner>/<repo>/zip/<sha>`)を直接叩く必要がある。
+    gh CLI は codeload への薄いラッパーを持たないため、`gh auth token` で取得した
+    トークンを自前で `Authorization` ヘッダへ載せて urllib で取得する(private のまま
+    取得できる。codeload は `Authorization: token <PAT>` を private リポジトリの
+    アーカイブ取得に受理する — 実機確認済み)。未認証なら False を返し、呼び出し側は
+    ヘッダ無しの無認証 HTTPS フォールバックへ進む(一時 Public 化が前提)。
     """
-    result = publish_bundle.gh(
-        ["api", f"repos/{owner}/{repo}/zipball/{commit_sha}", "--output", str(dest)],
-        runner=runner,
-    )
-    return result.returncode == 0 and dest.is_file()
+    token = gh_auth_token(runner=runner)
+    if token is None:
+        return False
+    url = f"https://codeload.github.com/{owner}/{repo}/zip/{commit_sha}"
+    try:
+        _http_download(
+            url,
+            dest,
+            timeout=_SOURCE_ZIP_DOWNLOAD_TIMEOUT_SECONDS,
+            max_bytes=_MAX_SOURCE_ZIP_DOWNLOAD_BYTES,
+            headers={"Authorization": f"token {token}"},
+        )
+    except Exception:
+        dest.unlink(missing_ok=True)
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
 
 
 def verify_source_zip_sha256(
@@ -334,7 +374,7 @@ def verify_source_zip_sha256(
     *,
     owner: str = DEFAULT_OWNER,
     repo: str = DEFAULT_REPO,
-    runner: Runner = default_runner,
+    gh_download: SourceZipDownloader = default_gh_authenticated_source_zip_download,
     http_download: Downloader = default_source_zip_http_download,
 ) -> None:
     """pin の source-commit のアーカイブを取得し、source-zip-sha256 と照合する(手順7)。
@@ -347,7 +387,7 @@ def verify_source_zip_sha256(
     """
     with tempfile.TemporaryDirectory(prefix="python-tools-setup-src-") as tmp_name:
         zip_path = Path(tmp_name) / "source.zip"
-        ok = gh_download_source_zip(owner, repo, pin.source_commit, zip_path, runner=runner)
+        ok = gh_download(owner, repo, pin.source_commit, zip_path)
         if not ok:
             print(
                 "[info] gh CLI での取得ができません(未認証等)。無認証 HTTPS へフォールバックします。"

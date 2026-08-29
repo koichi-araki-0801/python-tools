@@ -1066,17 +1066,57 @@ def test_verify_bundle_signature_or_cleanup_removes_extracted_content_on_failure
     assert (vendor / "manifest.txt").is_file()
 
 
-# ── gh_download_source_zip / verify_source_zip_sha256 (手順7・追加確認) ──
-def test_gh_download_source_zip_builds_zipball_api_path(tmp_path):
+# ── gh_auth_token / default_gh_authenticated_source_zip_download (手順7・追加確認) ──
+#
+# GitHub REST API の zipball エンドポイント (`gh api repos/.../zipball/<sha>`) は
+# codeload.github.com とは別経路で、生成される zip がバイト単位で一致しない
+# (実機確認: 同一コミットで sha256 が食い違った)。pin の source-zip-sha256 は
+# publish 側が codeload から取得した値なので、setup 側も同じ codeload の URL を
+# `gh auth token` のトークンを Authorization ヘッダへ載せて直接叩く。
+def test_gh_auth_token_returns_token_on_success():
+    runner = _FakeRunner([_completed(stdout="ghp_dummytoken\n")])
+    token = setup_offline.gh_auth_token(runner=runner)
+    assert token == "ghp_dummytoken"
+    assert runner.calls[0] == ["gh", "auth", "token"]
+
+
+def test_gh_auth_token_returns_none_on_failure():
+    runner = _FakeRunner([_completed(returncode=1, stderr="not logged in")])
+    assert setup_offline.gh_auth_token(runner=runner) is None
+
+
+def test_default_gh_authenticated_source_zip_download_returns_false_without_token(tmp_path):
+    runner = _FakeRunner([_completed(returncode=1, stderr="not logged in")])
     dest = tmp_path / "source.zip"
+    ok = setup_offline.default_gh_authenticated_source_zip_download(
+        "acme", "widgets", "c" * 40, dest, runner=runner
+    )
+    assert ok is False
+    assert not dest.exists()
 
-    def make_zip(cmd):
-        dest.write_bytes(b"zip-bytes")
 
-    runner = _make_side_effect_runner([(make_zip, _completed(returncode=0))])
-    ok = setup_offline.gh_download_source_zip("acme", "widgets", "c" * 40, dest, runner=runner)
+def test_default_gh_authenticated_source_zip_download_uses_codeload_with_auth_header(tmp_path, monkeypatch):
+    # このテストの核心: gh api の zipball エンドポイントではなく codeload.github.com を
+    # Authorization ヘッダ付きで直接叩くこと (実装が REST API 経路へ戻ったら赤くなる)。
+    captured = {}
+
+    def fake_http_download(url, dest, *, timeout, max_bytes, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        dest.write_bytes(b"zip-bytes-from-codeload")
+
+    monkeypatch.setattr(setup_offline, "_http_download", fake_http_download)
+    runner = _FakeRunner([_completed(stdout="ghp_dummytoken\n")])
+
+    dest = tmp_path / "source.zip"
+    ok = setup_offline.default_gh_authenticated_source_zip_download(
+        "acme", "widgets", "c" * 40, dest, runner=runner
+    )
+
     assert ok is True
-    assert f"repos/acme/widgets/zipball/{'c' * 40}" in runner.calls[0]
+    assert captured["url"] == f"https://codeload.github.com/acme/widgets/zip/{'c' * 40}"
+    assert captured["headers"] == {"Authorization": "token ghp_dummytoken"}
+    assert dest.read_bytes() == b"zip-bytes-from-codeload"
 
 
 def test_verify_source_zip_sha256_passes_via_gh_without_http_fallback(tmp_path):
@@ -1084,37 +1124,42 @@ def test_verify_source_zip_sha256_passes_via_gh_without_http_fallback(tmp_path):
     digest = hashlib.sha256(content).hexdigest()
     pin = bundle_common.PublishPin(source_commit="a" * 40, source_zip_sha256=digest, bundle_sha256="b" * 64)
 
-    def make_zip(cmd):
-        dest = pathlib.Path(cmd[-1])
+    def fake_gh_download(owner, repo, commit_sha, dest):
         dest.write_bytes(content)
+        return True
 
-    runner = _make_side_effect_runner([(make_zip, _completed(returncode=0))])
     setup_offline.verify_source_zip_sha256(
-        pin, runner=runner, http_download=lambda url, dest: pytest.fail("gh が成功したので http は呼ばれないはず")
+        pin,
+        gh_download=fake_gh_download,
+        http_download=lambda url, dest: pytest.fail("gh が成功したので http は呼ばれないはず"),
     )
 
 
 def test_verify_source_zip_sha256_falls_back_to_http_and_raises_on_mismatch(tmp_path):
     pin = bundle_common.PublishPin(source_commit="a" * 40, source_zip_sha256="0" * 64, bundle_sha256="b" * 64)
-    runner = _FakeRunner([_completed(returncode=1, stderr="not authenticated")])
+
+    def fake_gh_download(owner, repo, commit_sha, dest):
+        return False
 
     def fake_http(url, dest):
         dest.write_bytes(b"different-bytes")
 
     with pytest.raises(RuntimeError):
-        setup_offline.verify_source_zip_sha256(pin, runner=runner, http_download=fake_http)
+        setup_offline.verify_source_zip_sha256(pin, gh_download=fake_gh_download, http_download=fake_http)
 
 
 def test_verify_source_zip_sha256_passes_via_http_fallback(tmp_path):
     content = b"source-zip-bytes-via-http"
     digest = hashlib.sha256(content).hexdigest()
     pin = bundle_common.PublishPin(source_commit="a" * 40, source_zip_sha256=digest, bundle_sha256="b" * 64)
-    runner = _FakeRunner([_completed(returncode=1, stderr="not authenticated")])
+
+    def fake_gh_download(owner, repo, commit_sha, dest):
+        return False
 
     def fake_http(url, dest):
         dest.write_bytes(content)
 
-    setup_offline.verify_source_zip_sha256(pin, runner=runner, http_download=fake_http)
+    setup_offline.verify_source_zip_sha256(pin, gh_download=fake_gh_download, http_download=fake_http)
 
 
 # ── main: ブートストラップ順序の固定 (手順3の sha256 照合が手順5の cryptography 導入より前) ──
