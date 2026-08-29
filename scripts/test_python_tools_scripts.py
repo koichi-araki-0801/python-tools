@@ -23,6 +23,7 @@ gh を呼ぶ関数・HTTP 取得を行う関数はすべて注入可能にして
 """
 
 import hashlib
+import io
 import pathlib
 import subprocess
 import sys
@@ -38,10 +39,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "offline
 import pytest  # noqa: E402
 
 import check_requirements  # noqa: E402
+import check_comments  # noqa: E402
 import build_venv  # noqa: E402
 import bundle_common  # noqa: E402
 import publish_bundle  # noqa: E402
 import setup_offline  # noqa: E402
+import setup_dev  # noqa: E402
+import new_signing_key  # noqa: E402
 import pre_push  # noqa: E402
 import post_commit  # noqa: E402
 
@@ -206,6 +210,43 @@ def test_resolve_python_launcher_finds_py_or_python():
     assert exe_name in ("py", "python", "py.exe", "python.exe")
 
 
+# ── build_venv(): requirements 検査 (assert_requirements_file) が pip install より先(M-5) ──
+def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path):
+    calls: list[str] = []
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text("markdown-it-py\n", encoding="utf-8")
+    wheelhouse_dir = tmp_path / "python-wheelhouse"
+    wheelhouse_dir.mkdir()
+
+    # 既存の健全な venv を装う(python.exe が存在し --version が成功する)ことで、実際の
+    # `python -m venv` 作成(重い実処理)を経由せずに、検査 → pip install の呼び出し順序
+    # だけを確認する。
+    venv_python = project_dir / ".venv-build" / "Scripts" / "python.exe"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_bytes(b"dummy")
+
+    def fake_run(cmd, **kwargs):
+        if str(venv_python) in cmd and "--version" in cmd:
+            calls.append("venv_probe")
+        elif "pip" in cmd:
+            calls.append("pip_install")
+        else:
+            calls.append("other")
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(build_venv.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        build_venv, "assert_requirements_file", lambda path: calls.append("assert_requirements_file")
+    )
+
+    result = build_venv.build_venv(project_dir, requirements_path, wheelhouse_dir)
+
+    assert result == venv_python
+    assert calls.index("assert_requirements_file") < calls.index("pip_install")
+
+
 # ── bundle_common: requirements.txt 列挙 (git 経路 / FS フォールバック経路の一致) ──
 def _init_git_repo(repo: pathlib.Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -234,6 +275,13 @@ def test_requirements_files_via_git_and_filesystem_match(tmp_path):
     venv_dir = tmp_path / ".venv-build"
     venv_dir.mkdir()
     (venv_dir / "requirements.txt").write_text("ignored\n", encoding="utf-8")
+    # M-6 回帰: `.gitignore` に列挙されたビルド生成物ディレクトリ (dist/build/out 等) は
+    # git 側では未追跡で最初から候補に入らない。FS フォールバックにも同じ除外が無いと、
+    # ここに紛れ込んだファイルだけ FS 側が拾ってしまう非対称になる。
+    for name in ("dist", "build", "out", "coverage", "test-results", "__pycache__"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "requirements.txt").write_text("ignored\n", encoding="utf-8")
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
@@ -268,6 +316,22 @@ def test_list_requirements_files_prefers_git_when_available(tmp_path):
     _init_git_repo(tmp_path)
     files = bundle_common.list_requirements_files(tmp_path)
     assert [p.name for p in files] == ["requirements.txt"]
+
+
+# ── list_requirements_files_via_git: 非 ASCII パスの quotepath 回帰 (I-1) ──
+def test_list_requirements_files_via_git_handles_non_ascii_directory_name(tmp_path):
+    # git は既定 (core.quotepath=true) で非 ASCII パスを引用符 + 8 進エスケープした
+    # 文字列で返す。`-z` (NUL 区切り) を使わないと `repo_root / line` が実在しないパスに
+    # なり、この日本語ディレクトリ配下の requirements.txt が黙って候補から落ちる。
+    jp_dir = tmp_path / "日本語ディレクトリ"
+    jp_dir.mkdir()
+    (jp_dir / "requirements.txt").write_text("a\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+
+    files = bundle_common.list_requirements_files_via_git(tmp_path)
+    assert files is not None
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "日本語ディレクトリ/requirements.txt" in rel
 
 
 # ── bundle_common: content-key ──
@@ -836,6 +900,178 @@ def test_download_source_zip_uses_github_archive_url_matching_setup_side(monkeyp
     assert dest.read_bytes() == b"zip-bytes"
 
 
+# ── main: I-4(generate_pin は sync_release より先)・I-6(vendor 検査は build_wheelhouse
+# より先)の呼び出し順序を固定する。実 git/gh・実 pip download・ROOT 直下への実ファイル
+# 書き込みはいずれも monkeypatch で避け、この開発機の実リポジトリを一切変更しない。 ──
+def _patch_main_common_prereqs(monkeypatch, tmp_path, *, release_exists_value, published_key):
+    monkeypatch.setattr(publish_bundle, "require_commands", lambda names: None)
+    monkeypatch.setattr(publish_bundle, "assert_head_pushed", lambda: "a" * 40)
+    monkeypatch.setattr(
+        bundle_common, "list_requirements_files", lambda repo_root: [tmp_path / "requirements.txt"]
+    )
+    monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root, **kwargs: "same-key")
+    monkeypatch.setattr(publish_bundle, "release_exists", lambda tag, **kwargs: release_exists_value)
+    monkeypatch.setattr(
+        publish_bundle, "fetch_published_key", lambda tag, dest_dir, **kwargs: published_key
+    )
+
+
+def test_main_generates_pin_before_syncing_release_when_unchanged(monkeypatch, tmp_path):
+    # changed=False の経路(published_key と current_key が一致)を使う: wheelhouse 構築・
+    # 署名・bundle_path 等 ROOT 直下への書き込みを一切伴わずに I-4 の順序だけを確認できる。
+    calls: list[str] = []
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
+
+    def fake_generate_pin(repo_root, head_sha, bundle_hash, **kwargs):
+        calls.append("generate_pin")
+        return bundle_common.PublishPin(
+            source_commit=head_sha, source_zip_sha256="b" * 64, bundle_sha256=bundle_hash
+        )
+
+    def fake_sync_release(**kwargs):
+        calls.append("sync_release")
+
+    monkeypatch.setattr(publish_bundle, "generate_pin", fake_generate_pin)
+    monkeypatch.setattr(publish_bundle, "sync_release", fake_sync_release)
+
+    rc = publish_bundle.main([])
+
+    assert rc == 0
+    assert calls == ["generate_pin", "sync_release"]
+
+
+def test_main_does_not_sync_release_when_generate_pin_fails(monkeypatch, tmp_path):
+    # I-4 の帰結: generate_pin が失敗したら sync_release は一度も呼ばれない
+    # (「新バンドル(Release)× 旧 pin」の不整合を作らない)。
+    calls: list[str] = []
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
+
+    def fake_generate_pin(repo_root, head_sha, bundle_hash, **kwargs):
+        calls.append("generate_pin")
+        raise RuntimeError("pin-generation-failed")
+
+    def fake_sync_release(**kwargs):
+        calls.append("sync_release")
+
+    monkeypatch.setattr(publish_bundle, "generate_pin", fake_generate_pin)
+    monkeypatch.setattr(publish_bundle, "sync_release", fake_sync_release)
+
+    with pytest.raises(RuntimeError, match="pin-generation-failed"):
+        publish_bundle.main([])
+
+    assert calls == ["generate_pin"]
+
+
+def test_main_checks_vendor_assets_before_building_wheelhouse(monkeypatch, tmp_path):
+    # I-6: assert_vendor_assets_present は build_wheelhouse (74MB の pip download を伴う)
+    # より前に呼ぶ。build_wheelhouse を意図的に例外で打ち切り、それ以降の重い処理・
+    # 実ファイル書き込みを一切実行せずに呼び出し順序だけを固定する。
+    calls: list[str] = []
+    # release_exists=False -> bundle_changed は force なしでも True になる (初回扱い)。
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=False, published_key=None)
+
+    fake_signing_key = tmp_path / "signing.pem"
+    fake_signing_key.write_bytes(b"dummy-private-key-bytes")
+
+    def fake_assert_vendor(repo_root):
+        calls.append("assert_vendor_assets_present")
+
+    def fake_build_wheelhouse(*args, **kwargs):
+        calls.append("build_wheelhouse")
+        raise RuntimeError("stop-before-touching-real-files")
+
+    monkeypatch.setattr(publish_bundle, "assert_vendor_assets_present", fake_assert_vendor)
+    monkeypatch.setattr(publish_bundle, "build_wheelhouse", fake_build_wheelhouse)
+
+    with pytest.raises(RuntimeError, match="stop-before-touching-real-files"):
+        publish_bundle.main(["--signing-key", str(fake_signing_key)])
+
+    assert calls == ["assert_vendor_assets_present", "build_wheelhouse"]
+
+
+# ── main: --tag-only の早期 return(M-5) ──
+def test_main_tag_only_moves_tag_and_returns_before_pin_sync_when_unchanged(monkeypatch, tmp_path):
+    calls: list[str] = []
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
+    monkeypatch.setattr(
+        publish_bundle, "move_rolling_tag", lambda tag, head_sha, **kwargs: calls.append("move_rolling_tag")
+    )
+    monkeypatch.setattr(publish_bundle, "generate_pin", lambda *a, **k: calls.append("generate_pin"))
+    monkeypatch.setattr(publish_bundle, "sync_release", lambda **k: calls.append("sync_release"))
+
+    rc = publish_bundle.main(["--tag-only"])
+
+    assert rc == 0
+    # --tag-only はタグを動かして即座に return する。pin 生成・Release 反映は呼ばれない。
+    assert calls == ["move_rolling_tag"]
+
+
+def test_main_tag_only_skips_without_moving_tag_when_bundle_changed(monkeypatch, tmp_path):
+    calls: list[str] = []
+    # release_exists=False -> bundle_changed は force なしでも True になる (初回扱い)。
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=False, published_key=None)
+    monkeypatch.setattr(
+        publish_bundle, "move_rolling_tag", lambda tag, head_sha, **kwargs: calls.append("move_rolling_tag")
+    )
+
+    rc = publish_bundle.main(["--tag-only"])
+
+    assert rc == 0
+    # 重量物の更新が必要な場合は --tag-only は「何もしない」(タグも動かさない)。
+    assert calls == []
+
+
+# ── main: 署名鍵存在検査(changed 時のみ・build_wheelhouse より前。M-5) ──
+def test_main_raises_when_signing_key_missing_and_bundle_changed(monkeypatch, tmp_path):
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=False, published_key=None)
+    missing_signing_key = tmp_path / "does-not-exist.pem"
+
+    with pytest.raises(RuntimeError, match="署名鍵がありません"):
+        publish_bundle.main(["--signing-key", str(missing_signing_key)])
+
+
+# ── main: bundle_hash フォールバック(重量物未更新時。M-5) ──
+def test_main_falls_back_to_sha_file_when_pin_is_unreadable_and_unchanged(monkeypatch, tmp_path):
+    # 実リポジトリの pin (offline/pinned-release.txt) を読めない状態を装い、実在する
+    # .sha256 ファイルへフォールバックすることを確認する(どちらも読み取り専用の実ファイル
+    # なので repo を変更しない)。
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
+    monkeypatch.setattr(
+        bundle_common, "read_pin", lambda path: (_ for _ in ()).throw(ValueError("no pin"))
+    )
+    monkeypatch.setattr(
+        publish_bundle,
+        "generate_pin",
+        lambda repo_root, head_sha, bundle_hash, **k: bundle_common.PublishPin(
+            source_commit=head_sha, source_zip_sha256="b" * 64, bundle_sha256=bundle_hash
+        ),
+    )
+    monkeypatch.setattr(publish_bundle, "sync_release", lambda **k: None)
+
+    rc = publish_bundle.main([])
+    assert rc == 0
+
+
+def test_main_raises_when_neither_pin_nor_sha_file_available(monkeypatch, tmp_path):
+    _patch_main_common_prereqs(monkeypatch, tmp_path, release_exists_value=True, published_key="same-key")
+    monkeypatch.setattr(
+        bundle_common, "read_pin", lambda path: (_ for _ in ()).throw(ValueError("no pin"))
+    )
+
+    sha_path = publish_bundle.ROOT / f"{publish_bundle.BUNDLE_NAME}.sha256"
+    real_is_file = pathlib.Path.is_file
+
+    def fake_is_file(self):
+        if self == sha_path:
+            return False
+        return real_is_file(self)
+
+    monkeypatch.setattr(pathlib.Path, "is_file", fake_is_file)
+
+    with pytest.raises(RuntimeError, match="初回は --force"):
+        publish_bundle.main([])
+
+
 # ── pip 入口列挙ガード ──
 def test_pip_entrypoint_guard_matches_known_set_and_requires_check_requirements():
     found = publish_bundle.find_pip_call_files(REPO_ROOT)
@@ -873,6 +1109,249 @@ def test_pip_entrypoint_guard_scans_bat_launchers_too():
     # 検出できない (未検査の pip 入口が実在するのに無風で通る)。
     found = publish_bundle.find_pip_call_files(REPO_ROOT)
     assert "docs/_build/build_all.bat" in found
+
+
+def test_find_pip_call_files_detects_non_ascii_named_file(tmp_path):
+    # I-2 回帰: git は既定 (core.quotepath=true) で非 ASCII パスを引用符 + 8 進エスケープ
+    # した文字列で返す。`-z` を使わないと `rel.endswith(_PIP_SCAN_EXTENSIONS)` が末尾の
+    # `"` に阻まれて一致せず、無検査の pip 呼び出しが黙って通過する
+    # (実証: 「セットアップ.bat」に無検査 pip を置いてもガードテストが緑のまま)。
+    jp_bat = tmp_path / "セットアップ.bat"
+    jp_bat.write_text("pip install -r requirements.txt\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+
+    found = publish_bundle.find_pip_call_files(tmp_path)
+    assert "セットアップ.bat" in found
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# scripts/setup_dev.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_list_requirements_handles_non_ascii_directory_name(tmp_path, monkeypatch):
+    # I-1 回帰: `-z` を使わないと git の quotepath エスケープで `ROOT / line` が実在しない
+    # パスになり、日本語ディレクトリ配下の requirements.txt が黙って install 対象から落ちる。
+    jp_dir = tmp_path / "日本語ディレクトリ"
+    jp_dir.mkdir()
+    (jp_dir / "requirements.txt").write_text("a\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+
+    monkeypatch.setattr(setup_dev, "ROOT", tmp_path)
+    files = setup_dev.list_requirements()
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "日本語ディレクトリ/requirements.txt" in rel
+
+
+def test_list_requirements_finds_root_and_nested_files(tmp_path, monkeypatch):
+    (tmp_path / "requirements.txt").write_text("a\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "dev-requirements.txt").write_text("b\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+
+    monkeypatch.setattr(setup_dev, "ROOT", tmp_path)
+    files = setup_dev.list_requirements()
+    rel = sorted(p.relative_to(tmp_path).as_posix() for p in files)
+    assert rel == ["requirements.txt", "sub/dev-requirements.txt"]
+
+
+# ── check_wheelhouse: fail-closed(--online 未指定なら必須。M-5) ──
+def test_check_wheelhouse_exits_when_missing_and_not_online(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup_dev, "WHEELHOUSE", tmp_path / "no-such-wheelhouse")
+    with pytest.raises(SystemExit) as excinfo:
+        setup_dev.check_wheelhouse(False)
+    assert excinfo.value.code == 1
+
+
+def test_check_wheelhouse_passes_when_present(monkeypatch, tmp_path):
+    wheelhouse = tmp_path / "python-wheelhouse"
+    wheelhouse.mkdir()
+    monkeypatch.setattr(setup_dev, "WHEELHOUSE", wheelhouse)
+    setup_dev.check_wheelhouse(False)  # 例外を送出しないことを確認
+
+
+def test_check_wheelhouse_skips_check_when_online(monkeypatch, tmp_path):
+    # --online (明示 opt-in) のときは wheelhouse 不在でも fail-closed の対象外。
+    monkeypatch.setattr(setup_dev, "WHEELHOUSE", tmp_path / "no-such-wheelhouse")
+    setup_dev.check_wheelhouse(True)  # 例外を送出しないことを確認
+
+
+# ── check_requirements: assert_requirements_file と同じ契約 (RuntimeError。M-4) ──
+def test_check_requirements_raises_runtime_error_on_violation(tmp_path):
+    path = tmp_path / "requirements.txt"
+    path.write_text("--find-links https://evil/\n", encoding="utf-8")
+    with pytest.raises(RuntimeError):
+        setup_dev.check_requirements([path])
+
+
+def test_check_requirements_passes_clean_files(tmp_path):
+    path = tmp_path / "requirements.txt"
+    path.write_text("markdown-it-py\n", encoding="utf-8")
+    setup_dev.check_requirements([path])  # 例外を送出しないことを確認
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# scripts/check_comments.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ── _staged_files: 非 ASCII パスの quotepath 回帰 (I-1・実証済みの原因箇所) ──
+def test_staged_files_returns_non_ascii_path_name(tmp_path, monkeypatch):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    jp_file = docs_dir / "設計書.md"
+    jp_file.write_text("# ダミー\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "docs/設計書.md"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    monkeypatch.setattr(check_comments, "ROOT", tmp_path)
+    staged = check_comments._staged_files()
+    assert "docs/設計書.md" in staged
+
+
+def test_staged_files_excludes_deleted_entries(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+    (tmp_path / "b.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "b.py"], cwd=tmp_path, check=True)
+    (tmp_path / "a.py").unlink()
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, check=True)  # ステージ済みの削除
+
+    monkeypatch.setattr(check_comments, "ROOT", tmp_path)
+    staged = check_comments._staged_files()
+    assert staged == frozenset({"b.py"})
+
+
+# ── _check_finding_ids: レビュー所見番号の検出 (§5) ──
+#
+# フィクスチャの所見番号文字列は連結で組み立てる (`"所見" + "3"` 等)。素の文字列リテラルで
+# 書くと、このテストファイル自身を check_comments.py がスキャンしたときに「フィクスチャの
+# サンプル」ではなく「実際に残った所見番号」として誤検知する (自己参照)。
+_SAMPLE_FINDING_REF = "所見" + "3"
+
+
+def test_check_finding_ids_flags_finding_reference_in_python_comment():
+    errors: list[str] = []
+    text = f"x = 1  # {_SAMPLE_FINDING_REF} は解消済み\n"
+    check_comments._check_finding_ids(errors, "scripts/example.py", text, "py", check_comments.FINDING_ID_CODE)
+    assert len(errors) == 1
+    assert "scripts/example.py:1" in errors[0]
+
+
+def test_check_finding_ids_allows_ordinary_comment():
+    errors: list[str] = []
+    text = "# ここは現在形の理由を書く\n"
+    check_comments._check_finding_ids(errors, "scripts/example.py", text, "py", check_comments.FINDING_ID_CODE)
+    assert errors == []
+
+
+def test_check_finding_ids_flags_test_name_with_finding_number():
+    errors: list[str] = []
+    text = f'test("{_SAMPLE_FINDING_REF} の再発防止を確認する", () => {{\n  expect(1).toBe(1);\n}});\n'
+    check_comments._check_finding_ids(
+        errors, "web/test/example.test.ts", text, "ts", check_comments.FINDING_ID_CODE
+    )
+    assert any("テスト名にレビュー所見番号" in e for e in errors)
+
+
+# ── main --staged: 一時 git repo で ERROR が出ることを確認する自己検知テスト (I-5) ──
+def test_main_staged_detects_finding_id_violation(tmp_path, monkeypatch, capsys):
+    (tmp_path / "a.py").write_text(f"x = 1  # {_SAMPLE_FINDING_REF} の対応\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, check=True)  # commit しない (ステージのみ)
+
+    monkeypatch.setattr(check_comments, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_comments.py", "--staged"])
+    code = check_comments.main()
+    out = capsys.readouterr()
+    assert code == 1
+    assert "ERROR" in (out.out + out.err)
+
+
+def test_main_staged_passes_clean_tree(tmp_path, monkeypatch, capsys):
+    (tmp_path / "a.py").write_text("x = 1  # 現在形の理由\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, check=True)  # commit しない (ステージのみ)
+
+    monkeypatch.setattr(check_comments, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_comments.py", "--staged"])
+    code = check_comments.main()
+    assert code == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# offline/new_signing_key.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_create_signing_key_pair_writes_usable_key_pair(tmp_path):
+    priv = tmp_path / "sub" / "bundle-signing.key.pem"
+    pub = tmp_path / "bundle-signing.pub.pem"
+    new_signing_key.create_signing_key_pair(priv, pub)
+    assert priv.is_file()
+    assert pub.is_file()
+    # 生成した鍵ペアで実際に署名・検証できること (中身が正しい Ed25519 PEM であること) を確認する。
+    sig = bundle_common.sign_bytes(b"hello", priv.read_bytes())
+    assert bundle_common.verify_signature_bytes(b"hello", sig, pub.read_bytes())
+
+
+def test_create_signing_key_pair_refuses_overwrite_without_force(tmp_path):
+    priv = tmp_path / "key.pem"
+    pub = tmp_path / "pub.pem"
+    priv.write_bytes(b"existing-private-key")
+    with pytest.raises(RuntimeError):
+        new_signing_key.create_signing_key_pair(priv, pub)
+
+
+def test_create_signing_key_pair_force_overwrites_existing(tmp_path):
+    priv = tmp_path / "key.pem"
+    pub = tmp_path / "pub.pem"
+    priv.write_bytes(b"old-private")
+    pub.write_bytes(b"old-public")
+    new_signing_key.create_signing_key_pair(priv, pub, force=True)
+    assert priv.read_bytes() != b"old-private"
+    assert pub.read_bytes() != b"old-public"
+
+
+# ── M-2: 秘密鍵は ACL を絞った後にしか内容を書かない・失敗時は fail closed で削除する ──
+def test_create_signing_key_pair_removes_private_key_when_file_acl_restriction_fails(tmp_path, monkeypatch):
+    priv = tmp_path / "sub" / "key.pem"
+    pub = tmp_path / "pub.pem"
+
+    def failing_restrict(path):
+        if path.is_file():  # ディレクトリ側の ACL 設定は成功させ、ファイル側だけ失敗させる。
+            raise RuntimeError("icacls failed on file")
+
+    monkeypatch.setattr(new_signing_key, "_restrict_to_owner", failing_restrict)
+    with pytest.raises(RuntimeError):
+        new_signing_key.create_signing_key_pair(priv, pub)
+
+    # fail closed: ACL を絞れなかった秘密鍵を「生成成功」として残さない。公開鍵も書かれない
+    # (書き込み順序は秘密鍵の ACL 確定・書込みが先)。
+    assert not priv.exists()
+    assert not pub.exists()
+
+
+def test_create_signing_key_pair_does_not_write_private_key_when_directory_acl_fails(tmp_path, monkeypatch):
+    priv = tmp_path / "sub" / "key.pem"
+    pub = tmp_path / "pub.pem"
+
+    def failing_restrict(path):
+        if path.is_dir():
+            raise RuntimeError("icacls failed on directory")
+
+    monkeypatch.setattr(new_signing_key, "_restrict_to_owner", failing_restrict)
+    with pytest.raises(RuntimeError):
+        new_signing_key.create_signing_key_pair(priv, pub)
+
+    # ディレクトリの ACL を絞れない段階で中止する。秘密鍵の内容はまだ何も書かれていない。
+    assert not priv.exists()
+    assert not pub.exists()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1215,7 +1694,44 @@ def test_verify_local_checkout_matches_bundle_key_raises_and_cleans_up_on_mismat
     assert (vendor / "manifest.txt").is_file()
 
 
-# ── gh_auth_token / default_gh_authenticated_source_zip_download (手順7・追加確認) ──
+# ── I-3: 展開前後での照合結果の違いを実際に固定する ──
+def test_i3_checking_before_extraction_detects_manifest_drift_that_after_extraction_misses(tmp_path):
+    """公開後に `docs/_build/vendor/manifest.txt` だけが更新されたシナリオ:
+    バンドル(公開時点)は旧 manifest("v1")を同梱・content-key に含める。手元チェックアウト
+    は新 manifest("v2")へ進んでいる。展開の**前**に照合すれば不一致を検知できる一方、
+    展開の**後**に測ると、バンドル同梱の旧 manifest が手元の新 manifest を上書きしてしまい
+    検知できなくなる(旧実装で実際に起きていたバグ。I-3 の修正が「展開前」を要求する理由を
+    実際に両方の順序を実行して固定する)。
+    """
+    # バンドル同梱の manifest は "v1"(`_make_bundle_tar` の既定値)。
+    tar_path = _make_bundle_tar(tmp_path)
+
+    # 公開時の content-key ("v1" の requirements + manifest から算出) を bundle.key として保存。
+    stage = tmp_path / "publish_stage"
+    (stage / "docs" / "_build" / "vendor").mkdir(parents=True)
+    (stage / "requirements.txt").write_text("pkgA==1.0\n", encoding="utf-8")
+    (stage / "docs" / "_build" / "vendor" / "manifest.txt").write_text("v1\n", encoding="utf-8")
+    published_key = bundle_common.compute_content_key(stage)
+    key_path = tmp_path / "bundle.key"
+    bundle_common.write_bundle_key(key_path, published_key)
+
+    # 手元チェックアウトは公開後に manifest だけ "v2" へ更新された状態。
+    repo_root = tmp_path / "repo"
+    (repo_root / "docs" / "_build" / "vendor").mkdir(parents=True)
+    (repo_root / "requirements.txt").write_text("pkgA==1.0\n", encoding="utf-8")
+    (repo_root / "docs" / "_build" / "vendor" / "manifest.txt").write_text("v2\n", encoding="utf-8")
+
+    # I-3 の新順序: 展開の前に照合すれば不一致を検知する。
+    with pytest.raises(RuntimeError):
+        setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)
+
+    # 対照 (旧順序の再現): 展開の後に測ると、バンドル同梱の "v1" manifest が repo_root の
+    # "v2" を上書きし、不一致が構造的に検知できなくなる。
+    setup_offline.extract_bundle(tar_path, repo_root)
+    setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)  # 例外なし = 検知漏れ
+
+
+# ── gh_auth_token / default_gh_authenticated_source_zip_download (手順8・追加確認) ──
 #
 # GitHub REST API の zipball エンドポイント (`gh api repos/.../zipball/<sha>`) は
 # codeload.github.com とは別経路で、生成される zip がバイト単位で一致しない
@@ -1383,18 +1899,20 @@ def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
         "load_pin",
         "fetch",
         "verify_sha256",
-        "extract",
         "verify_content_key",
+        "extract",
         "install_crypto",
         "verify_signature",
         "verify_source_zip",
     ]
-    # 主張の核心: sha256 照合 (手順3) が cryptography 導入 (手順5) より前に行われる。
+    # 主張の核心: sha256 照合 (手順3) が cryptography 導入 (手順6) より前に行われる。
     assert calls.index("verify_sha256") < calls.index("install_crypto")
     assert calls.index("install_crypto") < calls.index("verify_signature")
-    # I-3: 内容キー照合(bundle.key)は展開の直後・cryptography 導入より前に行う
-    # (照合自体が hashlib だけで完結するため、鶏卵回避の制約に触れずここへ置ける)。
-    assert calls.index("extract") < calls.index("verify_content_key") < calls.index("install_crypto")
+    # I-3: 内容キー照合(bundle.key)は展開の**前**・cryptography 導入より前に行う
+    # (照合自体が hashlib だけで完結するため鶏卵回避の制約に触れずここへ置け、かつ
+    # 展開後だと bundle 同梱の manifest.txt が git 管理下の実体を上書きしてしまい
+    # manifest の差分を検知できなくなる)。
+    assert calls.index("verify_content_key") < calls.index("extract") < calls.index("install_crypto")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1555,6 +2073,54 @@ def test_run_pytest_suite_runs_all_steps_when_all_pass(monkeypatch, tmp_path):
     code = pre_push.run_pytest_suite(cwd=tmp_path)
     assert code == 0
     assert len(calls) == len(pre_push.PYTEST_STEPS)
+
+
+# ── run_check_comments / main: I-5 (check_comments はフルツリー・pytest より先) ──
+def test_run_check_comments_invokes_script_without_staged_flag(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd=None):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(pre_push.subprocess, "run", fake_run)
+    code = pre_push.run_check_comments(cwd=tmp_path)
+    assert code == 0
+    assert len(calls) == 1
+    assert str(pre_push.CHECK_COMMENTS_SCRIPT) in calls[0]
+    assert "--staged" not in calls[0]  # フルツリーを検査する (pre-commit と役割分担)
+
+
+def test_run_check_comments_returns_nonzero_on_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        pre_push.subprocess, "run", lambda cmd, cwd=None: subprocess.CompletedProcess(args=cmd, returncode=1)
+    )
+    assert pre_push.run_check_comments(cwd=tmp_path) == 1
+
+
+def test_main_runs_check_comments_before_pytest_suite_and_stops_on_failure(monkeypatch):
+    # check_comments が失敗したら pytest 一式(重い・数分かかる)は 1 つも走らせない。
+    calls: list[str] = []
+    monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/main a b refs/heads/main c\n"))
+    monkeypatch.setattr(pre_push, "run_check_comments", lambda: calls.append("check_comments") or 1)
+    monkeypatch.setattr(pre_push, "run_pytest_suite", lambda: calls.append("pytest_suite") or 0)
+
+    code = pre_push.main()
+
+    assert code == 1
+    assert calls == ["check_comments"]
+
+
+def test_main_runs_pytest_suite_after_check_comments_passes(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/main a b refs/heads/main c\n"))
+    monkeypatch.setattr(pre_push, "run_check_comments", lambda: calls.append("check_comments") or 0)
+    monkeypatch.setattr(pre_push, "run_pytest_suite", lambda: calls.append("pytest_suite") or 0)
+
+    code = pre_push.main()
+
+    assert code == 0
+    assert calls == ["check_comments", "pytest_suite"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
