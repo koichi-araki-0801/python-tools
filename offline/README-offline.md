@@ -22,20 +22,35 @@ GitHub Releases(ローリングタグ `offline-bundle-v1`)へ別配布する。�
 入れ替えると成立しなくなる箇所がある(理由は各項目末尾に記す)。
 
 1. **pin 読込・公開鍵存在確認** — どちらか欠落・形式不正なら即座に中止する(fail closed)。
-2. **Release からバンドル本体(.tar.gz)と分離署名(.sig)を取得** — `gh` CLI が認証済みなら
-   private のリポジトリのまま取得できる(公開窓は不要)。`gh` が使えない/未認証なら無認証
-   HTTPS の Release アセット直 URL へフォールバックする(この経路は下記「一時 Public 化」が
-   前提)。
+2. **Release からバンドル本体(.tar.gz)・分離署名(.sig)・`bundle.key` を取得** — `gh` CLI
+   が認証済みなら private のリポジトリのまま取得できる(公開窓は不要)。`gh` が使えない/
+   未認証なら無認証 HTTPS の Release アセット直 URL へフォールバックする(この経路は下記
+   「一時 Public 化」が前提)。
 3. **バンドルの sha256 を標準ライブラリ `hashlib` だけで pin と照合**(主アンカー)。まだ
    展開しておらず、まだ `cryptography` も要らない段階で行う。これが一致しなければ改ざん・
    取得ミスとして即座に中止し、以降の手順(展開)には一切進まない。
-4. **展開**(`python-wheelhouse/` / `docs/_build/vendor/`)。
+4. **展開**(`python-wheelhouse/` / `docs/_build/vendor/`)+ **手元のソースが重量物と対の組
+   であることを `bundle.key` で確認**。展開直後にローカルの content-key
+   (`bundle_common.compute_content_key`。`publish_bundle.py` が公開時に算出するものと
+   同一ロジック)を計算し、手順2で取得した `bundle.key` と比較する。これは「取得した
+   バンドル自体が正しいか」ではなく「**手元の git checkout(requirements.txt 等)が
+   pin と対応する重量物と組み合っているか**」を確かめる検査で、pin より新しいコミットへ
+   進んだ作業ツリーで setup を実行した場合に、ここで早期に気づける(無ければ手順自体は
+   全部緑のまま通り、後続の `setup-dev.bat` が `--no-index` の解決失敗という分かりにくい
+   形で初めて症状が出る)。不一致・手順6の署名検証失敗は、どちらも展開済みの内容
+   (`python-wheelhouse/` と vendor の JS 2 件。`docs/_build/vendor/manifest.txt` は
+   git 管理下なので残す)を削除してから非ゼロ終了する。
 5. **wheelhouse から `cryptography` を `pip install --no-index --find-links` で導入**
-   (`check_requirements` によるファイル形式検査を経てから pip を呼ぶ)。
+   (`check_requirements` によるファイル形式検査を経てから pip を呼ぶ)。**このリポジトリは
+   per-repo の venv を持たず、`py -3.13` のグローバル環境へ直接導入する**(`setup_dev.py`
+   の requirements 導入と同じ流儀)。
 6. **Ed25519 分離署名を検証**(多層防御)。手順3の sha256 照合は「pin に書かれた値と一致
    するか」しか見ないが、署名検証は「秘密鍵の所持者が作った内容か」まで確かめる、一段強い
    根拠になる。**失敗したら、たとえ手順3を通っていても手順4で展開済みの内容を信用せず削除し、
-   非ゼロ終了する。**
+   非ゼロ終了する。** ただし **手順5で `py -3.13` のグローバル環境へ導入済みの
+   `cryptography` パッケージ自体はこの削除対象に含まれない**(署名未検証の wheelhouse から
+   導入したものが site-packages に残る)。エラーメッセージにも表示されるとおり、気になる
+   場合は `py -3.13 -m pip uninstall -y cryptography` を手動で実行すること。
 7. **pin の source-zip-sha256 を、pin の source-commit のアーカイブ(codeload)を取得して
    照合する**(追加確認)。ソースコード自体は展開しない(手元の git checkout とは独立の経路で
    「公開時に生成された pin」と GitHub 上の実体が食い違っていないかを確かめるだけ)。
@@ -117,11 +132,20 @@ progress.` を返し、`gh repo edit --visibility` そのものが失敗する�
 `gh auth token` のトークンを `Authorization` ヘッダへ載せて直接叩く**実装になっている
 (`default_gh_authenticated_source_zip_download`)。理由は、REST API の `zipball`
 エンドポイントと `codeload.github.com` が別経路で、生成される zip がバイト単位で一致しない
-ことを実機で確認したため(同一コミットで sha256 が食い違った)。pin の
-`source-zip-sha256` は `publish_bundle.py` が `codeload.github.com` から取得した値
-なので、setup 側も同じエンドポイントを叩かなければ照合が成立しない。無認証時のフォール
-バック(`https://github.com/<owner>/<repo>/archive/<sha>.zip`)は codeload への
-リダイレクトを経由するため、こちらは元から同じバイト列になる。
+ことを実機で確認したため(同一コミットで sha256 が食い違った)。
+
+pin の `source-zip-sha256` は `publish_bundle.py`(`download_source_zip`)が実際には
+`https://github.com/<owner_repo>/archive/<sha>.zip` を無認証で取得して算出した値である
+(**`codeload.github.com` を直接叩いているわけではない**)。この URL は
+`codeload.github.com` への 302 リダイレクトを経由し、実機で最終的に得られるバイト列が
+codeload 直叩きと一致することを確認済みである。つまり publish 側(`github.com/.../
+archive/`)と setup の gh 認証パス(`codeload.github.com/.../zip/` 直叩き)は
+**綴りの異なる 2 つの URL で同一実体を指している**。この対応関係を崩す変更(例えば
+publish 側を `zipball` エンドポイントへ変える、setup 側を別のリダイレクト元へ変える)を
+行うと、今回踏んだ「REST API zipball ≠ codeload」と同型の不整合が再発する
+(`test_download_source_zip_uses_github_archive_url_matching_setup_side` /
+`test_default_gh_authenticated_source_zip_download_uses_codeload_with_auth_header` の
+2 テストが、それぞれの URL 形が変わっていないことを個別に固定している)。
 
 ## 配布検証の実測記録
 
@@ -146,11 +170,20 @@ progress.` を返し、`gh repo edit --visibility` そのものが失敗する�
 ## 触る前のチェックリスト
 
 1. `setup_offline.py` のブートストラップ順序(1-7)を変更する? → 「鶏卵問題」の節を
-   再読し、sha256 照合が `cryptography` 導入より前であることを保つこと。
+   再読し、sha256 照合(手順3)が `cryptography` 導入(手順5)より前であることを保つこと。
+   手順4付随の内容キー照合(bundle.key)も hashlib だけで完結するので手順5より前に置ける
+   (crypto を要求する変更を持ち込まないこと)。
 2. `publish_bundle.py` / `setup_offline.py` の gh 呼び出しを変更する? → `gh api` の
    `zipball` エンドポイントと `codeload.github.com` はバイト単位で一致しない(上記参照)。
    新しい取得経路を足す場合は、pin の `source-zip-sha256` を算出した経路
-   (`publish_bundle.download_source_zip`)と同じエンドポイントを使うこと。
-3. 一時 Public 化を伴う操作を追加する? → 直前の操作から十分な間隔を空けるか、
+   (`publish_bundle.download_source_zip`。実体は `github.com/.../archive/` 経由の
+   codeload リダイレクト)と同一実体を指すエンドポイントを使うこと。
+3. `_http_download` に新しい呼び出し元を足す? → `Authorization` ヘッダを載せる場合は
+   `_NoAuthRedirectHandler` を経由する既定 opener(`_NO_AUTH_REDIRECT_OPENER`)を
+   そのまま使うこと(自前で `urllib.request.urlopen` を直に呼ばない。ホスト変更を伴う
+   リダイレクトでトークンが漏れる経路を作らないため)。
+4. 一時 Public 化を伴う操作を追加する? → 直前の操作から十分な間隔を空けるか、
    `gh repo view --json visibility` での事後確認を必須にすること。
-4. 検証は `py -3.13 -m pytest scripts -q` + `py -3.13 scripts\check_comments.py`。
+5. 検証は `py -3.13 -m pytest scripts -q` + `py -3.13 scripts\check_comments.py`。
+   `bundle.key` 比較(手順4付随)を変更した場合は `%TEMP%` の新規 clone で
+   `setup-offline.bat` を再実行し、content-key 一致が通ることまで確認する。

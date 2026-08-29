@@ -10,12 +10,14 @@
 
 ブートストラップ順序(Ed25519 検証の鶏卵回避。詳細は各手順の docstring):
   1. pin 読込・公開鍵存在確認(どちらも無ければ即死)
-  2. Release からバンドル本体(.tar.gz)と分離署名(.sig)を取得
+  2. Release からバンドル本体(.tar.gz)・分離署名(.sig)・`bundle.key` を取得
      (gh CLI が認証済みなら private のまま取得できる。未認証なら無認証 HTTPS へ
      フォールバックし、その場合はリポジトリの一時 Public 化が前提 — README-offline.md 参照)
   3. **pin の bundle-sha256 と実ファイルを標準ライブラリ hashlib だけで照合**
      (主アンカー。まだ `cryptography` が無い段階でも判定できる経路を先に置く)
-  4. 展開(python-wheelhouse / docs/_build/vendor)
+  4. 展開(python-wheelhouse / docs/_build/vendor)+ **手元のソースが重量物と対の組で
+     あることを bundle.key(content-key)で確認**(不一致・手順6の署名検証失敗は
+     どちらも展開済みの内容を削除して非ゼロ終了する)
   5. wheelhouse から `cryptography` を `--no-index` で導入
      (`check_requirements` でのファイル検査を経てから pip を呼ぶ)
   6. **Ed25519 分離署名を検証**(多層防御。失敗したら手順4で展開した内容を削除して
@@ -42,6 +44,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 _HERE = Path(__file__).resolve().parent
 ROOT = _HERE.parent
@@ -98,6 +101,27 @@ _SOURCE_ZIP_DOWNLOAD_TIMEOUT_SECONDS = 60
 _MAX_SOURCE_ZIP_DOWNLOAD_BYTES = 200 * 1024 * 1024
 
 
+class _NoAuthRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """リダイレクト先のホストが変わったら `Authorization` ヘッダを外す。
+
+    `urllib.request.HTTPRedirectHandler.redirect_request` は `Content-Length` /
+    `Content-Type` は落とすが `Authorization` はそのまま転送する(`requests`/`urllib3` と
+    異なりホスト変更時の除去を行わない。この端末の Python 3.13 で実機確認済み)。codeload が
+    将来 3xx を返す構成へ変わった場合に、`gh auth token` のトークンが別ホストへ送られることを
+    防ぐ(現状の codeload 直叩きは 200 応答で完結しリダイレクトを経由しないが、応答経路が
+    こちらの制御下に無い以上、転送されない前提を実装で保証しておく)。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and urlsplit(newurl).netloc != urlsplit(req.full_url).netloc:
+            new_req.headers.pop("Authorization", None)
+        return new_req
+
+
+_NO_AUTH_REDIRECT_OPENER = urllib.request.build_opener(_NoAuthRedirectHandler)
+
+
 def _http_download(
     url: str, dest: Path, *, timeout: int, max_bytes: int, headers: dict[str, str] | None = None
 ) -> None:
@@ -105,9 +129,10 @@ def _http_download(
 
     `headers` を渡さなければ無認証。`Authorization` を載せれば private リポジトリの
     codeload アーカイブも取得できる(`default_gh_authenticated_source_zip_download` 参照)。
+    リダイレクトを跨いでのヘッダ転送は `_NoAuthRedirectHandler` を経由する opener で防ぐ。
     """
     request = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+    with _NO_AUTH_REDIRECT_OPENER.open(request, timeout=timeout) as response:  # noqa: S310
         total = 0
         with dest.open("wb") as out:
             while True:
@@ -137,16 +162,30 @@ def default_source_zip_http_download(url: str, dest: Path) -> None:
     )
 
 
-def gh_download_bundle_assets(tag: str, dest_dir: Path, *, runner: Runner = default_runner) -> bool:
-    """`gh release download` でバンドル本体と分離署名を取得する。成功したら True。
+BUNDLE_KEY_NAME = "bundle.key"
+
+
+def gh_download_bundle_assets(
+    tag: str,
+    dest_dir: Path,
+    *,
+    owner: str = DEFAULT_OWNER,
+    repo: str = DEFAULT_REPO,
+    runner: Runner = default_runner,
+) -> bool:
+    """`gh release download` でバンドル本体・分離署名・`bundle.key` を取得する。成功したら True。
 
     gh が認証済みならリポジトリを Public 化せずに(private のまま)取得できる。
+    `--repo owner/repo` を明示する(cwd が対象リポジトリの外や別 checkout でも `gh` の
+    リポジトリ自動判定に依存せず動く。省略すると `gh` は cwd の git remote から推測する)。
     """
     result = publish_bundle.gh(
         [
             "release",
             "download",
             tag,
+            "--repo",
+            f"{owner}/{repo}",
             "--dir",
             str(dest_dir),
             "--clobber",
@@ -154,12 +193,20 @@ def gh_download_bundle_assets(tag: str, dest_dir: Path, *, runner: Runner = defa
             publish_bundle.BUNDLE_NAME,
             "--pattern",
             f"{publish_bundle.BUNDLE_NAME}.sig",
+            "--pattern",
+            BUNDLE_KEY_NAME,
         ],
         runner=runner,
     )
     bundle_path = dest_dir / publish_bundle.BUNDLE_NAME
     sig_path = dest_dir / f"{publish_bundle.BUNDLE_NAME}.sig"
-    return result.returncode == 0 and bundle_path.is_file() and sig_path.is_file()
+    key_path = dest_dir / BUNDLE_KEY_NAME
+    return (
+        result.returncode == 0
+        and bundle_path.is_file()
+        and sig_path.is_file()
+        and key_path.is_file()
+    )
 
 
 def fetch_bundle_assets(
@@ -170,8 +217,11 @@ def fetch_bundle_assets(
     repo: str = DEFAULT_REPO,
     runner: Runner = default_runner,
     http_download: Downloader = default_bundle_http_download,
-) -> tuple[Path, Path]:
-    """Release からバンドル本体(.tar.gz)と分離署名(.sig)を dest_dir へ取得する(手順2)。
+) -> tuple[Path, Path, Path]:
+    """Release からバンドル本体(.tar.gz)・分離署名(.sig)・`bundle.key` を取得する(手順2)。
+
+    戻り値は `(bundle_path, sig_path, key_path)`。`bundle.key` は手順4付随の内容キー照合
+    (`verify_local_checkout_matches_bundle_key`)で使う。
 
     gh CLI を先に試し(認証済みなら private のまま取得できる)、失敗したら無認証 HTTPS の
     Release アセット直 URL へフォールバックする。後者はリポジトリが一時的に Public 公開
@@ -181,25 +231,27 @@ def fetch_bundle_assets(
     """
     bundle_path = dest_dir / publish_bundle.BUNDLE_NAME
     sig_path = dest_dir / f"{publish_bundle.BUNDLE_NAME}.sig"
+    key_path = dest_dir / BUNDLE_KEY_NAME
 
-    if gh_download_bundle_assets(tag, dest_dir, runner=runner):
+    if gh_download_bundle_assets(tag, dest_dir, owner=owner, repo=repo, runner=runner):
         print("[info] gh CLI でバンドルを取得しました。")
-        return bundle_path, sig_path
+        return bundle_path, sig_path, key_path
 
     print("[info] gh CLI での取得ができません(未認証等)。無認証 HTTPS へフォールバックします。")
     base = f"https://github.com/{owner}/{repo}/releases/download/{tag}"
     try:
         http_download(f"{base}/{publish_bundle.BUNDLE_NAME}", bundle_path)
         http_download(f"{base}/{publish_bundle.BUNDLE_NAME}.sig", sig_path)
+        http_download(f"{base}/{BUNDLE_KEY_NAME}", key_path)
     except Exception as exc:
         raise RuntimeError(
             "重量物バンドルの取得に失敗しました。gh CLI が未認証なら、リポジトリ管理者へ"
             "一時的な Public 化を依頼してから再実行してください(README-offline.md 参照)。"
             f"詳細: {exc}"
         ) from exc
-    if not (bundle_path.is_file() and sig_path.is_file()):
+    if not (bundle_path.is_file() and sig_path.is_file() and key_path.is_file()):
         raise RuntimeError("重量物バンドルの取得に失敗しました(ファイルが作成されませんでした)。")
-    return bundle_path, sig_path
+    return bundle_path, sig_path, key_path
 
 
 # ── 手順3: sha256 照合(主アンカー) ──
@@ -238,19 +290,53 @@ def extract_bundle(bundle_path: Path, repo_root: Path = ROOT) -> None:
 def remove_extracted_bundle(repo_root: Path = ROOT) -> None:
     """展開済みの重量物(python-wheelhouse / docs/_build/vendor の JS 2 件)を削除する。
 
-    手順6の署名検証に失敗したときの後始末(多層防御。展開物を残さない)。
-    `docs/_build/vendor/manifest.txt` は git 管理下のファイル(バンドルにも同梱されるが
-    リポジトリのコミット内容が正)なので消さない。JS 2 ファイルだけがバンドル由来で
-    `.gitignore` 対象になっている。
+    手順6の署名検証・手順4付随の内容キー照合に失敗したときの後始末(多層防御。展開物を
+    残さない)。`docs/_build/vendor/manifest.txt` は git 管理下のファイル(バンドルにも
+    同梱されるがリポジトリのコミット内容が正)なので消さない。JS 2 ファイルだけがバンドル
+    由来で `.gitignore` 対象になっている(`publish_bundle.VENDOR_JS_ASSET_NAMES` と対で持つ)。
     """
     wheelhouse_dir = repo_root / publish_bundle.WHEELHOUSE_DIR_NAME
     if wheelhouse_dir.is_dir():
         shutil.rmtree(wheelhouse_dir, ignore_errors=True)
     vendor_dir = repo_root / "docs" / "_build" / "vendor"
-    for name in ("mermaid.min.js", "mermaid-layout-elk.min.js"):
+    for name in publish_bundle.VENDOR_JS_ASSET_NAMES:
         p = vendor_dir / name
         if p.is_file():
             p.unlink(missing_ok=True)
+
+
+# ── 手順4付随: 手元のソースが重量物と対の組であることの確認(bundle.key) ──
+
+
+def verify_local_checkout_matches_bundle_key(key_path: Path, repo_root: Path = ROOT) -> None:
+    """展開後の手元チェックアウトが、取得した重量物と対の組であることを確かめる。
+
+    PS 原典(monorepo `setup-offline.ps1` の lockfile 整合チェック)に相当する検査。
+    手順7は「GitHub 上の source-commit アーカイブ」と「pin」を突き合わせるだけで、
+    **手元の git checkout(requirements.txt 等)が pin と一致するか**は見ていない。
+    pin より新しいコミットへ進んだ作業ツリーで setup を実行すると、ここまでの手順は
+    すべて緑のまま通り、後続の `setup-dev.bat` が `--no-index` の解決失敗という分かり
+    にくい形で初めて症状が出る。ここで content-key(`bundle_common.compute_content_key`。
+    `publish_bundle.py` が公開のたびに算出しているものと同一ロジック)を比較して早期に
+    止める。展開直後(`docs/_build/vendor/manifest.txt` が揃った状態)で行う必要がある
+    (揃う前に測ると manifest を欠いて publish 側の値と必ずズレる)。
+
+    不一致は改ざんの兆候ではなく「バンドルとソースの組み合わせ違い」であり、算出は
+    hashlib だけで完結して `cryptography` を必要としない(手順6より前に安全に置ける)。
+    展開済みの内容は信用できる組ではないため、手順6の失敗時と同様に
+    `remove_extracted_bundle` で削除してから中止する。
+    """
+    bundle_key = bundle_common.read_bundle_key(key_path)
+    local_key = bundle_common.compute_content_key(repo_root)
+    if local_key != bundle_key:
+        remove_extracted_bundle(repo_root)
+        raise RuntimeError(
+            "手元のソースと取得した重量物が対の組ではありません"
+            f"(ローカル content-key={local_key} / bundle.key={bundle_key})。\n"
+            "  requirements.txt や docs/_build/vendor/manifest.txt がバンドル公開時から"
+            "変わっている可能性があります。pin に対応するコミットへ checkout し直すか、"
+            "offline\\publish_bundle.py --force で重量物を公開し直してください。"
+        )
 
 
 # ── 手順5: wheelhouse から cryptography を導入 ──
@@ -310,12 +396,17 @@ def verify_bundle_signature_or_cleanup(
     所持」までは要求しない。署名検証はそれより一段強い根拠になる。失敗したら、たとえ
     手順3を通っていても手順4で展開済みの内容を信用せず削除してから処理を中止する。
     """
+    if not sig_path.is_file():
+        raise RuntimeError(f"分離署名ファイルがありません: {sig_path}")
     sig_b64 = sig_path.read_text(encoding="ascii").strip()
     if not bundle_common.verify_signature(bundle_path, sig_b64, public_key_pem):
         remove_extracted_bundle(repo_root)
         raise RuntimeError(
             "分離署名の検証に失敗しました。改ざん・すり替え、または公開鍵と署名鍵の不一致の"
-            "可能性があります。展開済みの重量物を削除し、処理を中止します。"
+            "可能性があります。展開済みの重量物(python-wheelhouse / vendor の JS)は削除しました。"
+            "ただし手順5で site-packages へ導入済みの cryptography パッケージ自体は削除の対象外です"
+            "(署名未検証の wheelhouse から入れたものが残るため、`py -3.13 -m pip uninstall -y "
+            "cryptography` を実行して手動で削除してください)。"
         )
 
 
@@ -363,8 +454,14 @@ def default_gh_authenticated_source_zip_download(
             max_bytes=_MAX_SOURCE_ZIP_DOWNLOAD_BYTES,
             headers={"Authorization": f"token {token}"},
         )
-    except Exception:
+    except Exception as exc:
         dest.unlink(missing_ok=True)
+        # ここへ来るのは gh 認証済み(token 取得成功)なのに取得自体が失敗した場合。
+        # 呼び出し側(verify_source_zip_sha256)はこの後「gh CLI での取得ができません
+        # (未認証等)」と表示するが、それは実態と異なる(未認証ではない)ため、ここで
+        # 真の理由を先に出しておく。トークン値は例外メッセージに含まれないことを前提に
+        # そのまま出す(urllib の例外は URL・ステータスは含むがヘッダ値は含まない)。
+        print(f"[info] gh 認証済みでの codeload 取得に失敗しました(未認証とは別の問題): {exc}")
         return False
     return dest.is_file() and dest.stat().st_size > 0
 
@@ -435,7 +532,9 @@ def main(argv: list[str] | None = None) -> int:
         tmp_dir = Path(tmp_name)
 
         print(f"[2/7] Release {args.tag} からバンドルを取得します...")
-        bundle_path, sig_path = fetch_bundle_assets(args.tag, tmp_dir, owner=args.owner, repo=args.repo)
+        bundle_path, sig_path, key_path = fetch_bundle_assets(
+            args.tag, tmp_dir, owner=args.owner, repo=args.repo
+        )
 
         print("[3/7] バンドルの sha256 を pin と照合します(主アンカー)...")
         verify_bundle_sha256(bundle_path, pin)
@@ -443,6 +542,9 @@ def main(argv: list[str] | None = None) -> int:
 
         print("[4/7] バンドルを展開します(python-wheelhouse / docs/_build/vendor)...")
         extract_bundle(bundle_path)
+        print("[info] 手元のソースが重量物と対の組であることを bundle.key で確認します...")
+        verify_local_checkout_matches_bundle_key(key_path)
+        print("[info] content key 一致。")
 
         print("[5/7] wheelhouse から cryptography を導入します...")
         install_cryptography_from_wheelhouse()

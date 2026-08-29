@@ -27,6 +27,7 @@ import pathlib
 import subprocess
 import sys
 import tarfile
+import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
@@ -788,6 +789,47 @@ def test_generate_pin_writes_to_repo_root_offline_dir(tmp_path, monkeypatch):
     assert bundle_common.read_pin(pin_path) == pin
 
 
+# ── publish_bundle: download_source_zip の URL 形固定(I-4・codeload 統一の drift 検査) ──
+#
+# publish 側 (ここ) は `https://github.com/<owner_repo>/archive/<sha>.zip`、setup 側
+# (`setup_offline.default_gh_authenticated_source_zip_download`)は
+# `https://codeload.github.com/<owner>/<repo>/zip/<sha>` を叩く。前者は後者への
+# リダイレクトを経由する実装(実機で 302 経由の同一バイト列を確認済み)なので両者は同一
+# 実体を指すが、URL の綴りは別物である。片側だけ経路が変わると pin の
+# source-zip-sha256 が setup 側と恒久的に不一致になる(今回踏んだ「REST API zipball ≠
+# codeload」と同型の障害)。ここでは publish 側の URL 形が変わっていないことを固定する。
+class _FakeUrlResponse:
+    """`urllib.request.urlopen` の戻り値(コンテキストマネージャ)を模擬する。"""
+
+    def __init__(self, data: bytes):
+        self._chunks = [data, b""]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self, _n):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def test_download_source_zip_uses_github_archive_url_matching_setup_side(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_urlopen(url, timeout=None):
+        captured["url"] = url
+        return _FakeUrlResponse(b"zip-bytes")
+
+    monkeypatch.setattr(publish_bundle.urllib.request, "urlopen", fake_urlopen)
+
+    dest = tmp_path / "source.zip"
+    publish_bundle.download_source_zip("acme/widgets", "c" * 40, dest)
+
+    assert captured["url"] == f"https://github.com/acme/widgets/archive/{'c' * 40}.zip"
+    assert dest.read_bytes() == b"zip-bytes"
+
+
 # ── pip 入口列挙ガード ──
 def test_pip_entrypoint_guard_matches_known_set_and_requires_check_requirements():
     found = publish_bundle.find_pip_call_files(REPO_ROOT)
@@ -858,6 +900,38 @@ _DUMMY_PIN = bundle_common.PublishPin(
 )
 
 
+# ── _NoAuthRedirectHandler (I-1: Authorization ヘッダのリダイレクト越え転送を防ぐ) ──
+#
+# `urllib.request.HTTPRedirectHandler.redirect_request` は Content-Length / Content-Type
+# は落とすが Authorization はそのまま転送する (requests/urllib3 と違いホスト変更時の除去を
+# 行わない。実機の Python 3.13 で確認済み)。codeload が将来 3xx を返す構成へ変わった場合に
+# `gh auth token` のトークンが別ホストへ漏れることを防ぐための回帰テスト。
+def test_no_auth_redirect_handler_strips_authorization_on_host_change():
+    handler = setup_offline._NoAuthRedirectHandler()
+    req = urllib.request.Request(
+        f"https://codeload.github.com/acme/widgets/zip/{'c' * 40}",
+        headers={"Authorization": "token secret"},
+    )
+    new_req = handler.redirect_request(
+        req, None, 302, "Found", {}, "https://objects.githubusercontent.com/elsewhere"
+    )
+    assert new_req is not None
+    assert new_req.get_header("Authorization") is None
+
+
+def test_no_auth_redirect_handler_keeps_authorization_on_same_host():
+    handler = setup_offline._NoAuthRedirectHandler()
+    req = urllib.request.Request(
+        f"https://codeload.github.com/acme/widgets/zip/{'c' * 40}",
+        headers={"Authorization": "token secret"},
+    )
+    new_req = handler.redirect_request(
+        req, None, 302, "Found", {}, "https://codeload.github.com/acme/widgets/zip2"
+    )
+    assert new_req is not None
+    assert new_req.get_header("Authorization") == "token secret"
+
+
 # ── load_pin_and_public_key (手順1) ──
 def test_load_pin_and_public_key_raises_when_pin_missing(tmp_path):
     with pytest.raises(ValueError):
@@ -885,15 +959,26 @@ def test_load_pin_and_public_key_succeeds(tmp_path):
 
 
 # ── gh_download_bundle_assets / fetch_bundle_assets (手順2) ──
-def test_gh_download_bundle_assets_succeeds_and_creates_files(tmp_path):
-    def make_files(cmd):
-        (tmp_path / publish_bundle.BUNDLE_NAME).write_bytes(b"bundle")
-        (tmp_path / f"{publish_bundle.BUNDLE_NAME}.sig").write_text("sig", encoding="ascii")
+def _make_bundle_asset_files(dest_dir):
+    (dest_dir / publish_bundle.BUNDLE_NAME).write_bytes(b"bundle")
+    (dest_dir / f"{publish_bundle.BUNDLE_NAME}.sig").write_text("sig", encoding="ascii")
+    (dest_dir / setup_offline.BUNDLE_KEY_NAME).write_text("deadbeef", encoding="ascii")
 
-    runner = _make_side_effect_runner([(make_files, _completed(returncode=0))])
-    ok = setup_offline.gh_download_bundle_assets("offline-bundle-v1", tmp_path, runner=runner)
+
+def test_gh_download_bundle_assets_succeeds_and_creates_files(tmp_path):
+    runner = _make_side_effect_runner(
+        [(lambda cmd: _make_bundle_asset_files(tmp_path), _completed(returncode=0))]
+    )
+    ok = setup_offline.gh_download_bundle_assets(
+        "offline-bundle-v1", tmp_path, owner="acme", repo="widgets", runner=runner
+    )
     assert ok is True
     assert "release" in runner.calls[0] and "download" in runner.calls[0]
+    # M-1: cwd の git remote 推測に依存せず、常に対象リポジトリを明示する。
+    assert "--repo" in runner.calls[0]
+    assert "acme/widgets" in runner.calls[0]
+    # bundle.key もパターンに含める(I-3: 内容キー照合に使う)。
+    assert setup_offline.BUNDLE_KEY_NAME in runner.calls[0]
 
 
 def test_gh_download_bundle_assets_fails_when_command_fails(tmp_path):
@@ -902,17 +987,26 @@ def test_gh_download_bundle_assets_fails_when_command_fails(tmp_path):
     assert ok is False
 
 
-def test_fetch_bundle_assets_uses_gh_when_available_and_skips_http(tmp_path):
-    def make_files(cmd):
+def test_gh_download_bundle_assets_fails_when_bundle_key_missing(tmp_path):
+    # gh コマンド自体は成功でも bundle.key が来ていなければ失敗扱い(I-3 の前提)。
+    def make_partial_files(cmd):
         (tmp_path / publish_bundle.BUNDLE_NAME).write_bytes(b"bundle")
         (tmp_path / f"{publish_bundle.BUNDLE_NAME}.sig").write_text("sig", encoding="ascii")
 
-    runner = _make_side_effect_runner([(make_files, _completed(returncode=0))])
+    runner = _make_side_effect_runner([(make_partial_files, _completed(returncode=0))])
+    ok = setup_offline.gh_download_bundle_assets("offline-bundle-v1", tmp_path, runner=runner)
+    assert ok is False
+
+
+def test_fetch_bundle_assets_uses_gh_when_available_and_skips_http(tmp_path):
+    runner = _make_side_effect_runner(
+        [(lambda cmd: _make_bundle_asset_files(tmp_path), _completed(returncode=0))]
+    )
     http_calls = []
-    bundle_path, sig_path = setup_offline.fetch_bundle_assets(
+    bundle_path, sig_path, key_path = setup_offline.fetch_bundle_assets(
         "offline-bundle-v1", tmp_path, runner=runner, http_download=lambda url, dest: http_calls.append(url)
     )
-    assert bundle_path.is_file() and sig_path.is_file()
+    assert bundle_path.is_file() and sig_path.is_file() and key_path.is_file()
     assert http_calls == []
 
 
@@ -924,12 +1018,13 @@ def test_fetch_bundle_assets_falls_back_to_http_when_gh_unavailable(tmp_path):
         http_calls.append(url)
         dest.write_bytes(b"x")
 
-    bundle_path, sig_path = setup_offline.fetch_bundle_assets(
+    bundle_path, sig_path, key_path = setup_offline.fetch_bundle_assets(
         "offline-bundle-v1", tmp_path, owner="acme", repo="widgets", runner=runner, http_download=fake_http
     )
-    assert bundle_path.is_file() and sig_path.is_file()
-    assert len(http_calls) == 2
+    assert bundle_path.is_file() and sig_path.is_file() and key_path.is_file()
+    assert len(http_calls) == 3
     assert all("acme/widgets" in u and "offline-bundle-v1" in u for u in http_calls)
+    assert any(u.endswith(setup_offline.BUNDLE_KEY_NAME) for u in http_calls)
 
 
 def test_fetch_bundle_assets_raises_when_both_paths_fail(tmp_path):
@@ -1066,6 +1161,54 @@ def test_verify_bundle_signature_or_cleanup_removes_extracted_content_on_failure
     assert (vendor / "manifest.txt").is_file()
 
 
+def test_verify_bundle_signature_or_cleanup_raises_on_missing_sig_file(tmp_path):
+    # M-2: .sig 欠落を FileNotFoundError のまま __main__ の捕捉外へ漏らさず、
+    # RuntimeError(fail closed の契約内)として入口で拒否する。
+    bundle_path = tmp_path / "bundle.tar.gz"
+    bundle_path.write_bytes(b"bundle-bytes")
+    missing_sig_path = tmp_path / "does-not-exist.sig"
+    _private_pem, public_pem = bundle_common.generate_signing_key_pair()
+
+    with pytest.raises(RuntimeError):
+        setup_offline.verify_bundle_signature_or_cleanup(
+            bundle_path, missing_sig_path, public_pem, repo_root=tmp_path
+        )
+
+
+# ── verify_local_checkout_matches_bundle_key (手順4付随・I-3) ──
+def test_verify_local_checkout_matches_bundle_key_passes_on_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "same-key")
+    key_path = tmp_path / "bundle.key"
+    key_path.write_text("same-key", encoding="ascii")
+
+    # 例外が出ないことの確認。
+    setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=tmp_path)
+
+
+def test_verify_local_checkout_matches_bundle_key_raises_and_cleans_up_on_mismatch(tmp_path, monkeypatch):
+    repo_root = tmp_path
+    wheelhouse = repo_root / publish_bundle.WHEELHOUSE_DIR_NAME
+    wheelhouse.mkdir()
+    (wheelhouse / "dummy.whl").write_bytes(b"x")
+    vendor = repo_root / "docs" / "_build" / "vendor"
+    vendor.mkdir(parents=True)
+    (vendor / "mermaid.min.js").write_bytes(b"x")
+    (vendor / "manifest.txt").write_text("v1\n", encoding="utf-8")
+
+    monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "local-key")
+    key_path = repo_root / "bundle.key"
+    key_path.write_text("published-key", encoding="ascii")
+
+    with pytest.raises(RuntimeError):
+        setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)
+
+    # 不一致は改ざんと同様に展開済みの重量物を残さない(半端な状態で setup-dev.bat を
+    # 迎えさせない)。
+    assert not wheelhouse.exists()
+    assert not (vendor / "mermaid.min.js").exists()
+    assert (vendor / "manifest.txt").is_file()
+
+
 # ── gh_auth_token / default_gh_authenticated_source_zip_download (手順7・追加確認) ──
 #
 # GitHub REST API の zipball エンドポイント (`gh api repos/.../zipball/<sha>`) は
@@ -1117,6 +1260,30 @@ def test_default_gh_authenticated_source_zip_download_uses_codeload_with_auth_he
     assert captured["url"] == f"https://codeload.github.com/acme/widgets/zip/{'c' * 40}"
     assert captured["headers"] == {"Authorization": "token ghp_dummytoken"}
     assert dest.read_bytes() == b"zip-bytes-from-codeload"
+
+
+def test_default_gh_authenticated_source_zip_download_reports_distinct_reason_after_token(
+    tmp_path, monkeypatch, capsys
+):
+    # M-3: token 取得に成功した後で取得自体が失敗した場合、この関数は False を返すだけだが
+    # (呼び出し側 verify_source_zip_sha256 はこの後「未認証等」と一般化して表示する)、
+    # 実際には未認証ではないので、ここで真の理由を先に出力し「未認証」と誤解させない。
+    def failing_http_download(url, dest, *, timeout, max_bytes, headers=None):
+        raise OSError("network down")
+
+    monkeypatch.setattr(setup_offline, "_http_download", failing_http_download)
+    runner = _FakeRunner([_completed(stdout="ghp_dummytoken\n")])
+
+    dest = tmp_path / "source.zip"
+    ok = setup_offline.default_gh_authenticated_source_zip_download(
+        "acme", "widgets", "c" * 40, dest, runner=runner
+    )
+
+    assert ok is False
+    assert not dest.exists()
+    out = capsys.readouterr().out
+    assert "認証済み" in out
+    assert "ghp_dummytoken" not in out  # トークン値は出力しない
 
 
 def test_verify_source_zip_sha256_passes_via_gh_without_http_fallback(tmp_path):
@@ -1172,13 +1339,16 @@ def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
 
     def fake_fetch(tag, dest_dir, **kwargs):
         calls.append("fetch")
-        return tmp_path / "bundle.tar.gz", tmp_path / "bundle.tar.gz.sig"
+        return tmp_path / "bundle.tar.gz", tmp_path / "bundle.tar.gz.sig", tmp_path / "bundle.key"
 
     def fake_verify_sha256(bundle_path, pin):
         calls.append("verify_sha256")
 
     def fake_extract(bundle_path, repo_root=None):
         calls.append("extract")
+
+    def fake_verify_content_key(key_path, repo_root=None):
+        calls.append("verify_content_key")
 
     def fake_install_crypto(repo_root=None, **kwargs):
         calls.append("install_crypto")
@@ -1193,6 +1363,9 @@ def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
     monkeypatch.setattr(setup_offline, "fetch_bundle_assets", fake_fetch)
     monkeypatch.setattr(setup_offline, "verify_bundle_sha256", fake_verify_sha256)
     monkeypatch.setattr(setup_offline, "extract_bundle", fake_extract)
+    monkeypatch.setattr(
+        setup_offline, "verify_local_checkout_matches_bundle_key", fake_verify_content_key
+    )
     monkeypatch.setattr(setup_offline, "install_cryptography_from_wheelhouse", fake_install_crypto)
     monkeypatch.setattr(setup_offline, "verify_bundle_signature_or_cleanup", fake_verify_sig)
     monkeypatch.setattr(setup_offline, "verify_source_zip_sha256", fake_verify_source_zip)
@@ -1205,6 +1378,7 @@ def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
         "fetch",
         "verify_sha256",
         "extract",
+        "verify_content_key",
         "install_crypto",
         "verify_signature",
         "verify_source_zip",
@@ -1212,3 +1386,6 @@ def test_main_runs_bootstrap_steps_in_correct_order(monkeypatch, tmp_path):
     # 主張の核心: sha256 照合 (手順3) が cryptography 導入 (手順5) より前に行われる。
     assert calls.index("verify_sha256") < calls.index("install_crypto")
     assert calls.index("install_crypto") < calls.index("verify_signature")
+    # I-3: 内容キー照合(bundle.key)は展開の直後・cryptography 導入より前に行う
+    # (照合自体が hashlib だけで完結するため、鶏卵回避の制約に触れずここへ置ける)。
+    assert calls.index("extract") < calls.index("verify_content_key") < calls.index("install_crypto")

@@ -256,10 +256,17 @@ def build_wheelhouse(
         raise RuntimeError("pip download(wheelhouse 収集)に失敗しました。")
 
 
+# vendor 配下でバンドル由来(= `.gitignore` 対象・git 管理外)なのはこの JS 2 件だけ。
+# `manifest.txt` は git 管理下(コミットされる)なので、setup 側の削除対象
+# (`setup_offline.remove_extracted_bundle`)には含めない。1 箇所にまとめて両側から参照する
+# ことで、片方だけ増減して drift する事故を防ぐ。
+VENDOR_JS_ASSET_NAMES = ("mermaid.min.js", "mermaid-layout-elk.min.js")
+VENDOR_REQUIRED_ASSET_NAMES = ("manifest.txt", *VENDOR_JS_ASSET_NAMES)
+
+
 def assert_vendor_assets_present(repo_root: Path) -> None:
     vendor_dir = repo_root / "docs" / "_build" / "vendor"
-    required = ["manifest.txt", "mermaid.min.js", "mermaid-layout-elk.min.js"]
-    missing = [name for name in required if not (vendor_dir / name).is_file()]
+    missing = [name for name in VENDOR_REQUIRED_ASSET_NAMES if not (vendor_dir / name).is_file()]
     if missing:
         raise RuntimeError(
             f"docs/_build/vendor に不足があります: {missing}\n"
