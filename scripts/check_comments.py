@@ -69,6 +69,63 @@ REPO_CONFIGS: dict[str, dict] = {
         "docs_src_pattern": re.compile(r"^docs/[^/]+/src/"),
         "finding_id_skip_prefixes": (),
     },
+    # monorepo (workspace リポジトリ) 用。あちらの旧 `scripts/check-comments.mjs` の設定を
+    # 1:1 で移植したもので、monorepo 側の複製 `scripts/check-comments.py` は本ファイルと
+    # `ACTIVE_REPO` の 1 行だけが異なる。設定・ロジックの改善は入れた側が他方へ必ず反映する。
+    "workspace": {
+        "skip_dir_names": frozenset(
+            {
+                "node_modules",
+                ".git",
+                ".venv-build",
+                ".venv",
+                "ms-playwright",
+                "python-wheelhouse",
+                ".pnpm-store",
+                "dist",
+                "coverage",
+                "out",
+                "build",
+                "vendor",
+                "git-tools",
+                ".claude-security-run",
+                ".code-review-graph",
+            }
+        ),
+        # セキュリティ監査の作業ディレクトリ (`CLAUDE-SECURITY-<日付>`) は所見番号を
+        # 主題とする資料の置き場なので、前方一致で除外する (走査対象は自作コードだけ)。
+        "skip_dir_prefixes": (".venv", "CLAUDE-SECURITY-"),
+        # monorepo は `.ps1` を現役運用しているため禁止でなく BOM + `.bat` 併設の検査。
+        # PyInstaller 等が `build/`・`dist/` に生成物を作る構成があり、そこへ将来 `.ps1`
+        # が同梱された瞬間に無検査になるのを避けるため、生成物ディレクトリは除外しない。
+        "ps1_mode": "check",
+        "ps1_skip_dir_names": frozenset(
+            {"node_modules", ".git", "ms-playwright", "python-wheelhouse"}
+        ),
+        "ps1_skip_dir_prefixes": (".venv",),
+        # dot-source 専用ライブラリは単体起動しないため `.bat` 併設不要。
+        "bat_pairing_exceptions": frozenset(
+            {
+                "offline/lib/content-key.ps1",
+                "offline/lib/verify.ps1",
+                "offline/lib/git-tools.ps1",
+            }
+        ),
+        # 装飾ボックスヘッダを検査する `.ts/.js` のソート対象ルート (生成物は含めない)。
+        "box_header_roots": (
+            "editor/shared/src",
+            "editor/server/src",
+            "editor/web/src",
+            "editor/e2e",
+            "pie-chart/src",
+            "scripts",
+        ),
+        # `.husky/` 配下の拡張子なしファイル (git フックシム) をシェル構文扱いする。
+        "shell_shim_prefixes": (".husky/",),
+        "docs_src_pattern": re.compile(r"^docs/[^/]+/src/"),
+        # PDF 抽出プレーンテキストサンプルは所見番号らしき数字列を含みうるため除外。
+        "finding_id_skip_prefixes": ("docs/_samples/",),
+    },
 }
 ACTIVE_REPO = "python-tools"
 CFG = REPO_CONFIGS[ACTIVE_REPO]

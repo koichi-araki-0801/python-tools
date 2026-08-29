@@ -2284,3 +2284,17 @@ def test_run_best_effort_step_runs_step_when_no_exception():
     calls: list[str] = []
     post_commit._run_best_effort_step("ok-step", lambda: calls.append("ran"))
     assert calls == ["ran"]
+
+
+def test_repo_configs_workspace_has_all_required_fields():
+    # monorepo 側の複製は ACTIVE_REPO を "workspace" へ切り替えるだけで動く契約。
+    # フィールド欠落は複製先で初回実行時の KeyError になるため、python-tools 側の
+    # テストで先に固定する(python-tools キーを必須フィールドの正とみなす)
+    required = set(check_comments.REPO_CONFIGS["python-tools"].keys())
+    workspace = check_comments.REPO_CONFIGS["workspace"]
+    assert required - set(workspace.keys()) == set()
+    # monorepo は .ps1 現役のため forbid ではなく check モードであること
+    assert workspace["ps1_mode"] == "check"
+    # .husky シムと docs/_samples 除外は monorepo 固有の必須設定
+    assert ".husky/" in workspace["shell_shim_prefixes"]
+    assert "docs/_samples/" in workspace["finding_id_skip_prefixes"]
