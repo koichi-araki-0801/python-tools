@@ -1,9 +1,13 @@
 """抽出 → 辞書適用 → クロップ → SVG 書き出しのエンドツーエンド。"""
 import xml.etree.ElementTree as ET
+from io import BytesIO
+
+from fontTools.ttLib import TTFont
 
 from dictionary import apply as dict_apply
 from dictionary.store import DictionaryStore
 from engine.pdf_engine import load_document
+from export import font_embed
 from export.svg_exporter import _fmt, page_to_svg
 from model.elements import TextElement
 
@@ -163,3 +167,30 @@ def test_svg_embeds_bundled_font_for_japanese(vector_pdf, tmp_path):
     assert 'dominant-baseline="central"' in line
     # サブセット化により SVG が肥大しない (フォント全体 ~5MB に対し数十 KB)
     assert len(svg) < 200_000
+
+
+def test_subset_font_does_not_recalc_timestamp():
+    """サブセット出力へ実行時刻を混ぜない (「SVG 出力は決定的」の前提)。
+
+    fontTools は保存時に `head.modified` を現在時刻へ書き換えるのが既定のため、
+    そのままだと同じページを書き出すたびに埋め込みフォントのバイト列が変わり、
+    「同一モデル → 同一 SVG」が秒をまたいだ瞬間に崩れる。ソース側の値を保つこと。
+    """
+    name = "BIZUDPGothic-Regular.ttf"
+    source = TTFont(BytesIO(font_embed._source_font_bytes(name)))
+    subset = TTFont(BytesIO(font_embed._subset_woff2(name, set("見出し"))))
+    assert subset["head"].modified == source["head"].modified
+
+
+def test_svg_with_embedded_font_is_byte_stable(vector_pdf, tmp_path):
+    """フォントを埋め込むページでも、同じモデルからの書き出しはバイト単位で一致する。"""
+    doc = load_document(str(vector_pdf))
+    pg = doc.pages[0]
+    store = DictionaryStore(tmp_path / "d.json")
+    store.add("Header A", "見出し A")
+    dict_apply.auto_apply(pg, store)
+    store.close()
+
+    first = page_to_svg(pg)
+    assert "data:font/woff2;base64," in first   # 埋め込みが起きる経路であることの確認
+    assert page_to_svg(pg) == first

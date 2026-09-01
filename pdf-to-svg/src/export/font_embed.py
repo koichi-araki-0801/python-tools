@@ -111,11 +111,17 @@ def _subset_woff2(filename: str, chars: Set[str]) -> bytes | None:
         return None
 
     # subset は font を破壊的に変更するため、毎回キャッシュ済みバイト列から再構築する。
-    font = TTFont(BytesIO(data))
+    # `recalcTimestamp=False` は必須: 既定 (True) では保存のたびに `head.modified` へ
+    # 現在時刻が書き込まれ、同じページを書き出しただけで埋め込みフォントのバイト列
+    # (ひいては SVG 全体) が秒ごとに変わる。「同一モデル → 同一 SVG」(設計正典) は
+    # 出力を差分で追える前提そのものなので、ここで時刻を混ぜない。
+    font = TTFont(BytesIO(data), recalcTimestamp=False)
     options = subset.Options()
     options.flavor = "woff2"
     subsetter = subset.Subsetter(options)
-    subsetter.populate(text="".join(chars))
+    # 使用文字は集合なので反復順が実行ごとに変わりうる。順序を固定して、サブセットの
+    # 入力を同じ文字集合なら常に同じ文字列にする (上と同じく決定性のため)。
+    subsetter.populate(text="".join(sorted(chars)))
     subsetter.subset(font)
     font.flavor = "woff2"
     buf = BytesIO()
