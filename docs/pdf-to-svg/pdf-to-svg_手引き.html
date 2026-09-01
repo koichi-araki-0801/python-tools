@@ -146,5 +146,5 @@ nav.toc a.now { color:var(--accent); font-weight:700; background:#fff; border-ra
 </div>
 
 <script>(()=>{const links=[...document.querySelectorAll('nav.toc a[href^="#"]')];const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));const obs=new IntersectionObserver(es=>{for(const e of es){if(!e.isIntersecting)continue;const a=map.get(e.target.id);if(!a)continue;links.forEach(x=>x.classList.remove('now'));a.classList.add('now');}},{rootMargin:'0px 0px -75% 0px'});document.querySelectorAll('main h1[id],main h2[id],main h3[id],main h4[id],main section[id]').forEach(el=>obs.observe(el));})();</script>
-<footer style="margin:2rem auto 1rem;max-width:60rem;text-align:center;font-size:.75rem;color:var(--muted)">この文書の正典は python-tools リポジトリ（docs/pdf-to-svg/src/）です。生成日: 2026-08-30</footer>
+<footer style="margin:2rem auto 1rem;max-width:60rem;text-align:center;font-size:.75rem;color:var(--muted)">この文書の正典は python-tools リポジトリ（docs/pdf-to-svg/src/）です。生成日: 2026-09-01</footer>
 </body></html>
