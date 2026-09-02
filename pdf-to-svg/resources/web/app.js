@@ -127,22 +127,22 @@ import { initRail, buildRail } from "./rail.js";
   }
 
   // File 配列を順にアップロードして状態を更新する (クリック選択・D&D 共用)。
-  // 途中で失敗しても、そこまでに取り込めた分は必ず画面へ反映する。失敗を投げっぱなしに
-  // すると読み込み中の表示のまま止まり、成功した分も一覧に出ず理由も届かない。
+  // 1 件が失敗しても残りは続けて取り込み、失敗分だけまとめて通知する。失敗で
+  // ループを抜けると後続のファイルが黙って捨てられ、利用者は「選んだのに増えない」
+  // 理由を受け取れない (パスワード保護 PDF が混ざる場合に実際に起きた)。
   async function addFiles(files) {
     if (!files || !files.length) { render(); return; }
-    var failed = null;
-    try {
-      for (var i = 0; i < files.length; i++) {
-        setHint("読み込み中 " + (i + 1) + "/" + files.length + ": " + esc(files[i].name));
+    var failures = [];
+    for (var i = 0; i < files.length; i++) {
+      setHint("読み込み中 " + (i + 1) + "/" + files.length + ": " + esc(files[i].name));
+      try {
         var buf = await files[i].arrayBuffer();
-        failed = files[i].name;
         await uploadPdf(files[i].name, buf);
-        failed = null;
+      } catch (e) {
+        failures.push("「" + files[i].name + "」を読み込めませんでした: " + String((e && e.message) || e));
       }
-    } catch (e) {
-      toast("「" + failed + "」を読み込めませんでした: " + String((e && e.message) || e));
     }
+    if (failures.length) toast(failures.join(" / "));
     await reloadState();
     renderFileCards();
     render();

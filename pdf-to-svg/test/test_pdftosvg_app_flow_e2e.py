@@ -236,6 +236,25 @@ def test_partial_load_failure_keeps_succeeded_files(e2e_page):
     expect(page.locator("#filelist-count")).to_contain_text("1 ファイル")
 
 
+def test_load_failure_in_the_middle_does_not_skip_later_files(e2e_page):
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+
+    # 真ん中が壊れた PDF。1 件の失敗で後続まで止めると、利用者は「後ろのファイルは
+    # 選んだのに増えない」理由を受け取れない。失敗分だけ通知し、残りは取り込む。
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files([
+        {"name": "first.pdf", "mimeType": "application/pdf", "buffer": Path(FIXTURE).read_bytes()},
+        {"name": "broken.pdf", "mimeType": "application/pdf", "buffer": b"not a pdf"},
+        {"name": "last.pdf", "mimeType": "application/pdf", "buffer": Path(FIXTURE).read_bytes()},
+    ])
+    expect(page.locator("#toast")).to_contain_text("broken.pdf", timeout=30_000)
+    expect(page.locator("#filelist-count")).to_contain_text("2 ファイル")
+    expect(page.locator("#file-cards")).to_contain_text("last.pdf")
+
+
 def test_list_fetch_failure_clears_rows_and_offers_retry(e2e_page):
     page = e2e_page
     page.goto(f"/?token={TOKEN}")

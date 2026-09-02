@@ -194,3 +194,30 @@ def test_svg_with_embedded_font_is_byte_stable(vector_pdf, tmp_path):
     first = page_to_svg(pg)
     assert "data:font/woff2;base64," in first   # 埋め込みが起きる経路であることの確認
     assert page_to_svg(pg) == first
+
+
+def _save_encrypted(vector_pdf, out, **kw):
+    """`vector_pdf` を AES-256 で暗号化して `out` へ保存する (テスト用ヘルパ)。"""
+    import fitz
+
+    with fitz.open(str(vector_pdf)) as src:
+        src.save(str(out), encryption=fitz.PDF_ENCRYPT_AES_256, **kw)
+    return out
+
+
+def test_user_password_pdf_is_rejected_with_japanese_message(vector_pdf, tmp_path):
+    """開封パスワード付き PDF は、PyMuPDF の内部エラー文ではなく利用者向けの日本語で拒否する。"""
+    import pytest
+
+    locked = _save_encrypted(vector_pdf, tmp_path / "locked.pdf",
+                             user_pw="secret", owner_pw="owner", permissions=0)
+    with pytest.raises(ValueError, match="パスワード"):
+        load_document(str(locked))
+
+
+def test_owner_password_only_pdf_loads_like_plain(vector_pdf, tmp_path):
+    """権限制限だけ (開封パスワード無し) の PDF は平文と同じ SVG を出す。"""
+    limited = _save_encrypted(vector_pdf, tmp_path / "limited.pdf",
+                              user_pw="", owner_pw="owner", permissions=0)
+    plain = page_to_svg(load_document(str(vector_pdf)).pages[0])
+    assert page_to_svg(load_document(str(limited)).pages[0]) == plain

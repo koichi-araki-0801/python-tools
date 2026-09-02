@@ -136,6 +136,15 @@ def load_document(path: str) -> Document:
     budget = RasterBudget()
     elements = ElementBudget()
     with fitz.open(path) as pdf:
+        # 開封パスワード付き (user password) は復号手段を持たないので明示拒否する。
+        # 検査せずに進めると PyMuPDF の `document closed or encrypted` がそのまま UI へ
+        # 出て、利用者に「パスワード保護」と伝わらない。権限制限のみ (owner password
+        # だけ・`needs_pass` が偽) の PDF は抽出 API が権限を強制しないので通常どおり読む。
+        if pdf.needs_pass:
+            raise ValueError(
+                "パスワード保護された PDF は読み込めません (開封パスワードを解除して"
+                "ください)。"
+            )
         if pdf.page_count > MAX_PAGES:
             raise ValueError(
                 f"PDF has {pdf.page_count} pages (limit {MAX_PAGES}); refusing to load."
