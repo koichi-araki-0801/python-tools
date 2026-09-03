@@ -26,12 +26,17 @@ var S = {
   cropDrag: null,       // 範囲ドラッグ中の状態 {origin,rubber,mode}
   elSel: {},            // "fi:pi" -> {elId:true} (要素選択)
   svgCache: {},         // "fi:pi" -> {svg,width,height}
-  zoomFor: { 2: 1, 3: 1 },      // 手順2/3 のキャンバス内ズーム倍率
+  zoomFor: { 2: 1, 3: 1, 4: 1 },        // 手順2/3/4 のキャンバス内ズーム倍率
   borderColor: "#000000",       // 枠線ツールの色
   borderWidth: 1,       // 枠線ツールの太さ (pt)
   expMode: "all",       // 書き出しモード: page/all/noskip/spec
   expFile: 0,           // spec モードの対象ファイル
   lastChanges: [],       // 直近の `planPage` 結果 (`renderConfirm` と SVG 差替え後の再描画で共有)
+  // ── グレーモード (図だけをグレースケールで書き出す) ──
+  gray: false,          // 手順 1 のチェック。ON で手順 2・3 を飛ばし、手順 4 が図の選択画面になる
+  figCand: {},          // "fi:pi" -> [{x,y,w,h}] サーバが検出した候補 (取得済みページのみ)
+  figSel: {},           // "fi:pi" -> [{x,y,w,h}] 採用した矩形 (検出結果はここへ複製され、以後は利用者のもの)
+  figDrag: null,        // ハンドル伸縮・空白ドラッグ中の状態 (figure.js が使う)
 };
 
 // ── 2. 純粋ヘルパ (S 非依存) ──
@@ -58,6 +63,22 @@ function statusOfCur() { return statusArr()[S.page]; }
 function selKeys() { var s = selSet(); return Object.keys(s).filter(function (k) { return s[k]; }); }
 function selCount() { return selKeys().length; }
 function clearSel() { var s = selSet(); Object.keys(s).forEach(function (k) { delete s[k]; }); }
+
+function figKey(pg) { return pg.fileIndex + ":" + pg.pageInFile; }
+/** ページ SVG キャッシュのキー。グレーは別の SVG なのでキーを分ける (モード切替で混ざらない) */
+function svgKey(fi, pi) { return fi + ":" + pi + (S.gray ? ":g" : ""); }
+/** 通しページ g の採用矩形配列 (無ければ作る) */
+function figSelOf(g) { var k = figKey(S.PAGES[g]); return (S.figSel[k] = S.figSel[k] || []); }
+function figCount() { var n = 0; S.PAGES.forEach(function (pg, g) { n += figSelOf(g).length; }); return n; }
+/** サーバの候補を記録し、まだ触っていないページだけ採用へ複製する。
+ *  利用者が外した候補を再取得のたびに戻さないため、採用配列が既にあるページは触らない。 */
+function seedFigSel(g, rects) {
+  var k = figKey(S.PAGES[g]);
+  S.figCand[k] = rects.map(function (r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; });
+  if (!Object.prototype.hasOwnProperty.call(S.figSel, k)) {
+    S.figSel[k] = rects.map(function (r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; });
+  }
+}
 
 // ── 4. 状態遷移 ──
 
@@ -105,6 +126,7 @@ function applyState(st) {
     // レール選択は通しページ index、折り畳みは fileIndex をキーにするため、ページ列が
     // 変わると別のページ・別のファイルを指す。持ち越すと意図しないページを一括操作する。
     S.selFor = { 2: {}, 3: {} }; S.collapsed = {};
+    S.figCand = {}; S.figSel = {};
   }
   S.FILE_START = []; var s = 0;
   S.FILES.forEach(function (f, i) { S.FILE_START[i] = s; s += f.pages; });
@@ -127,6 +149,13 @@ function nextPending(arr) {
 }
 /** 先頭から最初の「要確認」ページ。無ければ 0 */
 function firstPending(arr) { for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") return i; return 0; }
+
+/** 手順 1 の「次へ」の行き先。グレーモードは手順 2・3 を飛ばす */
+function phaseAfterLoad() { return S.gray ? 4 : 2; }
+/** 手順 4 の「戻る」の行き先 */
+function phaseBeforeExport() { return S.gray ? 1 : 3; }
+/** ステップバーのクリックで移ってよい手順か */
+function stepAllowed(n) { return !S.gray || n === 1 || n === 4; }
 
 /** 手順を 1 つ進める (2→3 / 3→4)。ガード解除・選択クリアも行う。再描画は呼び出し側 */
 function advancePhase() {
@@ -155,6 +184,20 @@ function expCount(specValue, parseSpecFn) {
   return S.expMode === "page" ? (S.TOTAL ? 1 : 0) : exportPageList(specValue, parseSpecFn).length;
 }
 
+/** グレーモードの書き出し対象: 採用矩形を 1 図 = 1 SVG に展開する (page モードは表示中のページだけ) */
+function exportFigureList() {
+  var pages = S.expMode === "page" ? [S.page] : S.PAGES.map(function (_pg, g) { return g; });
+  var out = [];
+  pages.forEach(function (g) {
+    var pg = S.PAGES[g]; if (!pg) return;
+    figSelOf(g).forEach(function (r, i) {
+      out.push({ fileIndex: pg.fileIndex, pageInFile: pg.pageInFile,
+        clip: { x: r.x, y: r.y, w: r.w, h: r.h }, figIndex: i + 1, grayscale: true });
+    });
+  });
+  return out;
+}
+
 /** 項目列を送信サイズ予算で塊へ分ける。`sizeOf` は 1 件のバイト数を返す関数。
  *
  * ZIP 集約 (`zipEntries`) は SVG 本文をまるごと 1 リクエストで送るため、サーバの
@@ -175,20 +218,24 @@ function chunkBySize(items, sizeOf, budget) {
   return chunks;
 }
 
-/** ZIP のファイル名。対象が 1 PDF ならその名前を継ぎ、複数ファイル混在なら汎用名にする */
+/** ZIP のファイル名。対象が 1 PDF ならその名前を継ぎ、複数ファイル混在なら汎用名にする。
+ *  グレーモードは `_gray` を挟み、Downloads でカラー版と衝突させない */
 function zipName(list) {
   var fis = {};
   list.forEach(function (it) { fis[it.fileIndex] = 1; });
   var keys = Object.keys(fis);
+  var suffix = S.gray ? "_gray_svg.zip" : "_svg.zip";
   if (keys.length === 1 && S.FILES[+keys[0]]) {
-    return S.FILES[+keys[0]].name.replace(/\.pdf$/i, "") + "_svg.zip";
+    return S.FILES[+keys[0]].name.replace(/\.pdf$/i, "") + suffix;
   }
-  return "svg_export.zip";
+  return S.gray ? "svg_export_gray.zip" : "svg_export.zip";
 }
 
 export {
   S, counts, pass, initStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
+  figKey, svgKey, figSelOf, figCount, seedFigSel, exportFigureList,
+  phaseAfterLoad, phaseBeforeExport, stepAllowed,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };

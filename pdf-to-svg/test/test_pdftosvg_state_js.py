@@ -26,6 +26,7 @@ window.__reset = () => {
   m.S.phase = 2; m.S.page = 0; m.S.guarding = false;
   m.S.selFor = { 2: {}, 3: {} };
   m.S.expMode = "all"; m.S.expFile = 0;
+  m.S.gray = false; m.S.figCand = {}; m.S.figSel = {};
 };
 """
 
@@ -327,3 +328,70 @@ def test_zip_chunking_empty_input_yields_no_chunks(st):
       return window.__st.chunkBySize([], size, 8);
     })()"""
     assert js(st, expr) == []
+
+
+# ── グレーモード (図の採用と遷移) ──
+
+
+def test_gray_defaults_off_and_normal_transitions(st):
+    assert js(st, "window.__st.S.gray") is False
+    assert js(st, "window.__st.phaseAfterLoad()") == 2
+    assert js(st, "window.__st.phaseBeforeExport()") == 3
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, True, True, True]
+
+
+def test_gray_skips_steps_2_and_3(st):
+    js(st, "window.__st.S.gray = true")
+    assert js(st, "window.__st.phaseAfterLoad()") == 4
+    assert js(st, "window.__st.phaseBeforeExport()") == 1
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, False, True]
+
+
+def test_svg_cache_key_includes_gray(st):
+    assert js(st, "window.__st.svgKey(1, 2)") == "1:2"
+    js(st, "window.__st.S.gray = true")
+    assert js(st, "window.__st.svgKey(1, 2)") == "1:2:g"
+
+
+def test_seed_fig_sel_adopts_candidates_only_once(st):
+    r = {"x": 10, "y": 20, "w": 30, "h": 40}
+    js(st, "r => window.__st.seedFigSel(0, [r])", r)
+    assert js(st, "window.__st.figSelOf(0)") == [r]
+    assert js(st, "window.__st.figCount()") == 1
+    # 利用者が外した後に再取得しても、候補を勝手に戻さない
+    js(st, "window.__st.figSelOf(0).length = 0")
+    js(st, "r => window.__st.seedFigSel(0, [r])", r)
+    assert js(st, "window.__st.figSelOf(0)") == []
+    assert js(st, "window.__st.S.figCand['0:0']") == [r]
+
+
+def test_export_figure_list_for_all_and_page(st):
+    a = {"x": 1, "y": 2, "w": 3, "h": 4}
+    b = {"x": 5, "y": 6, "w": 7, "h": 8}
+    js(st, "([a, b]) => { window.__st.figSelOf(0).push(a); window.__st.figSelOf(3).push(a, b); }", [a, b])
+    js(st, "window.__st.S.gray = true; window.__st.S.expMode = 'all'")
+    assert js(st, "window.__st.exportFigureList()") == [
+        {"fileIndex": 0, "pageInFile": 0, "clip": a, "figIndex": 1, "grayscale": True},
+        {"fileIndex": 1, "pageInFile": 1, "clip": a, "figIndex": 1, "grayscale": True},
+        {"fileIndex": 1, "pageInFile": 1, "clip": b, "figIndex": 2, "grayscale": True},
+    ]
+    js(st, "window.__st.S.expMode = 'page'; window.__st.S.page = 3")
+    assert len(js(st, "window.__st.exportFigureList()")) == 2
+
+
+def test_zip_name_gets_gray_suffix(st):
+    lst = [{"fileIndex": 0, "pageInFile": 0}]
+    assert js(st, "l => window.__st.zipName(l)", lst) == "a_svg.zip"
+    js(st, "window.__st.S.gray = true")
+    assert js(st, "l => window.__st.zipName(l)", lst) == "a_gray_svg.zip"
+    mixed = [{"fileIndex": 0, "pageInFile": 0}, {"fileIndex": 1, "pageInFile": 0}]
+    assert js(st, "l => window.__st.zipName(l)", mixed) == "svg_export_gray.zip"
+
+
+def test_apply_state_with_new_page_list_drops_fig_state(st):
+    js(st, "window.__st.figSelOf(0).push({x:1,y:1,w:1,h:1}); window.__st.S.figCand['0:0'] = []")
+    js(st, """window.__st.applyState({
+        files: [{ name: "c.pdf", pages: 1 }], pages: [{ fileIndex: 0, pageInFile: 0 }], total: 1,
+        changed2: [false], changed3: [false] })""")
+    assert js(st, "Object.keys(window.__st.S.figSel)") == []
+    assert js(st, "Object.keys(window.__st.S.figCand)") == []
