@@ -58,7 +58,27 @@ def to_gray_color(value: Optional[str]) -> Optional[str]:
     return f"#{y:02x}{y:02x}{y:02x}{alpha}"
 
 
-def to_gray_image(image: Image.Image) -> Image.Image:
-    """埋め込み画像を Rec.601 でグレースケール化する。"""
-    # TODO: Implement in Task 2
-    raise NotImplementedError("to_gray_image will be implemented in Task 2")
+@functools.lru_cache(maxsize=16)
+def to_gray_image(img_bytes: bytes, ext: str) -> Tuple[bytes, str]:
+    """埋め込み画像を灰色 PNG にする。変換できないときは原本を返す (degrade)。
+
+    画像バイトは PDF 由来 = 攻撃者が用意できる入力なので、デコードの前に画素数を
+    ``MAX_GRAY_IMAGE_PIXELS`` で切る (``Image.open`` はヘッダしか読まないので寸法は
+    デコード前に分かる)。壊れた画像・巨大画像は**原本をそのまま返し**、例外を外へ
+    出さない — 1 枚の画像で書き出し全体を止めない。
+    キャッシュはバイト列そのものをキーにする (プレビューと書き出しで同じ画像を何度も
+    変換しないため)。
+    """
+    try:
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            if im.width * im.height > MAX_GRAY_IMAGE_PIXELS:
+                return img_bytes, ext
+            has_alpha = im.mode in ("RGBA", "LA", "PA") or (
+                im.mode == "P" and "transparency" in im.info
+            )
+            gray = im.convert("LA" if has_alpha else "L")
+            out = io.BytesIO()
+            gray.save(out, format="PNG")
+            return out.getvalue(), "png"
+    except Exception:  # noqa: BLE001 - 壊れた画像は原本へ倒す (上記 docstring)
+        return img_bytes, ext
