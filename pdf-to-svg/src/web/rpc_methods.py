@@ -24,6 +24,7 @@ from dictionary.store import DictionaryStore
 from export.svg_exporter import page_to_svg
 from model import fonts
 from model.document import Document, Page
+from model.figure_detect import detect_stewardship_figure
 from model.elements import DictMatch, Rect, RectElement, TextElement, sanitize_color
 
 _log = logging.getLogger("pdftosvg")
@@ -138,10 +139,50 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
     }
 
 
+def _parse_clip(args: dict, pg: Page) -> Optional[Rect]:
+    """``clip`` 引数 ``{x, y, w, h}`` をページ座標の矩形にする。無ければ None。
+
+    クライアントが送る値なので信用しない: 数値 4 つ・有限・非負・正の寸法・ページ内を
+    要求し、外れたら ``ValueError`` (ディスパッチャが ``{ok:false, error}`` にする)。
+    """
+    c = args.get("clip")
+    if c is None:
+        return None
+    if not isinstance(c, dict):
+        raise ValueError("clip must be an object {x, y, w, h}")
+    try:
+        x, y, w, h = (float(c[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("clip must have numeric x, y, w, h") from exc
+    if any(not math.isfinite(v) for v in (x, y, w, h)):
+        raise ValueError("clip must be finite")
+    if w <= 0 or h <= 0 or x < 0 or y < 0:
+        raise ValueError("clip must be inside the page with positive size")
+    if x + w > pg.width_pt + 0.5 or y + h > pg.height_pt + 0.5:
+        raise ValueError("clip must be inside the page")
+    return Rect(x, y, w, h)
+
+
+def rpc_figureCandidates(s: WebSession, args: dict) -> dict:
+    """指定ページのスチュワードシップ図の候補矩形 (0 または 1 件)。
+
+    検出の想定外例外はページ単位で握って候補なしにする (1 ページで全体を止めない)。
+    """
+    pg = s.page(int(args["fileIndex"]), int(args["pageInFile"]))
+    try:
+        r = detect_stewardship_figure(pg)
+    except Exception:  # noqa: BLE001
+        _log.exception("figure detection failed")
+        r = None
+    return {"rects": [] if r is None else [{"x": r.x, "y": r.y, "w": r.w, "h": r.h}]}
+
+
 def rpc_pageSvg(s: WebSession, args: dict) -> dict:
     pg = s.page(args["fileIndex"], args["pageInFile"])
     return {
-        "svg": page_to_svg(pg, annotate=True),
+        "svg": page_to_svg(
+            pg, annotate=True, grayscale=bool(args.get("grayscale")), clip=_parse_clip(args, pg)
+        ),
         "width": pg.width_pt,
         "height": pg.height_pt,
     }
@@ -433,12 +474,24 @@ def rpc_redo(s: WebSession, _args: dict) -> dict:
 # ---- 書き出し (SVG 文字列を返す。ファイル保存はブラウザの FSA が行う) ----
 
 def rpc_exportSvg(s: WebSession, args: dict) -> dict:
-    """指定ページの SVG 文字列と推奨ファイル名を返す (annotate なし=書き出し用・従来出力と一致)。"""
+    """指定ページの SVG 文字列と推奨ファイル名を返す (annotate なし=書き出し用・従来出力と一致)。
+
+    ``clip`` があれば ``_fig<k>``、``grayscale`` なら ``_gray`` をファイル名に足す。
+    Downloads でカラー版の ``_p<N>.svg`` と衝突させないため。
+    """
     fi = int(args["fileIndex"])
     pi = int(args["pageInFile"])
     d = s.doc(fi)
+    pg = d.pages[pi]
+    grayscale = bool(args.get("grayscale"))
+    clip = _parse_clip(args, pg)
     stem = Path(d.source_path).stem
-    return {"svg": page_to_svg(d.pages[pi]), "name": f"{stem}_p{pi + 1}.svg"}
+    name = f"{stem}_p{pi + 1}"
+    if clip is not None:
+        name += f"_fig{int(args.get('figIndex', 1))}"
+    if grayscale:
+        name += "_gray"
+    return {"svg": page_to_svg(pg, grayscale=grayscale, clip=clip), "name": name + ".svg"}
 
 
 # ---- ZIP 集約 (複数 SVG の一括保存) ----
@@ -523,6 +576,7 @@ def rpc_dictImportJson(s: WebSession, args: dict) -> dict:
 # メソッド名 → 関数。load (アップロード) は server.py が、ファイル保存はブラウザが扱う。
 HANDLERS: Dict[str, Callable[[WebSession, dict], dict]] = {
     "state": rpc_state,
+    "figureCandidates": rpc_figureCandidates,
     "pageSvg": rpc_pageSvg,
     "planPage": rpc_planPage,
     "removedList": rpc_removedList,

@@ -5,6 +5,8 @@ GUI なしで「状態の読み出し」「編集の反映」を確認できる�
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from dictionary.store import DictionaryStore
@@ -12,6 +14,10 @@ from model.document import Document, Page, RasterBackground
 from model.elements import DictMatch, LineElement, Rect, TextElement
 from web import rpc_methods
 from web.rpc_methods import WebSession
+
+from .test_figure_detect import make_stewardship_page
+
+_CHROMATIC = re.compile(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"')
 
 
 class FakeUndo:
@@ -413,3 +419,50 @@ def test_state_changed2_true_for_pending_candidates(session):
     hdr.dict_match = None  # 置換済みを消し、候補だけの状態にする
     rpc_methods.dispatch(session, "dictAdd", {"source": "A-1042", "target": "ボルト"})
     assert rpc_methods.dispatch(session, "state", {})["changed2"] == [True]
+
+
+def test_figure_candidates_empty_when_no_heading(session):
+    data = rpc_methods.dispatch(session, "figureCandidates", {"fileIndex": 0, "pageInFile": 0})
+    assert data == {"rects": []}
+
+
+def test_figure_candidates_returns_detected_rect(session):
+    session.docs[0].pages.append(make_stewardship_page())
+    data = rpc_methods.dispatch(session, "figureCandidates", {"fileIndex": 0, "pageInFile": 1})
+    assert data["rects"] == [{"x": 85.0, "y": 249.0, "w": 398.0, "h": 401.0}]
+
+
+def test_page_svg_grayscale_has_no_chromatic_color(session):
+    session.docs[0].pages[0].elements[1].color = "#3333cc"
+    color = rpc_methods.dispatch(session, "pageSvg", {"fileIndex": 0, "pageInFile": 0})
+    gray = rpc_methods.dispatch(session, "pageSvg", {"fileIndex": 0, "pageInFile": 0, "grayscale": True})
+    assert _CHROMATIC.search(color["svg"])
+    assert not _CHROMATIC.search(gray["svg"])
+    assert "data-el=" in gray["svg"]  # プレビュー用の注釈は残る
+
+
+def test_export_svg_name_and_clip(session):
+    args = {"fileIndex": 0, "pageInFile": 0, "grayscale": True,
+            "clip": {"x": 0, "y": 0, "w": 100, "h": 100}, "figIndex": 2}
+    data = rpc_methods.dispatch(session, "exportSvg", args)
+    assert data["name"] == "部品表_p1_fig2_gray.svg"
+    assert 'viewBox="0 0 100 100"' in data["svg"]
+    assert "data-el=" not in data["svg"]
+    # grayscale だけ → _gray、clip だけ → _fig1、どちらも無し → 従来名
+    assert rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0, "grayscale": True})["name"] == "部品表_p1_gray.svg"
+    assert rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0, "clip": {"x": 0, "y": 0, "w": 10, "h": 10}})["name"] == "部品表_p1_fig1.svg"
+    assert rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0})["name"] == "部品表_p1.svg"
+
+
+@pytest.mark.parametrize("clip", [
+    {"x": 0, "y": 0, "w": 0, "h": 10},          # 幅 0
+    {"x": -1, "y": 0, "w": 10, "h": 10},        # 負
+    {"x": 0, "y": 0, "w": 10},                  # 欠け
+    {"x": "a", "y": 0, "w": 10, "h": 10},       # 数値でない
+    {"x": 0, "y": 0, "w": 1e400, "h": 10},      # inf
+    {"x": 150, "y": 0, "w": 100, "h": 10},      # ページ (200x300) の外
+    "0,0,10,10",                                # 型違い
+])
+def test_bad_clip_is_rejected(session, clip):
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0, "clip": clip})
