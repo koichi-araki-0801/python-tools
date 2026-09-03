@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import re
 
+import pytest
 from PIL import Image
 
 from export.svg_exporter import page_to_svg
@@ -45,7 +46,7 @@ def test_default_arguments_do_not_change_output():
 def test_grayscale_leaves_no_chromatic_hex():
     svg = page_to_svg(_page(), grayscale=True)
     assert not _CHROMATIC.search(svg), svg
-    # #3333cc → (51*299 + 51*587 + 204*114) // 1000 = 68 = 0x44
+    # #3333cc → Pillow の固定小数点式 (51*19595 + 51*38470 + 204*7471 + 0x8000) >> 16 = 68 = 0x44
     assert 'fill="#444444"' in svg
 
 
@@ -65,3 +66,31 @@ def test_grayscale_converts_images_and_background():
 def test_grayscale_output_is_deterministic():
     pg = _page()
     assert page_to_svg(pg, grayscale=True) == page_to_svg(pg, grayscale=True)
+
+
+def test_clip_sets_viewbox_and_drops_outside_elements():
+    svg = page_to_svg(_page(), clip=Rect(0, 0, 100, 100))
+    assert 'viewBox="0 0 100 100"' in svg
+    assert 'width="100"' in svg and 'height="100"' in svg
+    assert "Hello" in svg                      # (10,10) は clip 内
+    assert 'x="200"' not in svg               # (200,150) の矩形は clip 外
+    assert '<clipPath id="clip-export">' in svg
+    assert '<rect x="0" y="0" width="100" height="100"/>' in svg
+    assert '<g clip-path="url(#clip-export)">' in svg
+    assert svg.rstrip().endswith("</g>\n</svg>")
+
+
+def test_clip_offset_origin():
+    svg = page_to_svg(_page(), clip=Rect(100, 100, 100, 100))
+    assert 'viewBox="100 100 100 100"' in svg
+    assert "Hello" not in svg                  # clip 外
+    assert 'd="M120 120' in svg                # 曲線は clip 内
+
+
+def test_clip_with_zero_size_is_rejected():
+    with pytest.raises(ValueError):
+        page_to_svg(_page(), clip=Rect(0, 0, 0, 10))
+
+
+def test_no_clip_has_no_clippath():
+    assert "clipPath" not in page_to_svg(_page())

@@ -97,6 +97,26 @@ def page_to_svg(
         + ">"
     )
 
+    if clip is not None:
+        if clip.w <= 0 or clip.h <= 0:
+            raise ValueError(f"clip must have positive size: {clip!r}")
+        # 交差する要素のはみ出しは標準の clipPath で切る (Office / Illustrator でも効く)。
+        # 属性は _attr 経由で組む (f-string で直接組むと test_export_escaping が止める)。
+        lines.append(
+            "<defs><clipPath "
+            + _attr("id", "clip-export")
+            + "><rect "
+            + _attr("x", _fmt(rect.x))
+            + " "
+            + _attr("y", _fmt(rect.y))
+            + " "
+            + _attr("width", _fmt(rect.w))
+            + " "
+            + _attr("height", _fmt(rect.h))
+            + "/></clipPath></defs>"
+        )
+        lines.append("<g " + _attr("clip-path", "url(#clip-export)") + ">")
+
     # スキャン背景
     if page.background is not None:
         b = page.background
@@ -120,6 +140,9 @@ def page_to_svg(
     css = font_embed.font_face_css(text_els)
     if css:
         lines.insert(2, f"<style>{css}</style>")
+
+    if clip is not None:
+        lines.append("</g>")
 
     lines.append("</svg>")
     return "\n".join(lines)
