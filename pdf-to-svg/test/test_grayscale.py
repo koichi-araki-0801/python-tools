@@ -14,10 +14,13 @@ from export import grayscale
 from export.grayscale import to_gray_color, to_gray_image
 
 
-def test_hex6_uses_rec601_integer_luma():
-    # 255*299//1000 = 76 = 0x4c / 255*587//1000 = 149 = 0x95 / 255*114//1000 = 29 = 0x1d
+def test_hex6_uses_pillow_luma():
+    # Pillow の固定小数点式 (ITU-R 601-2): (R*19595 + G*38470 + B*7471 + 0x8000) >> 16
+    # #ff0000: (255*19595 + 0 + 0 + 32768) >> 16 = 76 = 0x4c
+    # #00ff00: (0 + 255*38470 + 0 + 32768) >> 16 = 150 = 0x96
+    # #0000ff: (0 + 0 + 255*7471 + 32768) >> 16 = 29 = 0x1d
     assert to_gray_color("#ff0000") == "#4c4c4c"
-    assert to_gray_color("#00ff00") == "#959595"
+    assert to_gray_color("#00ff00") == "#969696"
     assert to_gray_color("#0000ff") == "#1d1d1d"
     assert to_gray_color("#ffffff") == "#ffffff"
     assert to_gray_color("#000000") == "#000000"
@@ -66,7 +69,7 @@ def test_rgba_image_keeps_alpha_as_LA():
     data, _ = to_gray_image(_png("RGBA", (0, 255, 0, 128)), "png")
     with Image.open(io.BytesIO(data)) as im:
         assert im.mode == "LA"
-        assert im.getpixel((0, 0)) == (150, 128)  # Pillow rounds 149.685 to 150
+        assert im.getpixel((0, 0)) == (150, 128)  # 固定小数点式で #00ff00 は 150
 
 
 def test_jpeg_input_is_reencoded_as_png():
@@ -95,3 +98,13 @@ def test_conversion_is_cached_per_bytes():
     to_gray_image(src, "png")
     to_gray_image(src, "png")
     assert to_gray_image.cache_info().hits == 1
+
+
+def test_vector_and_image_luma_agree():
+    """to_gray_color と to_gray_image が同じ Pillow 固定小数点式を使い、輝度が完全に一致する。"""
+    for rgb in ((255, 0, 0), (0, 255, 0), (0, 0, 255), (51, 51, 204), (200, 100, 30)):
+        hex_in = "#%02x%02x%02x" % rgb
+        expected = int(to_gray_color(hex_in)[1:3], 16)
+        data, _ = to_gray_image(_png("RGB", rgb, size=(1, 1)), "png")
+        with Image.open(io.BytesIO(data)) as im:
+            assert im.getpixel((0, 0)) == expected, rgb

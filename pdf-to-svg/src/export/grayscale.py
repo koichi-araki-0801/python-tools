@@ -1,8 +1,8 @@
 """色と画像をグレースケールへ変換する純粋関数。
 
-ベクタ要素の色 (``to_gray_color``) と埋め込み画像 (``to_gray_image``) を**同じ
-Rec.601 の整数式** ``(R*299 + G*587 + B*114) // 1000`` で灰色にする (Pillow の
-``convert("L")`` と同じ係数なので、文字・線と画像の明度が揃う)。
+ベクタ要素の色 (``to_gray_color``) と埋め込み画像 (``to_gray_image``) を**Pillow の
+``convert("L")`` と同じ固定小数点式**（ITU-R 601-2）で灰色にする。文字・線と画像の
+明度が完全に一致する。
 
 SVG フィルタ (``feColorMatrix``) を使わないのは意図的で、Office はフィルタを無視して
 カラーのまま貼り付き、ブラウザの印刷はフィルタ領域を丸ごとラスタ化して文字を画像に
@@ -29,7 +29,9 @@ MAX_GRAY_IMAGE_PIXELS = 16_000_000
 
 
 def _luma(r: int, g: int, b: int) -> int:
-    return (r * 299 + g * 587 + b * 114) // 1000
+    # Pillow の convert("L") と同じ固定小数点式 (ITU-R 601-2)。整数式 (R*299+G*587+B*114)//1000
+    # では端数の丸めが Pillow と 1 だけずれる (例: #00ff00 は 149 vs 150) ので、画像と同じ式を使う。
+    return (r * 19595 + g * 38470 + b * 7471 + 0x8000) >> 16
 
 
 def to_gray_color(value: Optional[str]) -> Optional[str]:

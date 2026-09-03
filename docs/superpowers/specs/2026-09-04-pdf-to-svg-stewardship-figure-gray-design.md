@@ -114,7 +114,7 @@ PyMuPDF に依存せず、`Page.live_elements()` の `TextElement` / `RectElemen
 
 - `to_gray_color(value: str) -> str`: `sanitize_color` が許す形
   （`#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa` / CSS 色名 / `none` / `currentColor`）を
-  受け、RGB を **Rec.601 の整数式** `(R*299 + G*587 + B*114) // 1000` で灰色にし
+  受け、RGB を **Pillow の `convert("L")` と同じ固定小数点式**（ITU-R 601-2: `(R*19595 + G*38470 + B*7471 + 0x8000) >> 16`）で灰色にし
   `#rrggbb`（alpha があれば `#rrggbbaa`）で返す。`none` / `currentColor` は素通し。
   CSS 色名は `PIL.ImageColor.getrgb` で解決する。
 - `to_gray_image(img_bytes: bytes, ext: str) -> tuple[bytes, str]`: Pillow で
