@@ -12,6 +12,15 @@ export function clientToPage(svgEl, clientX, clientY) {
   };
 }
 
+/** 2 つの矩形 {x,y,w,h} の IoU (重なり面積 / 合併面積)。重ならなければ 0 */
+export function rectIoU(a, b) {
+  var ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  var iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  var inter = ix * iy;
+  var union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}
+
 // "1-5, 8" → [1,2,3,4,5,8] (1始まり・昇順ユニーク・1..max にクランプ)。
 export function parseSpec(text, maxPages) {
   var got = {};

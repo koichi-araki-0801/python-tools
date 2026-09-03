@@ -11,7 +11,7 @@ import {
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
-  figKey, svgKey, figSelOf, figCount, seedFigSel, exportFigureList,
+  figKey, svgKey, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
@@ -761,7 +761,7 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
       // 検出ゼロ (取得済みで候補も採用も無い) のページは手動へ誘導する (spec 2 節 4.)
       var candCur = S.figCand[figKey(S.PAGES[S.page])];
       document.getElementById("fig-hint").innerHTML =
-        (Array.isArray(candCur) && !candCur.length && !figSelOf(S.page).length)
+        (Array.isArray(candCur) && !candCur.length && !figSelPeek(S.page).length)
           ? "このページに図は見つかりませんでした。範囲を<b>ドラッグ</b>で指定してください"
           : "<b>クリック</b>で採用 / 解除 ・ 何もない場所を<b>ドラッグ</b>で範囲を追加";
       mountPage(host4, app.querySelector('[data-screen="4"] .editor'), false, function () { drawFigOverlay(host4); });

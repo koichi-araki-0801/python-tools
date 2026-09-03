@@ -6,15 +6,17 @@
 // オーバーレイは SVG の外 (host 直下の div) に置くので、`bakeSvg` 相当の書き出しには
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
 import { esc } from "./dom.js";
-import { clientToPage } from "./geometry.js";
+import { clientToPage, rectIoU } from "./geometry.js";
 import { S, figKey, figSelOf, figCount } from "./state.js";
 
 var ui = { render: function () {} };
 function initFigure(deps) { ui = deps; }
 
 var MIN_SIZE_PT = 4; // これ未満の矩形は誤クリックとみなして作らない
+// 採用済みと大きく重なる候補は隠す。伸縮しても隠れたまま、採用を外せば戻る
+// (等値比較だと伸縮で採用側の座標がずれた瞬間に元候補が再出現し、二重書き出しにつながるため)。
+var CAND_HIDE_IOU = 0.5;
 
-function sameRect(a, b) { return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h; }
 function copyRect(r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; }
 
 /** 左レール: ページ一覧 + 候補/採用のバッジ。クリックでページ移動 */
@@ -60,7 +62,7 @@ function drawFigOverlay(host) {
   var sel = figSelOf(S.page);
   var cands = S.figCand[figKey(S.PAGES[S.page])] || [];
   cands.forEach(function (r, i) {
-    if (sel.some(function (s) { return sameRect(s, r); })) return; // 採用済みは実線側で描く
+    if (sel.some(function (s) { return rectIoU(s, r) >= CAND_HIDE_IOU; })) return; // 採用済みは実線側で描く
     var box = document.createElement("div");
     box.className = "fig-cand"; box.setAttribute("role", "button"); box.tabIndex = 0;
     box.innerHTML = '<span class="tag">候補 ' + (i + 1) + "</span>";

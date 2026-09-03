@@ -159,6 +159,11 @@ def test_four_step_flow(e2e_page):
     page.click('[data-screen="3"] [data-skipall]')
     expect(page.locator("#btn-export")).to_be_visible()
 
+    # グレーモード専用のペインは色モードでは描かれない (hidden が .editor/.segment の display に負けない)
+    expect(page.locator("#fig-editor")).to_be_hidden()
+    expect(page.locator("#exp-modes-gray")).to_be_hidden()
+    expect(page.locator("#pagenav-4")).to_be_hidden()
+
     # 書き出しの失敗は握り潰さず通知し、ボタンを押せる状態へ戻す
     page.evaluate("""() => {
         const w = window;
@@ -364,6 +369,16 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     expect(page.locator("#exp-num")).to_have_text("0")
     expect(page.locator("#btn-export")).to_be_disabled()
     page.click("#fig-stage .fig-cand:not(.sel)")
+    expect(page.locator("#exp-num")).to_have_text("1")
+
+    # 採用済みを角ハンドルで伸縮しても元候補は再出現しない (二重書き出しの防止)
+    handle = page.locator("#fig-stage .fig-cand.sel .h.se")
+    box = handle.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 30, box["y"] + 30, steps=5)
+    page.mouse.up()
+    expect(page.locator("#fig-stage .fig-cand:not(.sel)")).to_have_count(0)
     expect(page.locator("#exp-num")).to_have_text("1")
 
     with page.expect_download() as dl_info:

@@ -57,3 +57,27 @@ def test_clienttopage_top_left_maps_to_viewbox_origin(geo):
 def test_clienttopage_center_maps_to_viewbox_center_scale_2x(geo):
     expr = f"window.__geo.clientToPage({_SVG_EL_EXPR}, 200, 250)"
     assert js(geo, expr) == {"x": 200, "y": 400}
+
+
+def test_rectiou_identical_rects_is_1(geo):
+    r = "{x:0,y:0,w:100,h:100}"
+    assert js(geo, f"window.__geo.rectIoU({r}, {r})") == 1
+
+
+def test_rectiou_disjoint_rects_is_0(geo):
+    a = "{x:0,y:0,w:10,h:10}"
+    b = "{x:100,y:100,w:10,h:10}"
+    assert js(geo, f"window.__geo.rectIoU({a}, {b})") == 0
+
+
+def test_rectiou_partial_overlap(geo):
+    a = "{x:0,y:0,w:100,h:100}"
+    b = "{x:10,y:0,w:100,h:100}"
+    got = js(geo, f"window.__geo.rectIoU({a}, {b})")
+    assert got == pytest.approx((90 * 100) / (100 * 100 * 2 - 90 * 100))
+
+
+def test_rectiou_zero_area_rect_is_0(geo):
+    a = "{x:0,y:0,w:0,h:0}"
+    b = "{x:0,y:0,w:10,h:10}"
+    assert js(geo, f"window.__geo.rectIoU({a}, {b})") == 0

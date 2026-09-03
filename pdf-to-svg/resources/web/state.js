@@ -248,7 +248,7 @@ function zipName(list) {
 export {
   S, counts, pass, initStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
-  figKey, svgKey, figSelOf, figCount, seedFigSel, exportFigureList,
+  figKey, svgKey, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,

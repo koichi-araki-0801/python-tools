@@ -816,6 +816,10 @@ a:focus-visible,
 .stepbar.gray-mode .step[data-step="2"], .stepbar.gray-mode .step[data-step="3"],
 .stepbar.gray-mode .step[data-step="2"] + .step-sep, .stepbar.gray-mode .step[data-step="3"] + .step-sep { display: none; }
 .stepbar .skipnote { margin-left: 8px; color: var(--faint); font-size: 12px; }
+/* `.editor{display:grid}` / `.segment{display:inline-flex}` (author CSS) は UA の
+   `[hidden]{display:none}` より詳細度が高く負けるため、色モードでも空の枠・重複した
+   セグメントが描かれてしまう。他の `[hidden]` (`.border-opts` / `.guard`) と同様に上書きする。 */
+#fig-editor[hidden], #exp-modes-gray[hidden], #pagenav-4[hidden] { display: none; }
 .screen[data-screen="4"].gray #export-center { flex: none; width: 380px; border-left: 1px solid var(--border); background: var(--surface); padding: 22px 18px; }
 .screen[data-screen="4"].gray .sheet { max-width: none; }
 .screen[data-screen="4"].gray #exp-modes { display: none; }
