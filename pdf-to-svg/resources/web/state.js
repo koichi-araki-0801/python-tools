@@ -67,15 +67,29 @@ function clearSel() { var s = selSet(); Object.keys(s).forEach(function (k) { de
 function figKey(pg) { return pg.fileIndex + ":" + pg.pageInFile; }
 /** ページ SVG キャッシュのキー。グレーは別の SVG なのでキーを分ける (モード切替で混ざらない) */
 function svgKey(fi, pi) { return fi + ":" + pi + (S.gray ? ":g" : ""); }
-/** 通しページ g の採用矩形配列 (無ければ作る) */
-function figSelOf(g) { var k = figKey(S.PAGES[g]); return (S.figSel[k] = S.figSel[k] || []); }
-function figCount() { var n = 0; S.PAGES.forEach(function (pg, g) { n += figSelOf(g).length; }); return n; }
-/** サーバの候補を記録し、まだ触っていないページだけ採用へ複製する。
- *  利用者が外した候補を再取得のたびに戻さないため、採用配列が既にあるページは触らない。 */
+/** 通しページ g の採用矩形配列 (無ければ作る)。呼ぶだけで `S.figSel` に空配列を作ってしまうため、
+ *  「まだ候補を記録していない」を見分けたい側 (`seedFigSel`) からは使わない (`figSelPeek` を使う)。 */
+function figSelOf(g) {
+  var pg = S.PAGES[g]; if (!pg) return [];
+  var k = figKey(pg);
+  return (S.figSel[k] = S.figSel[k] || []);
+}
+/** 通しページ g の採用矩形配列を作らずに覗く (無ければ空配列を返すだけ) */
+function figSelPeek(g) {
+  var pg = S.PAGES[g]; if (!pg) return [];
+  return S.figSel[figKey(pg)] || [];
+}
+function figCount() { var n = 0; S.PAGES.forEach(function (pg, g) { n += figSelPeek(g).length; }); return n; }
+/** サーバの候補を記録し、まだ候補を記録していないページだけ採用へ複製する。
+ *  採用を複製するのは候補を初めて記録するときだけ。以後の再取得は利用者の採用を触らない
+ *  (判定は `S.figSel` の有無ではなく `S.figCand` の Array 判定で行う。取得中に置く `null` の
+ *  途中経過も未記録として扱いたいため、`undefined` と `null` の両方を「初回」とみなす)。 */
 function seedFigSel(g, rects) {
-  var k = figKey(S.PAGES[g]);
+  var pg = S.PAGES[g]; if (!pg) return;
+  var k = figKey(pg);
+  var firstTime = !Array.isArray(S.figCand[k]);
   S.figCand[k] = rects.map(function (r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; });
-  if (!Object.prototype.hasOwnProperty.call(S.figSel, k)) {
+  if (firstTime) {
     S.figSel[k] = rects.map(function (r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; });
   }
 }
@@ -190,7 +204,7 @@ function exportFigureList() {
   var out = [];
   pages.forEach(function (g) {
     var pg = S.PAGES[g]; if (!pg) return;
-    figSelOf(g).forEach(function (r, i) {
+    figSelPeek(g).forEach(function (r, i) {
       out.push({ fileIndex: pg.fileIndex, pageInFile: pg.pageInFile,
         clip: { x: r.x, y: r.y, w: r.w, h: r.h }, figIndex: i + 1, grayscale: true });
     });

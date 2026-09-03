@@ -395,3 +395,19 @@ def test_apply_state_with_new_page_list_drops_fig_state(st):
         changed2: [false], changed3: [false] })""")
     assert js(st, "Object.keys(window.__st.S.figSel)") == []
     assert js(st, "Object.keys(window.__st.S.figCand)") == []
+
+
+def test_counting_before_seed_does_not_block_adoption(st):
+    r = {"x": 10, "y": 20, "w": 30, "h": 40}
+    assert js(st, "window.__st.figCount()") == 0
+    js(st, "window.__st.S.expMode = 'all'; window.__st.exportFigureList()")
+    js(st, "r => window.__st.seedFigSel(1, [r])", r)
+    assert js(st, "window.__st.figSelOf(1)") == [r]
+    assert js(st, "window.__st.figCount()") == 1
+
+
+def test_seed_treats_null_in_flight_marker_as_first_time(st):
+    r = {"x": 1, "y": 2, "w": 3, "h": 4}
+    js(st, "window.__st.S.figCand['0:0'] = null")
+    js(st, "r => window.__st.seedFigSel(0, [r])", r)
+    assert js(st, "window.__st.figSelOf(0)") == [r]
