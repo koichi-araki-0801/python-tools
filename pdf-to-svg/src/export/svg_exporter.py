@@ -6,10 +6,11 @@ GUI なしでテスト可能・フォント名の崩れも起きない。
 from __future__ import annotations
 
 import base64
-from typing import List
+from typing import Callable, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
 from export import font_embed
+from export.grayscale import to_gray_color, to_gray_image
 from model import fonts
 from model.document import Page
 from model.elements import (
@@ -48,14 +49,37 @@ def _mime(ext: str) -> str:
     return _IMAGE_MIME.get(ext.lower(), "application/octet-stream")
 
 
-def page_to_svg(page: Page, *, annotate: bool = False) -> str:
+ColorFn = Callable[[Optional[str]], Optional[str]]
+ImageFn = Callable[[bytes, str], Tuple[bytes, str]]
+
+
+def _identity_image(data: bytes, ext: str) -> Tuple[bytes, str]:
+    return data, ext
+
+
+def page_to_svg(
+    page: Page,
+    *,
+    annotate: bool = False,
+    grayscale: bool = False,
+    clip: Optional[Rect] = None,
+) -> str:
     """Page を SVG 文字列へ。
 
     annotate=True のとき各要素タグに ``data-el="<id>"`` を付与する (Web UI が
     要素をクリック選択・ハイライトするため)。デフォルト False で従来出力と完全一致
     (テスト・書き出しは不変)。
+
+    grayscale=True は色を出すすべての箇所 (塗り・線・文字・画像・スキャン背景) を
+    ``export/grayscale.py`` で灰色にする。モデルは変更しない。変換関数を引数で
+    各出力関数へ渡す形にしてあるのは、``if grayscale`` を出力箇所ごとに散らすと
+    新しい色属性を足したときに取りこぼすため。
+
+    clip は書き出し領域 (ページ座標の矩形)。None ならページ全体 (``export_rect``)。
     """
-    rect = page.export_rect()
+    color_fn: ColorFn = to_gray_color if grayscale else sanitize_color
+    image_fn: ImageFn = to_gray_image if grayscale else _identity_image
+    rect = clip if clip is not None else page.export_rect()
     lines: List[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     viewbox = f"{_fmt(rect.x)} {_fmt(rect.y)} {_fmt(rect.w)} {_fmt(rect.h)}"
@@ -77,13 +101,14 @@ def page_to_svg(page: Page, *, annotate: bool = False) -> str:
     if page.background is not None:
         b = page.background
         if _intersects_export(b.rect, rect):
-            lines.append(_image_tag(b.rect, b.png_bytes, "png"))
+            data, ext = image_fn(b.png_bytes, "png")
+            lines.append(_image_tag(b.rect, data, ext))
 
     text_els: List[TextElement] = []
     for el in page.live_elements():
         if not _intersects_export(el.bbox, rect):
             continue
-        svg = _element_to_svg(el)
+        svg = _element_to_svg(el, color_fn, image_fn)
         if svg:
             if annotate:
                 svg = _with_data_el(svg, el.id)
@@ -116,9 +141,9 @@ def _intersects_export(bbox: Rect, export: Rect) -> bool:
     return bbox.intersects(export)
 
 
-def _element_to_svg(el) -> str:
+def _element_to_svg(el, color_fn: ColorFn = sanitize_color, image_fn: ImageFn = _identity_image) -> str:
     if isinstance(el, TextElement):
-        return _text_to_svg(el)
+        return _text_to_svg(el, color_fn)
     if isinstance(el, LineElement):
         return (
             "<line "
@@ -130,7 +155,7 @@ def _element_to_svg(el) -> str:
             + " "
             + _attr("y2", _fmt(el.y1))
             + " "
-            + _attr("stroke", sanitize_color(el.color))
+            + _attr("stroke", color_fn(el.color))
             + " "
             + _attr("stroke-width", _fmt(el.width))
             + "/>"
@@ -146,9 +171,9 @@ def _element_to_svg(el) -> str:
             + " "
             + _attr("height", _fmt(el.rect.h))
             + " "
-            + _paint("fill", el.fill)
+            + _paint("fill", el.fill, color_fn)
             + " "
-            + _paint("stroke", el.stroke)
+            + _paint("stroke", el.stroke, color_fn)
             + " "
             + _attr("stroke-width", _fmt(el.stroke_width))
             + "/>"
@@ -158,15 +183,16 @@ def _element_to_svg(el) -> str:
             "<path "
             + _attr("d", el.d)
             + " "
-            + _paint("fill", el.fill)
+            + _paint("fill", el.fill, color_fn)
             + " "
-            + _paint("stroke", el.stroke)
+            + _paint("stroke", el.stroke, color_fn)
             + " "
             + _attr("stroke-width", _fmt(el.stroke_width))
             + "/>"
         )
     if isinstance(el, ImageElement):
-        return _image_tag(el.rect, el.img_bytes, el.ext)
+        data, ext = image_fn(el.img_bytes, el.ext)
+        return _image_tag(el.rect, data, ext)
     return ""
 
 
@@ -184,13 +210,15 @@ def _attr(name: str, value) -> str:
     return f"{name}={quoteattr(str(value))}"
 
 
-def _paint(attr: str, color) -> str:
+def _paint(attr: str, color, color_fn: ColorFn = sanitize_color) -> str:
     """塗り/線の色属性。**出口側の関門**で、入口 (``rpc_addBorder``) を迂回して
-    モデルへ直接不正な色を入れられても、ここで ``ValueError`` になる。"""
-    return _attr(attr, sanitize_color(color)) if color else _attr(attr, "none")
+    モデルへ直接不正な色を入れられても、ここで ``ValueError`` になる。
+    ``color_fn`` はグレー化のための差し替え点で、``to_gray_color`` も内部で
+    ``sanitize_color`` を通すので関門は緩まない。"""
+    return _attr(attr, color_fn(color)) if color else _attr(attr, "none")
 
 
-def _text_to_svg(el: TextElement) -> str:
+def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
     # 代替フォントでも崩れないよう和文補完 + 汎用名のフォールバックチェーンを付与
     family = fonts.fallback_css(el.font_family, el.text)
     weight = f" {_attr('font-weight', el.weight)}" if el.weight != 400 else ""
@@ -246,7 +274,7 @@ def _text_to_svg(el: TextElement) -> str:
         + " "
         + _attr("font-size", _fmt(el.font_size))
         + " "
-        + _attr("fill", sanitize_color(el.color))
+        + _attr("fill", color_fn(el.color))
         + f"{weight}{style}{stretch}>"
         + escape(sanitize_text(el.text))
         + "</text>"
