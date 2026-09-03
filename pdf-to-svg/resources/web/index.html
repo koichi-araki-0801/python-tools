@@ -58,7 +58,8 @@
     <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
     <div class="step" data-step="3"><span class="n">3</span>削除・枠線の編集</div>
     <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
-    <div class="step" data-step="4"><span class="n">4</span>SVGに書き出す</div>
+    <div class="step" data-step="4"><span class="n">4</span><span id="step4-label">SVGに書き出す</span></div>
+    <span class="skipnote" id="gray-skipnote" hidden>手順 2・3 は省略されます</span>
   </div>
 
   <div class="stage">
@@ -77,6 +78,13 @@
             <div class="dz-s">またはクリック / 下のボタンから選びます</div>
             <button class="btn primary" id="btn-pick" style="margin:0 auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.2H19.5A1.5 1.5 0 0 1 21 9.7V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V7.5Z"></path></svg>ファイルを選ぶ…</button>
           </div>
+          <label class="modebox" id="gray-mode-box">
+            <input type="checkbox" id="chk-gray">
+            <div>
+              <div class="t">図だけをグレースケールで書き出す</div>
+              <div class="d">「当社のスチュワードシップ活動」の図を自動で見つけて候補にします。選んだ範囲だけを切り出し、文字・線・画像をすべてグレースケールにした SVG を書き出します。用語の置換と削除・枠線の手順は省略します。</div>
+            </div>
+          </label>
           <div class="filelist">
             <div class="lbl"><span>選択中のPDF</span><span id="filelist-count">0 ファイル</span></div>
             <div id="file-cards"></div>
@@ -188,9 +196,20 @@
 
     <!-- (4) SVGに書き出す -->
     <section class="screen" data-screen="4">
-      <div class="center-scroll">
+      <nav class="pagenav-rail" id="pagenav-4" hidden></nav>
+      <div class="editor" id="fig-editor" hidden>
+        <div class="canvas-scroll"><div class="doc-stage" id="fig-stage"></div></div>
+        <div class="fig-hint" id="fig-hint"><b>クリック</b>で採用 / 解除 ・ 何もない場所を<b>ドラッグ</b>で範囲を追加</div>
+        <div class="page-nav"><span class="pg" id="pgnav-4"></span></div>
+        <div class="zoom-ctrl">
+          <button class="zb" data-zoomact="out" title="縮小"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path></svg></button>
+          <button class="zb zlabel" data-zoomact="reset" title="フィットに戻す"><span class="zpct">100%</span></button>
+          <button class="zb" data-zoomact="in" title="拡大"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+      </div>
+      <div class="center-scroll" id="export-center">
         <div class="sheet">
-          <h1>SVG に書き出す</h1>
+          <h1 id="export-title">SVG に書き出す</h1>
           <p class="lead">設定を確認して書き出します。書き出しはこの画面だけで行います。</p>
 
           <div class="opt" style="display:flex;align-items:center;gap:16px">
@@ -201,11 +220,15 @@
 
           <div class="opt">
             <div class="ot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5A1.5 1.5 0 0 1 7.5 2h6L19 7.5v13A1.5 1.5 0 0 1 17.5 22h-10A1.5 1.5 0 0 1 6 20.5V3.5Z"></path><path d="M13 2v6h6"></path></svg>書き出す範囲</div>
-            <div class="segment">
+            <div class="segment" id="exp-modes">
               <button id="exp-page" data-mode="page" aria-pressed="false">表示中のページのみ</button>
               <button id="exp-all" data-mode="all" aria-pressed="true">全ページ</button>
               <button id="exp-noskip" data-mode="noskip" aria-pressed="false">スキップを除く</button>
               <button id="exp-spec-btn" data-mode="spec" aria-pressed="false">ページを指定</button>
+            </div>
+            <div class="segment" id="exp-modes-gray" hidden>
+              <button data-mode="page" aria-pressed="false">表示中のページの図</button>
+              <button data-mode="all" aria-pressed="true">全ページの採用した図</button>
             </div>
             <div id="exp-spec-row" style="display:none;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
               <select id="exp-file" style="font-size:13px;padding:5px 8px"></select>

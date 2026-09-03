@@ -11,9 +11,12 @@ import {
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
+  figKey, svgKey, figSelOf, figCount, seedFigSel, exportFigureList,
+  phaseAfterLoad, phaseBeforeExport, stepAllowed,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
+import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figure.js";
 
 (function () {
   "use strict";
@@ -171,11 +174,11 @@ import { initRail, buildRail } from "./rail.js";
   }
   // ── 6. ページ SVG ──
   async function ensureSvg(fi, pi) {
-    var k = fi + ":" + pi;
-    if (!S.svgCache[k]) S.svgCache[k] = await rpc("pageSvg", { fileIndex: fi, pageInFile: pi });
+    var k = svgKey(fi, pi);
+    if (!S.svgCache[k]) S.svgCache[k] = await rpc("pageSvg", { fileIndex: fi, pageInFile: pi, grayscale: S.gray });
     return S.svgCache[k];
   }
-  function invalidate(fi, pi) { delete S.svgCache[fi + ":" + pi]; }
+  function invalidate(fi, pi) { delete S.svgCache[fi + ":" + pi]; delete S.svgCache[fi + ":" + pi + ":g"]; }
 
   // フィット率 (現行どおりクランプ 0.05〜3) にズーム倍率を掛けた最終スケールを当てる。
   // zoom=1 なら従来表示と一致。
@@ -201,13 +204,15 @@ import { initRail, buildRail } from "./rail.js";
   }
   // 再フェッチせず現在表示中の SVG にスケールだけ当て直す。
   function rescaleCurrent() {
-    var host = document.getElementById(S.phase === 2 ? "doc-master" : "trim-stage");
+    var host = document.getElementById(S.phase === 2 ? "doc-master" : (S.phase === 3 ? "trim-stage" : "fig-stage"));
     if (!host) return;
     var svgEl = host.querySelector("svg");
-    var data = S.svgCache[pkey()];
+    var pg = S.PAGES[S.page];
+    var data = pg && S.svgCache[svgKey(pg.fileIndex, pg.pageInFile)];
     if (svgEl && data) {
       scalePage(svgEl, data.width, data.height, app.querySelector('[data-screen="' + S.phase + '"] .editor'));
       if (S.phase === 3) drawSelBoxes(host); // sel-box は host 相対なので再計算
+      if (S.phase === 4) drawFigOverlay(host);
     }
     updateZoomLabel();
   }
@@ -226,7 +231,7 @@ import { initRail, buildRail } from "./rail.js";
     var token = pg.fileIndex + ":" + pg.pageInFile + ":" + (++mountSeq);
     host.dataset.token = token;
     var data;
-    if (!S.svgCache[pg.fileIndex + ":" + pg.pageInFile]) {
+    if (!S.svgCache[svgKey(pg.fileIndex, pg.pageInFile)]) {
       // 取得中に旧ページの SVG を残すと、その上でクリック選択や範囲削除ができてしまう。
       host.classList.add("empty");
       host.innerHTML = '<span class="page-loading">ページを読み込んでいます…</span>';
@@ -642,6 +647,23 @@ import { initRail, buildRail } from "./rail.js";
   // ── 14. 描画 ──
   function setHint(html) { document.getElementById("nav-hint").innerHTML = html; }
 
+  // 候補を未取得のページだけ取りに行き、届いたら 1 回だけ再描画する (取得済みなら何もしないので再帰しない)。
+  async function ensureFigCand(g) {
+    var pg = S.PAGES[g]; if (!pg) return;
+    var k = figKey(pg);
+    if (S.figCand[k] !== undefined) return;
+    S.figCand[k] = null; // 取得中の印 (二重要求を防ぐ)
+    try {
+      var res = await rpc("figureCandidates", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
+      seedFigSel(g, res.rects || []);
+    } catch (e) {
+      delete S.figCand[k];
+      toast("図の検出に失敗しました: " + String((e && e.message) || e));
+      return;
+    }
+    if (S.phase === 4 && S.gray) render();
+  }
+
   function render() {
     var steps = [].slice.call(app.querySelectorAll("#stepbar .step"));
     var screens = [].slice.call(app.querySelectorAll(".screen"));
@@ -652,6 +674,17 @@ import { initRail, buildRail } from "./rail.js";
     var guard = document.getElementById("guard");
 
     screens.forEach(function (s) { s.classList.toggle("on", +s.dataset.screen === S.phase); });
+    var stepbar = document.getElementById("stepbar");
+    stepbar.classList.toggle("gray-mode", S.gray);
+    document.getElementById("gray-skipnote").hidden = !S.gray;
+    document.getElementById("step4-label").textContent = S.gray ? "図をグレーで書き出す" : "SVGに書き出す";
+    var screen4 = app.querySelector('[data-screen="4"]');
+    screen4.classList.toggle("gray", S.gray);
+    document.getElementById("pagenav-4").hidden = !S.gray;
+    document.getElementById("fig-editor").hidden = !S.gray;
+    document.getElementById("exp-modes-gray").hidden = !S.gray;
+    document.getElementById("export-title").textContent = S.gray ? "図をグレーで書き出す" : "SVG に書き出す";
+    document.getElementById("gray-mode-box").classList.toggle("on", S.gray);
     steps.forEach(function (st) {
       var n = +st.dataset.step; var done = n < S.phase, active = n === S.phase;
       st.classList.toggle("done", done); st.classList.toggle("active", active);
@@ -674,6 +707,13 @@ import { initRail, buildRail } from "./rail.js";
     if (S.phase === 1) {
       setHint(S.TOTAL ? "「次へ」で用語の置換に進みます" : "変換するPDFを選びます");
       ctxText.textContent = S.TOTAL ? S.FILES.length + " ファイル・" + S.TOTAL + " ページ" : "ファイル未選択";
+    } else if (S.phase === 4 && S.gray) {
+      var pg4 = S.PAGES[S.page];
+      setHint("図を確認して書き出します。採用 <b>" + figCount() + "</b> 図");
+      ctxText.textContent = S.FILES[pg4.fileIndex].name + " ・ " + (pg4.pageInFile + 1) + "/" + S.FILES[pg4.fileIndex].pages + " ページ";
+      refreshExport();
+      document.getElementById("export-summary").innerHTML =
+        S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>採用 " + figCount() + " 図・グレースケール";
     } else if (S.phase === 4) {
       setHint("内容を確認して書き出します。");
       ctxText.textContent = S.FILES.length + " ファイル・" + S.TOTAL + " ページ";
@@ -713,11 +753,25 @@ import { initRail, buildRail } from "./rail.js";
       renderTrim();
       updateZoomLabel();
     }
+    if (S.phase === 4 && S.gray && S.TOTAL) {
+      buildFigRail("pagenav-4");
+      document.getElementById("pgnav-4").innerHTML = pageLabel();
+      var host4 = document.getElementById("fig-stage");
+      ensureFigCand(S.page);
+      // 検出ゼロ (取得済みで候補も採用も無い) のページは手動へ誘導する (spec 2 節 4.)
+      var candCur = S.figCand[figKey(S.PAGES[S.page])];
+      document.getElementById("fig-hint").innerHTML =
+        (Array.isArray(candCur) && !candCur.length && !figSelOf(S.page).length)
+          ? "このページに図は見つかりませんでした。範囲を<b>ドラッグ</b>で指定してください"
+          : "<b>クリック</b>で採用 / 解除 ・ 何もない場所を<b>ドラッグ</b>で範囲を追加";
+      mountPage(host4, app.querySelector('[data-screen="4"] .editor'), false, function () { drawFigOverlay(host4); });
+      updateZoomLabel();
+    }
   }
 
   // ── 15. ナビゲーション ──
   function tryNext() {
-    if (S.phase === 1) { if (!S.TOTAL) return; S.phase = 2; S.page = 0; S.guarding = false; render(); return; }
+    if (S.phase === 1) { if (!S.TOTAL) return; S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; render(); return; }
     if (S.phase === 2 || S.phase === 3) {
       var pend = counts(statusArr()).pend;
       if (pend > 0) { S.guarding = true; document.getElementById("guard-n").textContent = pend; render(); return; }
@@ -726,12 +780,13 @@ import { initRail, buildRail } from "./rail.js";
   }
   function back() {
     S.guarding = false;
-    if (S.phase === 2) S.phase = 1; else if (S.phase === 3) { S.phase = 2; S.page = 0; } else if (S.phase === 4) { S.phase = 3; S.page = 0; }
+    if (S.phase === 2) S.phase = 1; else if (S.phase === 3) { S.phase = 2; S.page = 0; } else if (S.phase === 4) { S.phase = phaseBeforeExport(); S.page = 0; }
     render();
   }
 
   function wireStatic() {
     installCropDrag();
+    installFigDrag(document.getElementById("fig-stage"));
     wireLoadUi();
     wireZoom();
     wireNav();
@@ -767,6 +822,12 @@ import { initRail, buildRail } from "./rail.js";
     ["dragover", "drop"].forEach(function (ev) {
       document.addEventListener(ev, function (e) { e.preventDefault(); });
     });
+    document.getElementById("chk-gray").addEventListener("change", function () {
+      S.gray = this.checked;
+      S.expMode = "all";  // グレーモードに noskip / spec は無い (手順 2・3 を通らない)
+      S.svgCache = {};    // カラー/グレーで SVG が違う (キーも違うが、古い方を持ち続けない)
+      render();
+    });
   }
 
   /** 手順2/3: キャンバス内ズーム (＋/−/リセット・Ctrl+ホイール) */
@@ -778,9 +839,9 @@ import { initRail, buildRail } from "./rail.js";
         else setZoom(curZoom() * (act === "in" ? 1.25 : 0.8));
       });
     });
-    app.querySelectorAll('[data-screen="2"] .editor, [data-screen="3"] .editor').forEach(function (ed) {
+    app.querySelectorAll('[data-screen="2"] .editor, [data-screen="3"] .editor, [data-screen="4"] .editor').forEach(function (ed) {
       ed.addEventListener("wheel", function (e) {
-        if (!e.ctrlKey || (S.phase !== 2 && S.phase !== 3)) return;
+        if (!e.ctrlKey || (S.phase !== 2 && S.phase !== 3 && S.phase !== 4)) return;
         e.preventDefault();
         setZoom(curZoom() * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
       }, { passive: false });
@@ -799,7 +860,7 @@ import { initRail, buildRail } from "./rail.js";
     });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {
-        var n = +st.dataset.step; if (n > S.phase || !S.TOTAL) return;
+        var n = +st.dataset.step; if (n > S.phase || !S.TOTAL || !stepAllowed(n)) return;
         S.guarding = false; S.phase = n; if (n === 2 || n === 3) S.page = 0; clearSel(); render();
       });
     });
@@ -950,7 +1011,10 @@ import { initRail, buildRail } from "./rail.js";
       if (S.expFile >= S.FILES.length) S.expFile = 0;
       sel.value = String(S.expFile);
     }
-    document.getElementById("exp-num").textContent = expCount(expSpecValue(), parseSpec);
+    var num = S.gray ? (S.expMode === "page" ? figSelOf(S.page).length : figCount()) : expCount(expSpecValue(), parseSpec);
+    document.getElementById("exp-num").textContent = num;
+    var btn = document.getElementById("btn-export");
+    if (btn) btn.disabled = S.gray && num === 0;
   }
 
   // ZIP 集約 1 リクエストの送信バイト予算。サーバの RPC 本文上限 (8 MiB) の 9 割を使い、
@@ -968,6 +1032,12 @@ import { initRail, buildRail } from "./rail.js";
     var btn = document.getElementById("btn-export");
     var prog = document.getElementById("exp-progress");
     try {
+      if (S.gray) {
+        var figs = exportFigureList();
+        if (!figs.length) { setHint("採用した図がありません。ページ上の候補をクリックしてください。"); return; }
+        await exportEntries(figs, btn, prog);
+        return;
+      }
       if (S.expMode === "page") {
         var pg = S.PAGES[S.page] || { fileIndex: 0, pageInFile: 0 };
         var one = await rpc("exportSvg", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
@@ -979,42 +1049,7 @@ import { initRail, buildRail } from "./rail.js";
       }
       var list = exportPageList(expSpecValue(), parseSpec);
       if (!list.length) { setHint("書き出す対象のページがありません。"); return; }
-      // 変換中はボタンを止め、総数が既知の i/N を進捗バーでも示す (フッター文字だけでは
-      // 固まったように見える)。SVG 変換はページごとに `exportSvg` を呼んで進捗を刻む。
-      if (btn) btn.disabled = true;
-      if (prog) { prog.hidden = false; prog.max = list.length; prog.value = 0; }
-      var entries = [];
-      for (var i = 0; i < list.length; i++) {
-        setHint("書き出し中 " + (i + 1) + "/" + list.length);
-        var item = await rpc("exportSvg", list[i]);
-        entries.push({ name: item.name, text: item.svg });
-        if (prog) prog.value = i + 1;
-      }
-      if (entries.length === 1) {
-        // `downloadBlob` はブラウザ任せの保存で、ブロックされたかを Web API から検知できない。
-        // 保存先を選ぶ FSA 経路 (上の `saveTextFile`) と違い、完了を断定しない文言にする。
-        downloadBlob(entries[0].name, entries[0].text, "image/svg+xml");
-        setHint('<b style="color:var(--good-ink)">1個のSVGのダウンロードを開始しました。</b>');
-        toast("1個のSVGのダウンロードを開始しました");
-        return;
-      }
-      // 複数ページは ZIP へ集約する — N 個の個別ダウンロード (Edge の連続 DL 確認に
-      // 阻まれ、ダウンロードフォルダも散らかる) を避ける。集約はサーバ側 `zipEntries`。
-      // 1 リクエストの本文上限を超える量は複数本へ分ける (1 本に詰めると書き出しごと失敗する)。
-      var chunks = chunkBySize(entries, entryRequestBytes, ZIP_REQUEST_BUDGET);
-      var base = zipName(list);
-      var total = 0;
-      for (var c = 0; c < chunks.length; c++) {
-        setHint(chunks.length === 1 ? "ZIP にまとめています…"
-          : "ZIP にまとめています… " + (c + 1) + "/" + chunks.length);
-        var z = await rpc("zipEntries", { entries: chunks[c] });
-        downloadBlob(chunks.length === 1 ? base : zipPartName(base, c + 1),
-          b64ToBytes(z.zipBase64), "application/zip");
-        total += z.count;
-      }
-      var suffix = chunks.length === 1 ? " ZIP でダウンロード開始しました。" : " ZIP " + chunks.length + " 本に分けてダウンロード開始しました。";
-      setHint('<b style="color:var(--good-ink)">' + total + "個のSVGを" + suffix + "</b>");
-      toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "ダウンロード開始しました");
+      await exportEntries(list, btn, prog);
     } catch (e) {
       // 失敗を握り潰すと「押しても何も起きない」になる。理由を出して再試行できる状態へ戻す。
       toast(String((e && e.message) || "書き出しに失敗しました"));
@@ -1023,6 +1058,47 @@ import { initRail, buildRail } from "./rail.js";
       if (btn) btn.disabled = false;
       if (prog) prog.hidden = true;
     }
+  }
+
+  // `exportSvg` をページ (または図) ごとに呼び、1 件なら直接ダウンロード、複数は ZIP へ集約する。
+  // 既存の全ページ書き出しと図の書き出しで同じ経路を使う (進捗・ZIP 分割・文言を二重に持たない)。
+  async function exportEntries(list, btn, prog) {
+    // 変換中はボタンを止め、総数が既知の i/N を進捗バーでも示す (フッター文字だけでは
+    // 固まったように見える)。SVG 変換はページごとに `exportSvg` を呼んで進捗を刻む。
+    if (btn) btn.disabled = true;
+    if (prog) { prog.hidden = false; prog.max = list.length; prog.value = 0; }
+    var entries = [];
+    for (var i = 0; i < list.length; i++) {
+      setHint("書き出し中 " + (i + 1) + "/" + list.length);
+      var item = await rpc("exportSvg", list[i]);
+      entries.push({ name: item.name, text: item.svg });
+      if (prog) prog.value = i + 1;
+    }
+    if (entries.length === 1) {
+      // `downloadBlob` はブラウザ任せの保存で、ブロックされたかを Web API から検知できない。
+      // 保存先を選ぶ FSA 経路 (上の `saveTextFile`) と違い、完了を断定しない文言にする。
+      downloadBlob(entries[0].name, entries[0].text, "image/svg+xml");
+      setHint('<b style="color:var(--good-ink)">1個のSVGのダウンロードを開始しました。</b>');
+      toast("1個のSVGのダウンロードを開始しました");
+      return;
+    }
+    // 複数ページは ZIP へ集約する — N 個の個別ダウンロード (Edge の連続 DL 確認に
+    // 阻まれ、ダウンロードフォルダも散らかる) を避ける。集約はサーバ側 `zipEntries`。
+    // 1 リクエストの本文上限を超える量は複数本へ分ける (1 本に詰めると書き出しごと失敗する)。
+    var chunks = chunkBySize(entries, entryRequestBytes, ZIP_REQUEST_BUDGET);
+    var base = zipName(list);
+    var total = 0;
+    for (var c = 0; c < chunks.length; c++) {
+      setHint(chunks.length === 1 ? "ZIP にまとめています…"
+        : "ZIP にまとめています… " + (c + 1) + "/" + chunks.length);
+      var z = await rpc("zipEntries", { entries: chunks[c] });
+      downloadBlob(chunks.length === 1 ? base : zipPartName(base, c + 1),
+        b64ToBytes(z.zipBase64), "application/zip");
+      total += z.count;
+    }
+    var suffix = chunks.length === 1 ? " ZIP でダウンロード開始しました。" : " ZIP " + chunks.length + " 本に分けてダウンロード開始しました。";
+    setHint('<b style="color:var(--good-ink)">' + total + "個のSVGを" + suffix + "</b>");
+    toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "ダウンロード開始しました");
   }
 
   // ── 16. ライフサイクル (サーバ常駐管理) ──
@@ -1049,6 +1125,7 @@ import { initRail, buildRail } from "./rail.js";
   window.__rpcReady.then(function () {
     window.__state = S; // E2E/デバッグ用の読み取り窓
     initRail({ render: render, tryNext: tryNext });
+    initFigure({ render: render });
     wireStatic();
     render();
     startLifecycle();

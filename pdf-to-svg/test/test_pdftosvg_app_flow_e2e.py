@@ -304,3 +304,79 @@ def test_list_fetch_failure_clears_rows_and_offers_retry(e2e_page):
     heal_rpc()
     page.click("#trim-dyn [data-retry]")
     expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
+
+
+FIG_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "stewardship_sample.pdf")
+
+
+@pytest.fixture(scope="module")
+def stewardship_pdf():
+    """実 PDF を模した合成ページ (見出し・本文・帯・曲線・ラベル・QR 枠)。外部著作物は使わない。"""
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((43, 150), "（3）当社のスチュワードシップ活動", fontname="japan", fontsize=11)
+    page.insert_text((43, 175), "当社は「責任ある機関投資家」として、エンゲージメント、議決権行使、投資の意思決定におけるESGの考慮を3つの柱として", fontname="japan", fontsize=8)
+    page.draw_rect(fitz.Rect(113, 249, 483, 284), color=None, fill=(0, 0.62, 0.71))
+    page.insert_text((224, 275), "投資リターンの最大化", fontname="japan", fontsize=13, color=(1, 1, 1))
+    shape = page.new_shape()
+    shape.draw_bezier((220, 330), (300, 300), (330, 480), (400, 490))
+    shape.finish(color=(0.8, 0.2, 0.3), width=6)
+    shape.commit()
+    page.insert_text((85, 478), "エンゲージメント", fontname="japan", fontsize=9, color=(0.85, 0.55, 0.1))
+    page.insert_text((430, 354), "議決権行使", fontname="japan", fontsize=9, color=(0.2, 0.6, 0.3))
+    page.insert_text((104, 366), "におけるESGの考慮", fontname="japan", fontsize=9, color=(0.8, 0.2, 0.3))
+    page.draw_rect(fitz.Rect(113, 526, 483, 596), color=None, fill=(0, 0.62, 0.71))
+    page.insert_text((162, 574), "［フィデューシャリー・デューティーの実践］", fontname="japan", fontsize=9, color=(1, 1, 1))
+    page.draw_rect(fitz.Rect(113, 600, 483, 650), color=(0, 0, 0), width=0.8)
+    page.insert_text((190, 640), "https://www.smtam.jp/institutional/stewardship_initiatives/", fontsize=8)
+    page.insert_text((43, 700), "（4）自社ESGスコアについて", fontname="japan", fontsize=11)
+    doc.save(FIG_FIXTURE)
+    doc.close()
+    return FIG_FIXTURE
+
+
+def test_gray_figure_flow(e2e_page, stewardship_pdf):
+    """手順 1 でチェック → 手順 4 直行 → 検出図が採用済み → 切り出しグレー SVG を書き出す。"""
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+
+    page.check("#chk-gray")
+    expect(page.locator("#gray-skipnote")).to_be_visible()
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(stewardship_pdf)
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
+    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
+    expect(page.locator("#pagenav-4")).to_be_visible()
+    # 検出できたページは最初から採用済み (実線 1 つ)
+    expect(page.locator("#fig-stage .fig-cand.sel")).to_have_count(1, timeout=15_000)
+    expect(page.locator("#exp-num")).to_have_text("1")
+    expect(page.locator("#pagenav-4 .pg-row2.done")).to_have_count(1)
+
+    # × で外すと 0 件になり書き出せない。候補 (点線) をクリックすると戻る
+    page.click("#fig-stage .fig-cand.sel .del")
+    expect(page.locator("#exp-num")).to_have_text("0")
+    expect(page.locator("#btn-export")).to_be_disabled()
+    page.click("#fig-stage .fig-cand:not(.sel)")
+    expect(page.locator("#exp-num")).to_have_text("1")
+
+    with page.expect_download() as dl_info:
+        page.click("#btn-export")
+    download = dl_info.value
+    assert download.suggested_filename == "stewardship_sample_p1_fig1_gray.svg"
+    svg_text = Path(download.path()).read_text(encoding="utf8")
+    assert 'clip-path="url(#clip-export)"' in svg_text
+    assert not re.search(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"', svg_text)  # 有彩色が残らない
+    assert "投資リターンの最大化" in svg_text                                  # 文字は文字のまま
+    assert "自社ESGスコア" not in svg_text                                      # 図の外は含まない
+
+    # 戻るは手順 1 へ (手順 3 ではない)
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
+    page.uncheck("#chk-gray")
