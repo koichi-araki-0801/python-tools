@@ -6,6 +6,7 @@ GUI なしでテスト可能・フォント名の崩れも起きない。
 from __future__ import annotations
 
 import base64
+import re
 from typing import Callable, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
@@ -27,6 +28,18 @@ from model.elements import (
 
 def _fmt(v: float) -> str:
     return f"{v:.3f}".rstrip("0").rstrip(".")
+
+
+def _clip_id(rect: Rect) -> str:
+    """clip 矩形ごとに決定的な ``<clipPath>`` id を作る。
+
+    固定 id ``clip-export`` のままだと、複数ページの SVG を 1 文書へ inline したときに
+    id が衝突し、後勝ちの `<clipPath>` だけが効いてしまう。座標を id に含めれば
+    同一モデル・同一 clip から常に同じ id になり (決定性は保つ)、矩形が違えば別の id に
+    なる。XML id として安全な文字だけに寄せる (小数点の `.` は許可リストに無いので `_` へ畳む)。
+    """
+    raw = "clip-" + _fmt(rect.x) + "-" + _fmt(rect.y) + "-" + _fmt(rect.w) + "-" + _fmt(rect.h)
+    return re.sub(r"[^0-9A-Za-z_-]", "_", raw)
 
 
 # 既知拡張子だけの固定表 (`web/server.py` の `_MIME` と同型)。PDF から抽出した画像の ext は
@@ -102,9 +115,11 @@ def page_to_svg(
             raise ValueError(f"clip must have positive size: {clip!r}")
         # 交差する要素のはみ出しは標準の clipPath で切る (Office / Illustrator でも効く)。
         # 属性は _attr 経由で組む (f-string で直接組むと test_export_escaping が止める)。
+        # id は clip 矩形ごとに決定的にする (複数ページを 1 文書へ inline しても衝突しない)。
+        clip_id = _clip_id(rect)
         lines.append(
             "<defs><clipPath "
-            + _attr("id", "clip-export")
+            + _attr("id", clip_id)
             + "><rect "
             + _attr("x", _fmt(rect.x))
             + " "
@@ -115,7 +130,7 @@ def page_to_svg(
             + _attr("height", _fmt(rect.h))
             + "/></clipPath></defs>"
         )
-        lines.append("<g " + _attr("clip-path", "url(#clip-export)") + ">")
+        lines.append("<g " + _attr("clip-path", "url(#" + clip_id + ")") + ">")
 
     # スキャン背景
     if page.background is not None:

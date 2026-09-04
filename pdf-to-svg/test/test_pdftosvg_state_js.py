@@ -411,3 +411,29 @@ def test_seed_treats_null_in_flight_marker_as_first_time(st):
     js(st, "window.__st.S.figCand['0:0'] = null")
     js(st, "r => window.__st.seedFigSel(0, [r])", r)
     assert js(st, "window.__st.figSelOf(0)") == [r]
+
+
+def test_svg_keys_returns_both_color_and_gray_keys(st):
+    assert js(st, "window.__st.svgKeys(1, 2)") == ["1:2", "1:2:g"]
+
+
+def test_svg_key_delegates_to_svg_keys(st):
+    assert js(st, "window.__st.svgKey(1, 2)") == js(st, "window.__st.svgKeys(1, 2)[0]")
+    js(st, "window.__st.S.gray = true")
+    assert js(st, "window.__st.svgKey(1, 2)") == js(st, "window.__st.svgKeys(1, 2)[1]")
+
+
+def test_adopted_figures_lists_all_pages_regardless_of_exp_mode(st):
+    a = {"x": 1, "y": 2, "w": 3, "h": 4}
+    b = {"x": 5, "y": 6, "w": 7, "h": 8}
+    js(st, "([a, b]) => { window.__st.figSelOf(0).push(a); window.__st.figSelOf(3).push(a, b); }", [a, b])
+    js(st, "window.__st.S.expMode = 'page'; window.__st.S.page = 0")  # 一覧は expMode に関係なく全ページ
+    assert js(st, "window.__st.adoptedFigures()") == [
+        {"fileIndex": 0, "pageInFile": 0, "figIndex": 1, "rect": a},
+        {"fileIndex": 1, "pageInFile": 1, "figIndex": 1, "rect": a},
+        {"fileIndex": 1, "pageInFile": 1, "figIndex": 2, "rect": b},
+    ]
+
+
+def test_adopted_figures_is_empty_before_any_adoption(st):
+    assert js(st, "window.__st.adoptedFigures()") == []

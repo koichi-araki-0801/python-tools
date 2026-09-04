@@ -164,6 +164,7 @@ def test_four_step_flow(e2e_page):
     expect(page.locator("#fig-editor")).to_be_hidden()
     expect(page.locator("#exp-modes-gray")).to_be_hidden()
     expect(page.locator("#pagenav-4")).to_be_hidden()
+    expect(page.locator("#fig-selist-box")).to_be_hidden()
     # ファイル名の案内は色モードの文言のまま (グレーモード専用の _fig1_gray. にならない)
     expect(page.locator("#exp-name-hint")).to_contain_text("_p1.svg")
 
@@ -381,13 +382,18 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     expect(page.locator("#pagenav-4 .pg-row2.done")).to_have_count(1)
     # 書き出しファイル名の案内はグレーモード専用の文言になる
     expect(page.locator("#exp-name-hint")).to_contain_text("_fig1_gray.svg")
+    # 右ペインの「採用した図」一覧にもファイル名 (書き出し予定名) が出る
+    expect(page.locator("#fig-selist .serow")).to_have_count(1)
+    expect(page.locator("#fig-selist .serow")).to_contain_text("stewardship_sample_p2_fig1_gray.svg")
 
     # × で外すと 0 件になり書き出せない。候補 (点線) をクリックすると戻る
     page.click("#fig-stage .fig-cand.sel .del")
     expect(page.locator("#exp-num")).to_have_text("0")
     expect(page.locator("#btn-export")).to_be_disabled()
+    expect(page.locator("#fig-selist .serow")).to_have_count(0)
     page.click("#fig-stage .fig-cand:not(.sel)")
     expect(page.locator("#exp-num")).to_have_text("1")
+    expect(page.locator("#fig-selist .serow")).to_have_count(1)
 
     # 採用済みを角ハンドルで伸縮しても元候補は再出現しない (二重書き出しの防止)
     handle = page.locator("#fig-stage .fig-cand.sel .h.se")
@@ -404,7 +410,9 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     download = dl_info.value
     assert download.suggested_filename == "stewardship_sample_p2_fig1_gray.svg"
     svg_text = Path(download.path()).read_text(encoding="utf8")
-    assert 'clip-path="url(#clip-export)"' in svg_text
+    # id は clip 矩形ごとの決定的な値 (`clip-export` 固定ではない。複数ページを 1 文書へ
+    # inline しても id が衝突しないようにするための変更)
+    assert re.search(r'clip-path="url\(#clip-[\w-]+\)"', svg_text)
     assert not re.search(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"', svg_text)  # 有彩色が残らない
     assert "投資リターンの最大化" in svg_text                                  # 文字は文字のまま
     assert "自社ESGスコア" not in svg_text                                      # 図の外は含まない
@@ -419,6 +427,7 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     page.mouse.up()
     expect(page.locator("#exp-num")).to_have_text("2")
     expect(page.locator("#fig-stage .fig-cand.sel")).to_have_count(2)
+    expect(page.locator("#fig-selist .serow")).to_have_count(2)
 
     with page.expect_download() as dl_info2:
         page.click("#btn-export")

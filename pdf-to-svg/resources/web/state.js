@@ -65,8 +65,12 @@ function selCount() { return selKeys().length; }
 function clearSel() { var s = selSet(); Object.keys(s).forEach(function (k) { delete s[k]; }); }
 
 function figKey(pg) { return pg.fileIndex + ":" + pg.pageInFile; }
+/** ページ SVG キャッシュが取りうる 2 キー (カラー / グレー)。`invalidate` はモードを問わず
+ *  両方消したいのでこちらを使い、`svgKey` は現在のモードに応じてどちらか片方を返す
+ *  (キー生成の書式をここ 1 箇所にまとめ、2 箇所で手組みして食い違うのを防ぐ)。 */
+function svgKeys(fi, pi) { return [fi + ":" + pi, fi + ":" + pi + ":g"]; }
 /** ページ SVG キャッシュのキー。グレーは別の SVG なのでキーを分ける (モード切替で混ざらない) */
-function svgKey(fi, pi) { return fi + ":" + pi + (S.gray ? ":g" : ""); }
+function svgKey(fi, pi) { return svgKeys(fi, pi)[S.gray ? 1 : 0]; }
 /** 通しページ g の採用矩形配列 (無ければ作る)。呼ぶだけで `S.figSel` に空配列を作ってしまうため、
  *  「まだ候補を記録していない」を見分けたい側 (`seedFigSel`) からは使わない (`figSelPeek` を使う)。 */
 function figSelOf(g) {
@@ -212,6 +216,21 @@ function exportFigureList() {
   return out;
 }
 
+/** 手順 4 右ペイン「採用した図」一覧: 採用矩形を `{fileIndex, pageInFile, figIndex, rect}` に
+ *  展開する (DOM 非依存。`figSelPeek` 経由で読むだけなので非破壊)。`exportFigureList` は
+ *  書き出し範囲 (`S.expMode`) で対象を絞るのに対し、一覧は「今なにを採用済みか」を見せる
+ *  ものなので `S.expMode` に関係なく常に全ページ分を返す。 */
+function adoptedFigures() {
+  var out = [];
+  S.PAGES.forEach(function (pg, g) {
+    figSelPeek(g).forEach(function (r, i) {
+      out.push({ fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, figIndex: i + 1,
+        rect: { x: r.x, y: r.y, w: r.w, h: r.h } });
+    });
+  });
+  return out;
+}
+
 /** 項目列を送信サイズ予算で塊へ分ける。`sizeOf` は 1 件のバイト数を返す関数。
  *
  * ZIP 集約 (`zipEntries`) は SVG 本文をまるごと 1 リクエストで送るため、サーバの
@@ -248,7 +267,7 @@ function zipName(list) {
 export {
   S, counts, pass, initStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
-  figKey, svgKey, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList,
+  figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,

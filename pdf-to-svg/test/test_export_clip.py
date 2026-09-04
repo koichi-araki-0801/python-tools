@@ -74,9 +74,10 @@ def test_clip_sets_viewbox_and_drops_outside_elements():
     assert 'width="100"' in svg and 'height="100"' in svg
     assert "Hello" in svg                      # (10,10) は clip 内
     assert 'x="200"' not in svg               # (200,150) の矩形は clip 外
-    assert '<clipPath id="clip-export">' in svg
+    # id は clip 矩形ごとに決定的 (座標を含む)。複数ページを 1 文書に inline しても衝突しない。
+    assert '<clipPath id="clip-0-0-100-100">' in svg
     assert '<rect x="0" y="0" width="100" height="100"/>' in svg
-    assert '<g clip-path="url(#clip-export)">' in svg
+    assert '<g clip-path="url(#clip-0-0-100-100)">' in svg
     assert svg.rstrip().endswith("</g>\n</svg>")
 
 
@@ -85,6 +86,19 @@ def test_clip_offset_origin():
     assert 'viewBox="100 100 100 100"' in svg
     assert "Hello" not in svg                  # clip 外
     assert 'd="M120 120' in svg                # 曲線は clip 内
+    assert '<clipPath id="clip-100-100-100-100">' in svg
+    assert '<g clip-path="url(#clip-100-100-100-100)">' in svg
+
+
+def test_clip_id_is_unique_per_rect_within_a_document():
+    """異なる clip 矩形を同じページから 2 回書き出しても id が衝突しない
+    (2 ページ分の SVG を 1 文書へ inline したときに `<clipPath>` の id 重複を防ぐ)。"""
+    svg1 = page_to_svg(_page(), clip=Rect(0, 0, 100, 100))
+    svg2 = page_to_svg(_page(), clip=Rect(10, 20, 30, 40))
+    id1 = re.search(r'clipPath id="([^"]+)"', svg1).group(1)
+    id2 = re.search(r'clipPath id="([^"]+)"', svg2).group(1)
+    assert id1 != id2
+    assert id2 == "clip-10-20-30-40"
 
 
 def test_clip_with_zero_size_is_rejected():

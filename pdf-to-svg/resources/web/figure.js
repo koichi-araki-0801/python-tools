@@ -7,7 +7,7 @@
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
 import { esc } from "./dom.js";
 import { clientToPage, rectIoU } from "./geometry.js";
-import { S, figKey, figSelOf, figSelPeek, figCount } from "./state.js";
+import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";
 
 var ui = { render: function () {} };
 function initFigure(deps) { ui = deps; }
@@ -55,6 +55,29 @@ function buildFigRail(navId) {
   var nav = document.getElementById(navId);
   nav.innerHTML = html;
   nav.querySelectorAll("[data-g]").forEach(function (row) {
+    row.addEventListener("click", function () { S.page = +row.dataset.g; ui.render(); });
+  });
+}
+
+/** 右ペイン「採用した図」一覧: ファイル名 (書き出し予定名) と pt 寸法。クリックでそのページへ移動する。
+ *  `adoptedFigures()` は `S.expMode` に関係なく全ページ分を返すので、一覧は書き出し範囲の
+ *  設定を変えても変わらない (範囲はあくまで書き出し対象を絞るだけ)。 */
+function buildFigSelist(elId) {
+  var el = document.getElementById(elId); if (!el) return;
+  var list = adoptedFigures();
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">まだ図を採用していません。ページ上の候補をクリックしてください。</div>';
+    return;
+  }
+  el.innerHTML = list.map(function (it) {
+    var f = S.FILES[it.fileIndex];
+    var stem = f ? f.name.replace(/\.pdf$/i, "") : "";
+    var name = stem + "_p" + (it.pageInFile + 1) + "_fig" + it.figIndex + "_gray.svg";
+    var g = (S.FILE_START[it.fileIndex] || 0) + it.pageInFile;
+    return '<div class="serow" data-g="' + g + '"><span class="sw"></span><span class="fn">' + esc(name) +
+      '</span><span class="dim">' + Math.round(it.rect.w) + " × " + Math.round(it.rect.h) + "</span></div>";
+  }).join("");
+  el.querySelectorAll("[data-g]").forEach(function (row) {
     row.addEventListener("click", function () { S.page = +row.dataset.g; ui.render(); });
   });
 }
@@ -162,4 +185,4 @@ function installFigDrag(host) {
   });
 }
 
-export { initFigure, buildFigRail, drawFigOverlay, installFigDrag };
+export { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag };

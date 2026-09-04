@@ -11,12 +11,12 @@ import {
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   applyState, invalidateAll, nextPending, firstPending, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
-  figKey, svgKey, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList,
+  figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
-import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figure.js";
+import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
 
 (function () {
   "use strict";
@@ -178,7 +178,7 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     if (!S.svgCache[k]) S.svgCache[k] = await rpc("pageSvg", { fileIndex: fi, pageInFile: pi, grayscale: S.gray });
     return S.svgCache[k];
   }
-  function invalidate(fi, pi) { delete S.svgCache[fi + ":" + pi]; delete S.svgCache[fi + ":" + pi + ":g"]; }
+  function invalidate(fi, pi) { svgKeys(fi, pi).forEach(function (k) { delete S.svgCache[k]; }); }
 
   // フィット率 (現行どおりクランプ 0.05〜3) にズーム倍率を掛けた最終スケールを当てる。
   // zoom=1 なら従来表示と一致。
@@ -735,6 +735,7 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     document.getElementById("pagenav-4").hidden = !S.gray;
     document.getElementById("fig-editor").hidden = !S.gray;
     document.getElementById("exp-modes-gray").hidden = !S.gray;
+    document.getElementById("fig-selist-box").hidden = !S.gray;
     document.getElementById("export-title").textContent = S.gray ? "図をグレーで書き出す" : "SVG に書き出す";
     document.getElementById("exp-name-hint").textContent = S.gray
       ? "元ファイル名_p8_fig1_gray.svg …（複数は元ファイル名_gray_svg.zip）"
@@ -811,6 +812,7 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     }
     if (S.phase === 4 && S.gray && S.TOTAL) {
       buildFigRail("pagenav-4");
+      buildFigSelist("fig-selist");
       document.getElementById("pgnav-4").innerHTML = pageLabel();
       var host4 = document.getElementById("fig-stage");
       ensureFigCand(S.page);
