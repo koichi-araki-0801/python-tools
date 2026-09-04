@@ -19,6 +19,19 @@ var CAND_HIDE_IOU = 0.5;
 
 function copyRect(r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; }
 
+// ページ外へはみ出した矩形をページ内へ収める (サーバの clip 検証は「ページ内・正の寸法」を要求する)
+function clampToPage(r, w, h) {
+  var x0 = Math.max(0, Math.min(r.x, w)), y0 = Math.max(0, Math.min(r.y, h));
+  var x1 = Math.max(0, Math.min(r.x + r.w, w)), y1 = Math.max(0, Math.min(r.y + r.h, h));
+  return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+// ページ幅・高さ (pt)。viewBox の原点は常に 0,0 (書き出し矩形はページ全体) なので width/height だけ見る
+function pageSizeOf(svgEl) {
+  var vb = svgEl.viewBox.baseVal;
+  return { w: vb.width, h: vb.height };
+}
+
 /** 左レール: ページ一覧 + 候補/採用のバッジ。クリックでページ移動 */
 function buildFigRail(navId) {
   var html = '<div class="pl-head"><div class="pl-title">全 <b>' + S.TOTAL + "</b> ページ　採用 <b>" + figCount() + "</b> 図</div></div>";
@@ -28,8 +41,9 @@ function buildFigRail(navId) {
     html += '<div class="pl-file"><span class="fname">' + esc(f.name) + "</span></div>";
     for (var p = 0; p < f.pages; p++) {
       var gg = g + p;
+      var pg = S.PAGES[gg]; if (!pg) continue; // ページ列を再取得中などで一時的に欠けることがある (figSelPeek と同じ流儀)
       var n = figSelPeek(gg).length;
-      var cand = (S.figCand[figKey(S.PAGES[gg])] || []).length;
+      var cand = (S.figCand[figKey(pg)] || []).length;
       var cls = n ? "done" : (cand ? "pending" : "none");
       var tag = n ? '<span class="tg t-done">採用 ' + n + "</span>" : (cand ? '<span class="tg t-pending">候補</span>' : "");
       html += '<div class="pg-row2 ' + cls + (gg === S.page ? " current" : "") + '" data-g="' + gg + '">' +
@@ -68,6 +82,10 @@ function drawFigOverlay(host) {
     box.innerHTML = '<span class="tag">候補 ' + (i + 1) + "</span>";
     placeRect(box, r, svgEl, host);
     box.addEventListener("click", function (e) { e.stopPropagation(); sel.push(copyRect(r)); ui.render(); });
+    // `tabindex=0` の div のため Enter/Space のキーボード起動を自前で足す (dropzone と同じ流儀。app.js 参照)。
+    box.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); sel.push(copyRect(r)); ui.render(); }
+    });
     host.appendChild(box);
   });
   sel.forEach(function (r, i) {
@@ -113,8 +131,12 @@ function installFigDrag(host) {
       d.rubber.style.width = (x2 - x1) + "px"; d.rubber.style.height = (y2 - y1) + "px";
       return;
     }
-    // resize: 掴んだ角を動かし、反対の角は固定する
+    // resize: 掴んだ角を動かし、反対の角は固定する。動かす側の点はページ内へクランプする
+    // (clientToPage はページの外へも線形に外挿するため、そのままだとサーバの clip 検証に落ちる)。
     var p = clientToPage(svgEl, e.clientX, e.clientY);
+    var sz = pageSizeOf(svgEl);
+    p.x = Math.max(0, Math.min(p.x, sz.w));
+    p.y = Math.max(0, Math.min(p.y, sz.h));
     var o = d.orig, c = d.corner;
     var left = c.indexOf("w") >= 0 ? p.x : o.x, right = c.indexOf("e") >= 0 ? p.x : o.x + o.w;
     var top = c.indexOf("n") >= 0 ? p.y : o.y, bottom = c.indexOf("s") >= 0 ? p.y : o.y + o.h;
@@ -131,9 +153,11 @@ function installFigDrag(host) {
     var svgEl = host.querySelector("svg"); if (!svgEl) return;
     var a = clientToPage(svgEl, d.origin.x, d.origin.y);
     var b = clientToPage(svgEl, e.clientX, e.clientY);
-    var w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
-    if (w < MIN_SIZE_PT || h < MIN_SIZE_PT) return;
-    figSelOf(S.page).push({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: w, h: h });
+    var raw = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
+    var sz = pageSizeOf(svgEl);
+    var r = clampToPage(raw, sz.w, sz.h); // ページ外までドラッグしても採用矩形はページ内に収める
+    if (r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT) return;
+    figSelOf(S.page).push(r);
     ui.render();
   });
 }

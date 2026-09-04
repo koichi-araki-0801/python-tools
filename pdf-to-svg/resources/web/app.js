@@ -736,6 +736,9 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     document.getElementById("fig-editor").hidden = !S.gray;
     document.getElementById("exp-modes-gray").hidden = !S.gray;
     document.getElementById("export-title").textContent = S.gray ? "図をグレーで書き出す" : "SVG に書き出す";
+    document.getElementById("exp-name-hint").textContent = S.gray
+      ? "元ファイル名_p8_fig1_gray.svg …（複数は元ファイル名_gray_svg.zip）"
+      : "元ファイル名_p1.svg, _p2.svg …";
     document.getElementById("gray-mode-box").classList.toggle("on", S.gray);
     steps.forEach(function (st) {
       var n = +st.dataset.step; var done = n < S.phase, active = n === S.phase;
@@ -762,7 +765,8 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     } else if (S.phase === 4 && S.gray) {
       var pg4 = S.PAGES[S.page];
       setHint("図を確認して書き出します。採用 <b>" + figCount() + "</b> 図");
-      ctxText.textContent = S.FILES[pg4.fileIndex].name + " ・ " + (pg4.pageInFile + 1) + "/" + S.FILES[pg4.fileIndex].pages + " ページ";
+      // pg4 はページ列の再取得中などで一時的に欠けうる (figSelPeek と同じ流儀。無ければ表示だけ諦める)
+      if (pg4) ctxText.textContent = S.FILES[pg4.fileIndex].name + " ・ " + (pg4.pageInFile + 1) + "/" + S.FILES[pg4.fileIndex].pages + " ページ";
       refreshExport();
       document.getElementById("export-summary").innerHTML =
         S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>採用 " + figCount() + " 図・グレースケール";
@@ -811,7 +815,7 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
       var host4 = document.getElementById("fig-stage");
       ensureFigCand(S.page);
       // 検出ゼロ (取得済みで候補も採用も無い) のページは手動へ誘導する (spec 2 節 4.)
-      var candCur = S.figCand[figKey(S.PAGES[S.page])];
+      var candCur = pg4 && S.figCand[figKey(pg4)];
       document.getElementById("fig-hint").innerHTML =
         (Array.isArray(candCur) && !candCur.length && !figSelPeek(S.page).length)
           ? "このページに図は見つかりませんでした。範囲を<b>ドラッグ</b>で指定してください"
@@ -1127,7 +1131,18 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
     var entries = [];
     for (var i = 0; i < list.length; i++) {
       setHint("書き出し中 " + (i + 1) + "/" + list.length);
-      var item = await rpc("exportSvg", list[i]);
+      var item;
+      if (list[i].clip) {
+        // グレーモード (図の切り出し) はどのページ・どの図で失敗したかが分からないと
+        // 探し直せない。カラー側 (clip 無し) は従来どおりの文言のまま変えない。
+        try {
+          item = await rpc("exportSvg", list[i]);
+        } catch (e) {
+          throw new Error((list[i].pageInFile + 1) + " ページ目の図 " + (list[i].figIndex || "") + ": " + String((e && e.message) || e));
+        }
+      } else {
+        item = await rpc("exportSvg", list[i]);
+      }
       entries.push({ name: item.name, text: item.svg });
       if (prog) prog.value = i + 1;
     }

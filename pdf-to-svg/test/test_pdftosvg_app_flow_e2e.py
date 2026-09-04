@@ -12,6 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,8 @@ def test_four_step_flow(e2e_page):
     expect(page.locator("#fig-editor")).to_be_hidden()
     expect(page.locator("#exp-modes-gray")).to_be_hidden()
     expect(page.locator("#pagenav-4")).to_be_hidden()
+    # ファイル名の案内は色モードの文言のまま (グレーモード専用の _fig1_gray. にならない)
+    expect(page.locator("#exp-name-hint")).to_contain_text("_p1.svg")
 
     # 書き出しの失敗は握り潰さず通知し、ボタンを押せる状態へ戻す
     page.evaluate("""() => {
@@ -367,15 +370,17 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
 
     # 手順 4 に入ると全ページを検出し、最初に見つかったページ (2 ページ目) へ自動で移動する
-    expect(page.locator("#nav-hint")).not_to_contain_text("図を探しています", timeout=15_000)
+    # (`#exp-num` が "1" になることで「検出済み・採用済み」を非空虚に確認する)
+    expect(page.locator("#exp-num")).to_have_text("1", timeout=15_000)
     expect(page.locator("#pagenav-4 .pg-row2.current")).to_have_text(re.compile("2 ページ"))
 
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
     expect(page.locator("#pagenav-4")).to_be_visible()
     # 検出できたページは最初から採用済み (実線 1 つ)
-    expect(page.locator("#fig-stage .fig-cand.sel")).to_have_count(1, timeout=15_000)
-    expect(page.locator("#exp-num")).to_have_text("1")
+    expect(page.locator("#fig-stage .fig-cand.sel")).to_have_count(1)
     expect(page.locator("#pagenav-4 .pg-row2.done")).to_have_count(1)
+    # 書き出しファイル名の案内はグレーモード専用の文言になる
+    expect(page.locator("#exp-name-hint")).to_contain_text("_fig1_gray.svg")
 
     # × で外すと 0 件になり書き出せない。候補 (点線) をクリックすると戻る
     page.click("#fig-stage .fig-cand.sel .del")
@@ -403,6 +408,31 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     assert not re.search(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"', svg_text)  # 有彩色が残らない
     assert "投資リターンの最大化" in svg_text                                  # 文字は文字のまま
     assert "自社ESGスコア" not in svg_text                                      # 図の外は含まない
+
+    # 空白部分からページの外へ大きくドラッグしても、追加される矩形はページ内へ収まる
+    # (figure.js の clampToPage。サーバの clip 検証「ページ内・正の寸法」に落ちて
+    # 書き出しごと失敗する退行を防ぐ)。
+    svg_box = page.locator("#fig-stage svg").bounding_box()
+    page.mouse.move(svg_box["x"] + 15, svg_box["y"] + 15)  # ページ左上のブランク余白
+    page.mouse.down()
+    page.mouse.move(svg_box["x"] + svg_box["width"] + 300, svg_box["y"] + svg_box["height"] + 300, steps=5)
+    page.mouse.up()
+    expect(page.locator("#exp-num")).to_have_text("2")
+    expect(page.locator("#fig-stage .fig-cand.sel")).to_have_count(2)
+
+    with page.expect_download() as dl_info2:
+        page.click("#btn-export")
+    zip_path = dl_info2.value.path()
+    with zipfile.ZipFile(zip_path) as z:
+        names = sorted(z.namelist())
+        assert names == ["stewardship_sample_p2_fig1_gray.svg", "stewardship_sample_p2_fig2_gray.svg"]
+        fig2_svg = z.read("stewardship_sample_p2_fig2_gray.svg").decode("utf8")
+    m = re.search(r'viewBox="([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)"', fig2_svg)
+    assert m, "viewBox 属性が見つからない"
+    vx, vy, vw, vh = (float(g) for g in m.groups())
+    # サーバの clip 検証と同じ許容量 (+0.5pt) で、ページ (595 x 842pt) 内に収まっていることを確かめる
+    assert vx >= 0 and vy >= 0
+    assert vx + vw <= 595.5 and vy + vh <= 842.5
 
     # 戻るは手順 1 へ (手順 3 ではない)
     page.click("#btn-back")

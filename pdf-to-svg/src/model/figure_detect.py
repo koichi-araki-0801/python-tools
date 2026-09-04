@@ -9,7 +9,9 @@
   単体テストできる)。
 - 1 ページにつき最大 1 矩形。見つからなければ ``None`` (UI は候補なし → 手動へ倒す)。
 - 資源上限: 不動点ループは「取り込んだ要素は二度と候補にしない」ので、反復は要素数で
-  上界される (必ず返る)。
+  上界される (必ず返る)。最悪計算量は図形数 n に対し O(n^2) (実測: 図形 6,000 件で
+  約 1.6 秒。既存の資源上限 `MAX_PAGE_ELEMENTS` の件数まで外挿すると約 6.5 秒)。
+  必ず終了するため、上限を超えて回り続けることはない。
 """
 from __future__ import annotations
 
@@ -85,7 +87,10 @@ def detect_stewardship_figure(page: Page) -> Optional[Rect]:
     for e in labels[1:]:
         box = _union(box, e.bbox)
 
-    # 近傍の図形・画像を不動点まで取り込む (背景と帯は除外)
+    # 近傍の図形・画像を不動点まで取り込む (背景と帯は除外)。
+    # 最悪計算量は図形数の 2 乗 (外側 while が最大 n 周・内側 for が毎周 pending を全走査)。
+    # 実測: 図形 6,000 件で約 1.6 秒、`MAX_PAGE_ELEMENTS` まで外挿しても約 6.5 秒で
+    # 必ず終了する (docstring 参照)。
     pending = [
         e for e in elements
         if isinstance(e, _SHAPE_TYPES)
