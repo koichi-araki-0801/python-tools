@@ -7,7 +7,7 @@
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
 import { esc } from "./dom.js";
 import { clientToPage, rectIoU } from "./geometry.js";
-import { S, figKey, figSelOf, figCount } from "./state.js";
+import { S, figKey, figSelOf, figSelPeek, figCount } from "./state.js";
 
 var ui = { render: function () {} };
 function initFigure(deps) { ui = deps; }
@@ -28,7 +28,7 @@ function buildFigRail(navId) {
     html += '<div class="pl-file"><span class="fname">' + esc(f.name) + "</span></div>";
     for (var p = 0; p < f.pages; p++) {
       var gg = g + p;
-      var n = figSelOf(gg).length;
+      var n = figSelPeek(gg).length;
       var cand = (S.figCand[figKey(S.PAGES[gg])] || []).length;
       var cls = n ? "done" : (cand ? "pending" : "none");
       var tag = n ? '<span class="tg t-done">採用 ' + n + "</span>" : (cand ? '<span class="tg t-pending">候補</span>' : "");
@@ -120,7 +120,7 @@ function installFigDrag(host) {
     var top = c.indexOf("n") >= 0 ? p.y : o.y, bottom = c.indexOf("s") >= 0 ? p.y : o.y + o.h;
     d.rect.x = Math.min(left, right); d.rect.y = Math.min(top, bottom);
     d.rect.w = Math.max(MIN_SIZE_PT, Math.abs(right - left)); d.rect.h = Math.max(MIN_SIZE_PT, Math.abs(bottom - top));
-    var box = host.querySelector('.fig-cand.sel[data-sel="' + figSelOf(S.page).indexOf(d.rect) + '"]');
+    var box = host.querySelector('.fig-cand.sel[data-sel="' + figSelPeek(S.page).indexOf(d.rect) + '"]');
     if (box) placeRect(box, d.rect, svgEl, host);
   });
   window.addEventListener("mouseup", function (e) {

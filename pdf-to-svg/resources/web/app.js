@@ -647,21 +647,73 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
   // ── 14. 描画 ──
   function setHint(html) { document.getElementById("nav-hint").innerHTML = html; }
 
-  // 候補を未取得のページだけ取りに行き、届いたら 1 回だけ再描画する (取得済みなら何もしないので再帰しない)。
-  async function ensureFigCand(g) {
+  // RPC で通しページ g の候補を取得し `S.figCand`/`S.figSel` へ記録する下位ヘルパ。
+  // 「未取得か」の判定と二重要求ガードは呼び出し側 (`ensureFigCand`/`prefetchFigCand`) が持つ
+  // (ここでは無条件に取得しに行く)。取得中は `null` を立てる (`seedFigSel` の初回判定にも使う印)。
+  async function fetchFigCand(g) {
     var pg = S.PAGES[g]; if (!pg) return;
     var k = figKey(pg);
-    if (S.figCand[k] !== undefined) return;
-    S.figCand[k] = null; // 取得中の印 (二重要求を防ぐ)
+    S.figCand[k] = null;
     try {
       var res = await rpc("figureCandidates", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
       seedFigSel(g, res.rects || []);
     } catch (e) {
       delete S.figCand[k];
+      throw e;
+    }
+  }
+
+  // 候補を未取得のページだけ取りに行き、届いたら 1 回だけ再描画する (取得済みなら何もしないので再帰しない)。
+  async function ensureFigCand(g) {
+    var pg = S.PAGES[g]; if (!pg) return;
+    if (S.figCand[figKey(pg)] !== undefined) return;
+    try {
+      await fetchFigCand(g);
+    } catch (e) {
       toast("図の検出に失敗しました: " + String((e && e.message) || e));
       return;
     }
     if (S.phase === 4 && S.gray) render();
+  }
+
+  // 手順 4 (グレーモード) に入った直後、全ページの候補をまとめて取りに行き、最初に検出できた
+  // ページへ自動で移動する。ページを訪れるまで取得しない従来方式だと、利用者が図を手探りで
+  // 探すことになり自動化の趣旨に反する (spec §2.4/§8.2)。
+  var figPrefetching = false;
+  async function prefetchFigCand() {
+    if (figPrefetching) return;
+    figPrefetching = true;
+    var startPage = S.page;
+    var toastedFailure = false; // 複数ページが失敗しても通知は 1 回に抑える (連打しない)
+    try {
+      for (var g = 0; g < S.TOTAL; g++) {
+        if (!S.gray || S.phase !== 4) break; // 途中でグレーモードを抜けたら追跡をやめる
+        var pg = S.PAGES[g]; if (!pg) continue;
+        if (Array.isArray(S.figCand[figKey(pg)])) continue; // 取得済みはスキップ
+        setHint("図を探しています " + (g + 1) + "/" + S.TOTAL);
+        try {
+          await fetchFigCand(g);
+        } catch (e) {
+          if (!toastedFailure) {
+            toastedFailure = true;
+            toast("図の検出に失敗しました: " + String((e && e.message) || e));
+          }
+        }
+      }
+    } finally {
+      figPrefetching = false;
+    }
+    if (!S.gray || S.phase !== 4) return;
+    if (S.page === startPage) {
+      // 利用者がまだページを動かしていなければ、最初に検出できたページへ連れて行く。
+      var found = -1;
+      for (var i = 0; i < S.TOTAL; i++) { if (figSelPeek(i).length) { found = i; break; } }
+      if (found >= 0) S.page = found;
+      render();
+      if (found < 0) setHint("図が見つかりませんでした。ページを選び、範囲をドラッグで指定してください");
+    } else {
+      render(); // 利用者が既に動かしていたら位置は変えず、レールの件数表示だけ最新化する
+    }
   }
 
   function render() {
@@ -771,7 +823,12 @@ import { initFigure, buildFigRail, drawFigOverlay, installFigDrag } from "./figu
 
   // ── 15. ナビゲーション ──
   function tryNext() {
-    if (S.phase === 1) { if (!S.TOTAL) return; S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; render(); return; }
+    if (S.phase === 1) {
+      if (!S.TOTAL) return;
+      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; render();
+      if (S.gray) prefetchFigCand();
+      return;
+    }
     if (S.phase === 2 || S.phase === 3) {
       var pend = counts(statusArr()).pend;
       if (pend > 0) { S.guarding = true; document.getElementById("guard-n").textContent = pend; render(); return; }

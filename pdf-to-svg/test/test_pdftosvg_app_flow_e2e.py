@@ -316,27 +316,35 @@ FIG_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "stewardship_s
 
 @pytest.fixture(scope="module")
 def stewardship_pdf():
-    """実 PDF を模した合成ページ (見出し・本文・帯・曲線・ラベル・QR 枠)。外部著作物は使わない。"""
+    """実 PDF を模した合成 2 ページ。1 ページ目は図の無い見出し・本文のみ、2 ページ目に
+    図 (見出し・本文・帯・曲線・ラベル・QR 枠) を置く。全ページ検出→自動移動を検証するため、
+    図が「最初のページではない」構成にする。外部著作物は使わない。"""
     import fitz
 
     doc = fitz.open()
-    page = doc.new_page(width=595, height=842)
-    page.insert_text((43, 150), "（3）当社のスチュワードシップ活動", fontname="japan", fontsize=11)
-    page.insert_text((43, 175), "当社は「責任ある機関投資家」として、エンゲージメント、議決権行使、投資の意思決定におけるESGの考慮を3つの柱として", fontname="japan", fontsize=8)
-    page.draw_rect(fitz.Rect(113, 249, 483, 284), color=None, fill=(0, 0.62, 0.71))
-    page.insert_text((224, 275), "投資リターンの最大化", fontname="japan", fontsize=13, color=(1, 1, 1))
-    shape = page.new_shape()
+
+    page1 = doc.new_page(width=595, height=842)
+    page1.insert_text((43, 150), "（2）運用経過", fontname="japan", fontsize=11)
+    page1.insert_text((43, 175), "当期のファンドは国内外の株式市場の上昇を背景に、基準価額は堅調に推移しました。", fontname="japan", fontsize=8)
+
+    page2 = doc.new_page(width=595, height=842)
+    page2.insert_text((43, 150), "（3）当社のスチュワードシップ活動", fontname="japan", fontsize=11)
+    page2.insert_text((43, 175), "当社は「責任ある機関投資家」として、エンゲージメント、議決権行使、投資の意思決定におけるESGの考慮を3つの柱として", fontname="japan", fontsize=8)
+    page2.draw_rect(fitz.Rect(113, 249, 483, 284), color=None, fill=(0, 0.62, 0.71))
+    page2.insert_text((224, 275), "投資リターンの最大化", fontname="japan", fontsize=13, color=(1, 1, 1))
+    shape = page2.new_shape()
     shape.draw_bezier((220, 330), (300, 300), (330, 480), (400, 490))
     shape.finish(color=(0.8, 0.2, 0.3), width=6)
     shape.commit()
-    page.insert_text((85, 478), "エンゲージメント", fontname="japan", fontsize=9, color=(0.85, 0.55, 0.1))
-    page.insert_text((430, 354), "議決権行使", fontname="japan", fontsize=9, color=(0.2, 0.6, 0.3))
-    page.insert_text((104, 366), "におけるESGの考慮", fontname="japan", fontsize=9, color=(0.8, 0.2, 0.3))
-    page.draw_rect(fitz.Rect(113, 526, 483, 596), color=None, fill=(0, 0.62, 0.71))
-    page.insert_text((162, 574), "［フィデューシャリー・デューティーの実践］", fontname="japan", fontsize=9, color=(1, 1, 1))
-    page.draw_rect(fitz.Rect(113, 600, 483, 650), color=(0, 0, 0), width=0.8)
-    page.insert_text((190, 640), "https://www.smtam.jp/institutional/stewardship_initiatives/", fontsize=8)
-    page.insert_text((43, 700), "（4）自社ESGスコアについて", fontname="japan", fontsize=11)
+    page2.insert_text((85, 478), "エンゲージメント", fontname="japan", fontsize=9, color=(0.85, 0.55, 0.1))
+    page2.insert_text((430, 354), "議決権行使", fontname="japan", fontsize=9, color=(0.2, 0.6, 0.3))
+    page2.insert_text((104, 366), "におけるESGの考慮", fontname="japan", fontsize=9, color=(0.8, 0.2, 0.3))
+    page2.draw_rect(fitz.Rect(113, 526, 483, 596), color=None, fill=(0, 0.62, 0.71))
+    page2.insert_text((162, 574), "［フィデューシャリー・デューティーの実践］", fontname="japan", fontsize=9, color=(1, 1, 1))
+    page2.draw_rect(fitz.Rect(113, 600, 483, 650), color=(0, 0, 0), width=0.8)
+    page2.insert_text((190, 640), "https://www.smtam.jp/institutional/stewardship_initiatives/", fontsize=8)
+    page2.insert_text((43, 700), "（4）自社ESGスコアについて", fontname="japan", fontsize=11)
+
     doc.save(FIG_FIXTURE)
     doc.close()
     return FIG_FIXTURE
@@ -357,6 +365,11 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
 
     page.click("#btn-next")
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
+
+    # 手順 4 に入ると全ページを検出し、最初に見つかったページ (2 ページ目) へ自動で移動する
+    expect(page.locator("#nav-hint")).not_to_contain_text("図を探しています", timeout=15_000)
+    expect(page.locator("#pagenav-4 .pg-row2.current")).to_have_text(re.compile("2 ページ"))
+
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
     expect(page.locator("#pagenav-4")).to_be_visible()
     # 検出できたページは最初から採用済み (実線 1 つ)
@@ -384,7 +397,7 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     with page.expect_download() as dl_info:
         page.click("#btn-export")
     download = dl_info.value
-    assert download.suggested_filename == "stewardship_sample_p1_fig1_gray.svg"
+    assert download.suggested_filename == "stewardship_sample_p2_fig1_gray.svg"
     svg_text = Path(download.path()).read_text(encoding="utf8")
     assert 'clip-path="url(#clip-export)"' in svg_text
     assert not re.search(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"', svg_text)  # 有彩色が残らない
