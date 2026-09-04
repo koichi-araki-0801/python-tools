@@ -73,7 +73,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 16 | RPC | `setSuggestJoin` | クリック取り込み連結フラグ更新 |
 | 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線（Undoへpush） |
 | 18 | RPC | `undo / redo` | 操作の取消 / やり直し |
-| 19 | RPC | `exportSvg` | 範囲指定で SVG 書き出し。引数に `grayscale`, `clip`, `figIndex: int = 1` を追加。`clip` あり時のファイル名は `<stem>_p<N>_fig<k>_gray.svg` |
+| 19 | RPC | `exportSvg` | 範囲指定で SVG 書き出し。引数に `grayscale`, `clip`, `figIndex: int = 1` を追加。`clip` があれば `_fig<k>`、`grayscale` が真なら `_gray` を独立して付け加える（`<stem>_p<N>[_fig<k>][_gray].svg`）。UI のグレーモードは常に両方を送るため成果物は `<stem>_p<N>_fig<k>_gray.svg` |
 | 20 | RPC | `zipEntries` | 複数 SVG を ZIP 1 本にまとめて base64 で返す |
 | 21 | RPC | `removeFile` | 選択ファイルを一覧から除去 |
 
