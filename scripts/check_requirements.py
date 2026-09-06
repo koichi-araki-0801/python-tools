@@ -15,14 +15,20 @@ monorepo `offline/lib/verify.ps1` の `Test-OfflineRequirementLine` /
 
 CLI は `-Path <file>` (`docs/_build/build_all.bat` 互換) と位置引数の両方を受け付ける。
 複数ファイルを渡すと全件を検査する。
+
+pip を呼ぶ入口の列挙ガード(`KNOWN_PIP_ENTRYPOINTS` / `find_pip_call_files`)もここに置く。
+検査を経ない pip 入口を作らないための機械検査で、`scripts/test_python_tools_scripts.py` が
+既知集合との一致を固定する。
 """
 
 from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 _SPEC = r"(?:==|>=|<=|~=|!=|>|<)\s*[A-Za-z0-9][A-Za-z0-9.*+!-]*"
@@ -82,6 +88,90 @@ def assert_requirements_file(path: Path) -> None:
         for v in violations:
             print(f"[requirements] {v}", file=sys.stderr)
         raise RuntimeError(f"requirements の形式検査に失敗しました: {path}")
+
+
+# ── pip 入口列挙ガード ──
+
+# 「入口」= リポ内で pip install/download を実行するファイル。`.py` / `.yml` / `.yaml` に
+# 加えて `.bat` も走査する(`docs/_build/build_all.bat` のように `.bat` から直接 pip を
+# 呼ぶ実例があるため、拡張子で機械的に対象外にはできない)。
+KNOWN_PIP_ENTRYPOINTS = frozenset(
+    {
+        "scripts/setup_dev.py",
+        "scripts/lib/build_venv.py",
+        "docs/_build/build_all.bat",
+        ".github/workflows/ci.yml",
+    }
+)
+
+# 除外は「ガード自身の定義・テストファイル」という構造的な 2 件だけ(どちらも
+# 「pip install」という語を含む説明コメントを持つため、自己参照的に誤検知する)。
+# 個々の pip 呼び出しファイルを見つけてから除外リストへ足す、という運用はしない
+# (それは `KNOWN_PIP_ENTRYPOINTS` へ登録する形で行う)。
+_GUARD_SELF_EXCLUDE = frozenset({"scripts/check_requirements.py", "scripts/test_python_tools_scripts.py"})
+
+_PIP_SCAN_EXTENSIONS = (".py", ".yml", ".yaml", ".bat")
+
+# check_requirements の呼び出しを示す語。Python 側は識別子 `check_requirements`
+# (import / 関数名)、`.bat` 側は同ランチャのファイル名 `check-requirements`(ハイフン形。
+# `scripts/check-requirements.bat`)を呼ぶため、どちらの表記でも「検査を経由している」と
+# 判定できるようにする。
+_CHECK_REQUIREMENTS_MARKERS = ("check_requirements", "check-requirements")
+
+
+def has_check_requirements_marker(text: str) -> bool:
+    return any(marker in text for marker in _CHECK_REQUIREMENTS_MARKERS)
+
+
+# `pip`(または `pip3`)の直後、空白・引用符・バッククォート・カンマ・ハイフンだけを挟んで
+# `install`/`download` が続く形を拾う。Python の list リテラル形式(`"pip",\n "install"`)と
+# シェル形式(`pip install ...`)の両方を捉える一方、`pip は requirements ...` のような
+# 日本語散文中の「pip」への言及(その後に install/download が来ない、または全角文字を挟む)は
+# 拾わない拒否リストの逆(許可する形だけを書く)にしてある。
+_PIP_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])pip3?[\s\"'`,\-]{0,20}(install|download)\b")
+
+
+def find_pip_call_files(
+    repo_root: Path, *, runner: Callable[..., subprocess.CompletedProcess] | None = None
+) -> set[str]:
+    """`pip install` / `pip download` を呼ぶ(と読める)追跡ファイルの相対パス集合を返す。
+
+    走査対象は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
+    ガード自身のテストファイルは除外する。
+
+    列挙は `-z`(NUL 区切り)出力を使う。git は既定(`core.quotepath=true`)では非 ASCII
+    パスを引用符 + 8 進エスケープした文字列で返し、`rel.endswith(_PIP_SCAN_EXTENSIONS)` が
+    末尾の `"` に阻まれて一致しなくなる(検査対象から黙って落ちる。実証済み)。`-z` は
+    `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
+    この問題が構造的に起きない。同型の修正が `scripts/check_comments.py`
+    (`_staged_files`)・`offline/lib/bundle_common.py`(`list_requirements_files_via_git`)・
+    `scripts/setup_dev.py`(`list_requirements`)の計 3 箇所にある。
+    """
+    cmd = ["git", "-C", str(repo_root), "ls-files", "-z"]
+    if runner is None:
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    else:
+        result = runner(cmd)
+    if result.returncode != 0:
+        raise RuntimeError("git ls-files に失敗しました(pip 入口ガードを実行できません)。")
+
+    hits: set[str] = set()
+    for rel in result.stdout.split("\0"):
+        if not rel or rel in _GUARD_SELF_EXCLUDE:
+            continue
+        if not rel.endswith(_PIP_SCAN_EXTENSIONS):
+            continue
+        path = repo_root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _PIP_CALL_RE.search(text):
+            hits.add(rel)
+    return hits
+
+
+# ── CLI ──
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

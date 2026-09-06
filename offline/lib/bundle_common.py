@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""共通ライブラリ: offline 重量物バンドルの content-key 算出・pin 読み書き・Ed25519 署名。
+"""共通ライブラリ: offline 重量物バンドルの content-key 算出・bundle.key の読み書き・バンドル共通定数。
 
 `offline/publish_bundle.py` / `offline/setup_offline.py` から import して使う。
-署名鍵は Ed25519-PEM(`cryptography`)を使う。content-key はファイル内容の連結を基本とし、
+content-key はファイル内容の連結を基本とし、
 行末(CR)だけは正規化する(`_read_normalized_bytes` 参照)。Windows worktree(既定
 `core.autocrlf=true`)は CRLF、GitHub の archive zip(codeload)は LF になるため、正規化
 しないと同じ内容でも worktree ごとに異なる key を生み、配布先での bundle.key 突き合わせが
@@ -19,20 +19,12 @@ content-key = 追跡中の全 `*requirements.txt` の内容 + `docs/_build/vendo
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
+import os
+import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
-
-# `cryptography` はここでは import しない(モジュール冒頭での import は署名系の 3 関数
-# だけが必要とする依存を本ファイル全体の import 条件にしてしまう)。配布先の
-# `offline/setup_offline.py` は手順1-5(pin 読込・バンドル取得・sha256 照合・
-# content-key 照合・展開)を `cryptography` が入っていない状態で行い、手順6で
-# wheelhouse から導入した後に初めて
-# 署名検証(手順7)を呼ぶ。この順序を成立させるには、署名系の関数だけが個別に
-# 遅延 import する必要がある(関数側の docstring 参照)。
+from typing import Callable
 
 # ── requirements.txt の列挙 ──
 
@@ -75,7 +67,7 @@ def list_requirements_files_via_git(repo_root: Path) -> list[Path] | None:
     なって黙って候補から落ち、FS フォールバックだけが拾う非対称(「2 経路一致」不変則の
     破れ)を生む(実証済み)。`-z` は `core.quotepath` の設定に関わらずエスケープなしの
     生バイト列を NUL 区切りで返すため、この問題が構造的に起きない。同型の修正が
-    `scripts/check_comments.py`(`_staged_files`)・`offline/publish_bundle.py`
+    `scripts/check_comments.py`(`_staged_files`)・`scripts/check_requirements.py`
     (`find_pip_call_files`)・`scripts/setup_dev.py`(`list_requirements`)の計 4 箇所にある。
     """
     try:
@@ -162,72 +154,6 @@ def compute_content_key(repo_root: Path, *, requirements_files: list[Path] | Non
     return hasher.hexdigest()
 
 
-# ── pin(offline/pinned-release.txt)の読み書き ──
-
-
-@dataclass(frozen=True)
-class PublishPin:
-    """`offline/pinned-release.txt` の内容(公開時に publish が書き、setup が検証で読む)。"""
-
-    source_commit: str
-    source_zip_sha256: str
-    bundle_sha256: str
-
-
-def format_pin(pin: PublishPin) -> str:
-    """`PublishPin` を pin ファイルのテキスト表現へ整形する。"""
-    return (
-        "# offline 配布物の pin(publish_bundle.py が自動生成。手で編集しない)。\n"
-        "# 配布先の setup はこの値だけを真正性の根拠にする。\n"
-        f"source-commit {pin.source_commit}\n"
-        f"source-zip-sha256 {pin.source_zip_sha256}\n"
-        f"bundle-sha256 {pin.bundle_sha256}\n"
-    )
-
-
-def write_pin(path: Path, pin: PublishPin) -> None:
-    """pin ファイルを書き出す。"""
-    path.write_text(format_pin(pin), encoding="utf-8")
-
-
-def read_pin(path: Path) -> PublishPin:
-    """pin ファイルを読み検証する。欠落・形式不正は `ValueError`(fail closed)。"""
-    if not path.is_file():
-        raise ValueError(
-            f"pin ファイルがありません: {path}\n"
-            "  offline/ 同梱の期待値が無いと取得物の真正性を配信元と独立に確かめられない。"
-        )
-    text = path.read_text(encoding="utf-8")
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        t = line.strip()
-        if not t or t.startswith("#"):
-            continue
-        parts = t.split(None, 1)
-        if len(parts) != 2:
-            continue
-        values[parts[0].lower()] = parts[1].strip().lower()
-
-    for key in ("source-commit", "source-zip-sha256", "bundle-sha256"):
-        if key not in values:
-            raise ValueError(f"pin ファイルに {key} がありません: {path}")
-
-    source_commit = values["source-commit"]
-    if len(source_commit) != 40 or any(c not in "0123456789abcdef" for c in source_commit):
-        raise ValueError(f"pin ファイルの source-commit が 40 桁 16 進ではありません: {source_commit}")
-
-    for key in ("source-zip-sha256", "bundle-sha256"):
-        v = values[key]
-        if len(v) != 64 or any(c not in "0123456789abcdef" for c in v):
-            raise ValueError(f"pin ファイルの {key} が 64 桁 16 進ではありません: {v}")
-
-    return PublishPin(
-        source_commit=source_commit,
-        source_zip_sha256=values["source-zip-sha256"],
-        bundle_sha256=values["bundle-sha256"],
-    )
-
-
 # ── bundle.key(content-key を書いた 1 行ファイル)の読み書き ──
 
 
@@ -239,94 +165,76 @@ def read_bundle_key(path: Path) -> str:
     return path.read_text(encoding="ascii").strip()
 
 
-# ── Ed25519 分離署名 ──
+# ── バンドルの共通定数・部品(publish と setup の両側から参照する) ──
+
+DEFAULT_TAG = "offline-bundle-v1"
+BUNDLE_NAME = "offline-deps-bundle.tar.gz"
+BUNDLE_KEY_NAME = "bundle.key"
+WHEELHOUSE_DIR_NAME = "python-wheelhouse"
+VENDOR_DIR_POSIX = "docs/_build/vendor"
+
+# vendor 配下でバンドル由来(= `.gitignore` 対象・git 管理外)なのはこの JS 2 件だけ。
+# `manifest.txt` は git 管理下なので setup 側の削除対象には含めない。
+VENDOR_JS_ASSET_NAMES = ("mermaid.min.js", "mermaid-layout-elk.min.js")
+VENDOR_REQUIRED_ASSET_NAMES = ("manifest.txt", *VENDOR_JS_ASSET_NAMES)
+
+Runner = Callable[..., subprocess.CompletedProcess]
 
 
-def generate_signing_key_pair() -> tuple[bytes, bytes]:
-    """Ed25519 鍵ペアを生成し、`(private_pem, public_pem)` を返す。
-
-    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
-    """
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-
-    private_key = ed25519.Ed25519PrivateKey.generate()
-    private_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    public_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    return private_pem, public_pem
+def default_runner(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、`git` が出す
+    # UTF-8 出力(日本語を含む警告・メッセージ)で読み取りスレッド内 `UnicodeDecodeError` に
+    # なり、キャプチャ結果が欠落する(`scripts/hooks/post_commit.py` から `--tag-only` を
+    # 呼ぶ経路で実機再現)。呼び出し元が別の `encoding` を明示した場合はそちらを優先する。
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
+    return subprocess.run(cmd, **kwargs)
 
 
-def sign_bytes(data: bytes, private_key_pem: bytes) -> str:
-    """`data` へ Ed25519 署名し、64 byte 署名の base64 文字列(`.sig` の中身)を返す。
-
-    Ed25519 は incremental signing API を持たない(pure EdDSA はメッセージ全体を要求する)ため
-    全内容をメモリへ持つ必要がある。バイト列版を公開しておくと、呼び出し側が同一内容を
-    署名・検証の両方で使う場合(例: 自己検証)に読み込みを 1 回で済ませられる。
-
-    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
-    """
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-
-    private_key = serialization.load_pem_private_key(private_key_pem, password=None)
-    if not isinstance(private_key, ed25519.Ed25519PrivateKey):
-        raise ValueError("秘密鍵が Ed25519 形式ではありません。")
-    signature = private_key.sign(data)
-    return base64.b64encode(signature).decode("ascii")
-
-
-def sign_file(path: Path, private_key_pem: bytes) -> str:
-    """`path` の内容へ Ed25519 署名し、64 byte 署名の base64 文字列(`.sig` の中身)を返す。
-
-    重量物バンドル(tar.gz)は数百 MB 級になりうるが、署名は publish 時に 1 回だけ行う
-    操作であり全読みを許容する。
-    """
-    return sign_bytes(path.read_bytes(), private_key_pem)
-
-
-def verify_signature_bytes(data: bytes, signature_b64: str, public_key_pem: bytes) -> bool:
-    """`data` を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。
-
-    署名・鍵の形式不正(base64 でない・PEM でない等)も「検証失敗」に倒す(fail closed)。
-
-    `cryptography` はここで初めて import する(遅延 import。モジュール冒頭のコメント参照)。
-    """
-    from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-
-    try:
-        signature = base64.b64decode(signature_b64.strip(), validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    try:
-        public_key = serialization.load_pem_public_key(public_key_pem)
-        if not isinstance(public_key, ed25519.Ed25519PublicKey):
-            return False
-        public_key.verify(signature, data)
-        return True
-    except InvalidSignature:
-        return False
-    except (ValueError, TypeError):
-        return False
-
-
-def verify_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> bool:
-    """`path` の内容を `signature_b64`(base64)/`public_key_pem` で検証する。真なら合格。"""
-    return verify_signature_bytes(path.read_bytes(), signature_b64, public_key_pem)
-
-
-def assert_bundle_signature(path: Path, signature_b64: str, public_key_pem: bytes) -> None:
-    """署名検証を「必ず通す」入口。失敗したら `RuntimeError`(fail closed)。"""
-    if not verify_signature(path, signature_b64, public_key_pem):
+def assert_vendor_assets_present(repo_root: Path) -> None:
+    vendor_dir = repo_root / "docs" / "_build" / "vendor"
+    missing = [name for name in VENDOR_REQUIRED_ASSET_NAMES if not (vendor_dir / name).is_file()]
+    if missing:
         raise RuntimeError(
-            f"分離署名の検証に失敗しました: {path}\n"
-            "  改ざん・すり替え、または公開鍵と署名鍵の不一致。処理を中止する。"
+            f"docs/_build/vendor に不足があります: {missing}\n"
+            "  offline\\setup-offline.bat で vendor 一式を展開してください。"
         )
+
+
+def sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def resolve_tar_exe() -> str:
+    """Windows 標準 tar(`System32\\tar.exe`)を優先解決する。
+
+    Git Bash 同梱の MSYS tar が PATH 先頭にあると `-C <Windows パス>` を rsh の
+    host:path と誤認して失敗するため。
+    """
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = Path(system_root) / "System32" / "tar.exe"
+    if candidate.is_file():
+        return str(candidate)
+    found = shutil.which("tar")
+    if found:
+        return found
+    raise RuntimeError("'tar' が見つかりません(Windows 10/11 標準の tar.exe が必要)。")
+
+
+def build_tar_command(tar_exe: str, bundle_path: Path, repo_root: Path) -> list[str]:
+    """重量物を固める `tar -czf` の引数列を組み立てる(実行はしない)。"""
+    return [
+        tar_exe,
+        "-czf",
+        str(bundle_path),
+        "-C",
+        str(repo_root),
+        WHEELHOUSE_DIR_NAME,
+        VENDOR_DIR_POSIX,
+    ]

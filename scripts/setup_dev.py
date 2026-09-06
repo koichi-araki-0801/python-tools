@@ -118,7 +118,7 @@ def list_requirements() -> list[Path]:
     黙って install 対象から落ちる (実証済み)。`-z` は `core.quotepath` の設定に関わらず
     エスケープなしの生バイト列を NUL 区切りで返すため、この問題が構造的に起きない。
     同型の修正が `scripts/check_comments.py` (`_staged_files`)・
-    `offline/publish_bundle.py` (`find_pip_call_files`)・`offline/lib/bundle_common.py`
+    `scripts/check_requirements.py` (`find_pip_call_files`)・`offline/lib/bundle_common.py`
     (`list_requirements_files_via_git`) の計 4 箇所にある。
     """
     out = subprocess.run(

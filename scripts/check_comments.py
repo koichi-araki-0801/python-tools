@@ -438,7 +438,7 @@ def _staged_files() -> frozenset[str]:
     後続の `(ROOT / p).is_file()` 判定が常に偽になって検査対象から黙って落ちる (実証済み。
     本リポの docs 原稿 14 件は全件日本語ファイル名でこれに該当していた)。`-z` は
     `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
-    この問題が構造的に起きない。同型の修正が `offline/publish_bundle.py`
+    この問題が構造的に起きない。同型の修正が `scripts/check_requirements.py`
     (`find_pip_call_files`)・`offline/lib/bundle_common.py`
     (`list_requirements_files_via_git`)・`scripts/setup_dev.py`(`list_requirements`)の
     計 4 箇所にある。
