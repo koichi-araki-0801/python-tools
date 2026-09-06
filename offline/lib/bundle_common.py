@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """共通ライブラリ: offline 重量物バンドルの content-key 算出・bundle.key の読み書き・バンドル共通定数。
 
-`offline/publish_bundle.py` / `offline/setup_offline.py` から import して使う。
-content-key はファイル内容の連結を基本とし、
+`offline/setup_offline.py` と、配布担当の端末にだけ置く
+`local-only/offline-publish/publish_bundle.py` から import して使う。content-key はファイル内容の連結を基本とし、
 行末(CR)だけは正規化する(`_read_normalized_bytes` 参照)。Windows worktree(既定
 `core.autocrlf=true`)は CRLF、GitHub の archive zip(codeload)は LF になるため、正規化
 しないと同じ内容でも worktree ごとに異なる key を生み、配布先での bundle.key 突き合わせが

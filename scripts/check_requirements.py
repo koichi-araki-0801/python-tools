@@ -137,7 +137,7 @@ def find_pip_call_files(
     """`pip install` / `pip download` を呼ぶ(と読める)追跡ファイルの相対パス集合を返す。
 
     走査対象は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
-    ガード自身のテストファイルは除外する。
+    ガード自身の定義ファイルとテストファイルは除外する(`_GUARD_SELF_EXCLUDE`)。
 
     列挙は `-z`(NUL 区切り)出力を使う。git は既定(`core.quotepath=true`)では非 ASCII
     パスを引用符 + 8 進エスケープした文字列で返し、`rel.endswith(_PIP_SCAN_EXTENSIONS)` が

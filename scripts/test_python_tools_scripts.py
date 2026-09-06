@@ -777,6 +777,7 @@ def _make_bundle_tar(tmp_path, *, include_vendor=True):
             tf.add(stage / "docs", arcname="docs")
     return tar_path
 
+
 def test_extract_bundle_creates_wheelhouse_and_vendor(tmp_path):
     tar_path = _make_bundle_tar(tmp_path)
     repo_root = tmp_path / "repo"
