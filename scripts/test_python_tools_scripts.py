@@ -17,7 +17,6 @@ content-key 照合 → 展開の各部品を対象とする。HTTP 取得は注�
 """
 
 import hashlib
-import io
 import pathlib
 import subprocess
 import sys
@@ -886,133 +885,8 @@ def test_i3_checking_before_extraction_detects_manifest_drift_that_after_extract
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# scripts/hooks/pre_push.py(タグのみ push は pytest 一式をスキップする判定)
+# scripts/hooks/pre_push.py(check_comments と pytest 一式を順に実行する)
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-# ── parse_remote_refs: stdin ペイロードの 3 列目(remote ref)抽出 ──
-def test_parse_remote_refs_extracts_third_column():
-    stdin_text = (
-        "refs/heads/main abcdef0123456789abcdef0123456789abcdef01 "
-        "refs/heads/main 0000000000000000000000000000000000000000\n"
-    )
-    assert pre_push.parse_remote_refs(stdin_text) == ["refs/heads/main"]
-
-
-def test_parse_remote_refs_handles_multiple_lines():
-    stdin_text = (
-        "refs/heads/main a refs/heads/main b\n"
-        "refs/tags/offline-bundle-v1 c refs/tags/offline-bundle-v1 d\n"
-    )
-    assert pre_push.parse_remote_refs(stdin_text) == ["refs/heads/main", "refs/tags/offline-bundle-v1"]
-
-
-def test_parse_remote_refs_returns_empty_list_for_blank_stdin():
-    assert pre_push.parse_remote_refs("") == []
-    assert pre_push.parse_remote_refs("\n\n") == []
-
-
-def test_parse_remote_refs_handles_tag_deletion_push():
-    # `git push origin :refs/tags/<tag>` の削除 push は 1 列目が `(delete)`・2 列目が
-    # 全ゼロ sha1 になる(githooks(5))。3 列目(remote ref)は削除対象そのものの実名なので、
-    # 削除 push でも実際にタグ削除できた(手順書に記載の検証手順)ことが示すとおり、
-    # 1〜2 列目の綴りに関わらず parse_remote_refs は 3 列目だけを見れば正しく動く。
-    stdin_text = (
-        "(delete) 0000000000000000000000000000000000000000 "
-        "refs/tags/offline-bundle-v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-    )
-    assert pre_push.parse_remote_refs(stdin_text) == ["refs/tags/offline-bundle-v1"]
-
-
-def test_decide_pre_push_action_skips_for_tag_deletion_push():
-    refs = pre_push.parse_remote_refs(
-        "(delete) 0000000000000000000000000000000000000000 "
-        "refs/tags/offline-bundle-v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-    )
-    assert pre_push.decide_pre_push_action(refs, ahead=None) == "skip"
-
-
-def test_decide_pre_push_action_runs_for_branch_deletion_push():
-    refs = pre_push.parse_remote_refs(
-        "(delete) 0000000000000000000000000000000000000000 "
-        "refs/heads/tmp-branch aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-    )
-    assert pre_push.decide_pre_push_action(refs, ahead=None) == "run"
-
-
-# ── decide_pre_push_action: タグのみ push はスキップ、ブランチ混在は実行 ──
-def test_decide_pre_push_action_runs_for_branch_ref():
-    assert pre_push.decide_pre_push_action(["refs/heads/main"], ahead=None) == "run"
-
-
-def test_decide_pre_push_action_skips_for_tag_only_refs():
-    assert pre_push.decide_pre_push_action(["refs/tags/offline-bundle-v1"], ahead=None) == "skip"
-
-
-def test_decide_pre_push_action_runs_when_tag_and_branch_are_mixed():
-    # ローリングタグ移動と同時にブランチも push する状況(手動 `git push --tags` 等)は
-    # ブランチ ref が 1 つでも混じっていれば実行側へ倒す。
-    assert (
-        pre_push.decide_pre_push_action(["refs/tags/offline-bundle-v1", "refs/heads/main"], ahead=None)
-        == "run"
-    )
-
-
-def test_decide_pre_push_action_falls_back_to_ahead_count_when_refs_empty():
-    assert pre_push.decide_pre_push_action([], ahead=0) == "skip"
-    assert pre_push.decide_pre_push_action([], ahead=3) == "run"
-
-
-def test_decide_pre_push_action_runs_when_ahead_count_unavailable():
-    # upstream 未設定・git 失敗等で ahead が取れない場合は安全側(実行)へ倒す。
-    assert pre_push.decide_pre_push_action([], ahead=None) == "run"
-
-
-# ── count_ahead_of_upstream: 実 git を使った ahead 数の取得 ──
-def test_count_ahead_of_upstream_returns_none_without_upstream(tmp_path):
-    _init_git_repo_with_commit(tmp_path)
-    assert pre_push.count_ahead_of_upstream(cwd=tmp_path) is None
-
-
-def test_count_ahead_of_upstream_counts_commits_ahead_of_upstream_branch(tmp_path):
-    remote = tmp_path / "remote.git"
-    remote.mkdir()
-    subprocess.run(["git", "init", "-q", "--bare"], cwd=remote, check=True)
-
-    work = tmp_path / "work"
-    work.mkdir()
-    _init_git_repo_with_commit(work)
-    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
-    subprocess.run(["git", "push", "-q", "-u", "origin", "HEAD:refs/heads/main"], cwd=work, check=True)
-
-    (work / "b.txt").write_text("b\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "b.txt"],
-        cwd=work,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "second"],
-        cwd=work,
-        check=True,
-    )
-
-    assert pre_push.count_ahead_of_upstream(cwd=work) == 1
-
-
-def _init_git_repo_with_commit(repo: pathlib.Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    (repo / "a.txt").write_text("a\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "add", "a.txt"],
-        cwd=repo,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init"],
-        cwd=repo,
-        check=True,
-    )
 
 
 # ── run_pytest_suite: 失敗したステップで即座に打ち切る ──
@@ -1071,7 +945,6 @@ def test_run_check_comments_returns_nonzero_on_failure(monkeypatch, tmp_path):
 def test_main_runs_check_comments_before_pytest_suite_and_stops_on_failure(monkeypatch):
     # check_comments が失敗したら pytest 一式(重い・数分かかる)は 1 つも走らせない。
     calls: list[str] = []
-    monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/main a b refs/heads/main c\n"))
     monkeypatch.setattr(pre_push, "run_check_comments", lambda: calls.append("check_comments") or 1)
     monkeypatch.setattr(pre_push, "run_pytest_suite", lambda: calls.append("pytest_suite") or 0)
 
@@ -1083,7 +956,6 @@ def test_main_runs_check_comments_before_pytest_suite_and_stops_on_failure(monke
 
 def test_main_runs_pytest_suite_after_check_comments_passes(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(sys, "stdin", io.StringIO("refs/heads/main a b refs/heads/main c\n"))
     monkeypatch.setattr(pre_push, "run_check_comments", lambda: calls.append("check_comments") or 0)
     monkeypatch.setattr(pre_push, "run_pytest_suite", lambda: calls.append("pytest_suite") or 0)
 
@@ -1094,7 +966,7 @@ def test_main_runs_pytest_suite_after_check_comments_passes(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# scripts/hooks/post_commit.py(auto-push + publish_bundle.py --tag-only)
+# scripts/hooks/post_commit.py(auto-push のベストエフォート呼び出し)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -1152,61 +1024,18 @@ def test_auto_push_does_not_raise_on_non_fast_forward(capsys):
     assert all("--force" not in c and "-f" not in c for c in runner.calls)
 
 
-# ── publish_tag_only: ファイル不在ならベストエフォートで何もしない ──
-def test_publish_tag_only_skips_when_publish_bundle_missing(tmp_path):
-    runner = _FakeRunner([])
-    post_commit.publish_tag_only(runner=runner, publish_bundle_path=tmp_path / "no-such-file.py")
-    assert runner.calls == []
-
-
-def test_publish_tag_only_invokes_publish_bundle_with_tag_only_flag(tmp_path):
-    publish_bundle_path = tmp_path / "publish_bundle.py"
-    publish_bundle_path.write_text("# dummy\n", encoding="utf-8")
-    runner = _FakeRunner([_post_commit_completed(returncode=0, stdout="[skip] unchanged")])
-    post_commit.publish_tag_only(runner=runner, publish_bundle_path=publish_bundle_path)
-    assert runner.calls[0][1] == str(publish_bundle_path)
-    assert runner.calls[0][2] == "--tag-only"
-
-
-def test_publish_tag_only_warns_but_does_not_raise_on_failure(tmp_path, capsys):
-    publish_bundle_path = tmp_path / "publish_bundle.py"
-    publish_bundle_path.write_text("# dummy\n", encoding="utf-8")
-    runner = _FakeRunner([_post_commit_completed(returncode=1, stderr="boom")])
-    post_commit.publish_tag_only(runner=runner, publish_bundle_path=publish_bundle_path)  # 例外なし
-    assert "失敗しました" in capsys.readouterr().err
-
-
 # ── main: 常に 0 を返す(post-commit はベストエフォートで非ゼロ終了しない契約) ──
 def test_main_always_returns_zero_even_when_steps_fail(monkeypatch, capsys):
-    # `auto_push` / `publish_tag_only` 自身が捕捉しない**未想定の例外**(git 未導入時の
-    # `FileNotFoundError` 等)を投げても、`main` はそれを飲み込んで 0 を返すことを確認する
-    # (post-commit はコミット確定後のフックのため、生の traceback を出さない契約)。
+    # `auto_push` 自身が捕捉しない**未想定の例外**(git 未導入時の `FileNotFoundError` 等)を
+    # 投げても、`main` はそれを飲み込んで 0 を返すことを確認する(post-commit はコミット
+    # 確定後のフックのため、生の traceback を出さない契約)。
     def failing_auto_push():
         raise RuntimeError("boom-auto-push")
 
-    def failing_publish_tag_only():
-        raise FileNotFoundError("boom-publish-tag-only")
-
     monkeypatch.setattr(post_commit, "auto_push", failing_auto_push)
-    monkeypatch.setattr(post_commit, "publish_tag_only", failing_publish_tag_only)
     assert post_commit.main() == 0
     err = capsys.readouterr().err
     assert "auto-push" in err
-    assert "publish_bundle.py --tag-only" in err
-
-
-def test_main_still_runs_publish_tag_only_after_auto_push_raises(monkeypatch):
-    # ベストエフォートの各ステップは独立: 1 つ目が未想定の例外で落ちても 2 つ目は
-    # 実行されること(前段の失敗で後段を巻き込んで止めない)。
-    calls: list[str] = []
-
-    def failing_auto_push():
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(post_commit, "auto_push", failing_auto_push)
-    monkeypatch.setattr(post_commit, "publish_tag_only", lambda: calls.append("publish_tag_only"))
-    assert post_commit.main() == 0
-    assert calls == ["publish_tag_only"]
 
 
 # ── _run_best_effort_step: 未想定の例外を捕捉して警告のみに倒す ──

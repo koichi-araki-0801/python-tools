@@ -31,6 +31,14 @@ setup-dev.bat
 4. `git config core.hooksPath scripts/hooks` — 下記「開発フロー」節の 3 フックを
    有効化する。
 
+### オフライン重量物の取得
+
+`offline\setup-offline.bat` は、リポジトリ直下(または `bk\`)に `offline-deps-bundle.tar.gz` と
+`bundle.key` があればそれを、無ければ GitHub Releases(タグ `offline-bundle-v1`)から HTTPS で
+取得して展開する。展開の前に `bundle.key` と手元の requirements / manifest の content-key を
+突き合わせ、不一致なら止まる。詳細は `offline/README-offline.md`。重量物の生成と Release の
+更新は配布担当の端末にある git 管理外の `local-only/offline-publish/publish-bundle.bat` で行う。
+
 ## 開発フロー(Git hooks)
 
 `scripts/hooks/`(sh シム + 同名 `.py` の対)に 3 フックを置く。有効化は上記セットアップの
@@ -42,12 +50,8 @@ setup-dev.bat
   自体は成立させる)。
   1. auto-push: 現在ブランチを upstream へ push する(force はしない。non-fast-forward で
      拒否された場合は警告を出すのみで、復旧は `git push --force-with-lease` を手動で行う)。
-  2. `offline/publish_bundle.py --tag-only`: content-key が Release 側 `bundle.key` と
-     一致する場合のみローリングタグ(`offline-bundle-v1`)を HEAD へ移動する。
 - **pre-push**: auto-push の `git push` を経由して**毎コミット同期的に**発火する。
-  push 対象が**タグのみ**(上記のローリングタグ移動 push 等)なら、コミットのたびフル
-  テストを発火させないよう即座にスキップする(実測 **2 秒程度**)。ブランチ ref を
-  1 つでも含む push では次を順に実行し、1 つでも失敗すれば push を中止する:
+  毎回次を順に実行し、1 つでも失敗すれば push を中止する:
   `pytest scripts` → `pytest docs/_build` → `pytest pdf-to-svg` → `pytest graph-editor` →
   `pytest pdf-to-svg -m e2e` → `pytest graph-editor -m e2e`。
 
