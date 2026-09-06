@@ -757,7 +757,7 @@ def test_main_downloads_and_checks_sidecar_when_no_local_bundle(monkeypatch, tmp
     assert calls == ["download", "sha256", "key", "extract"]
 
 
-# ── extract_bundle / remove_extracted_bundle (手順5) ──
+# ── extract_bundle (手順5) ──
 def _make_bundle_tar(tmp_path, *, include_vendor=True):
     stage = tmp_path / "stage"
     wheelhouse = stage / bundle_common.WHEELHOUSE_DIR_NAME
@@ -794,25 +794,6 @@ def test_extract_bundle_raises_when_vendor_assets_missing(tmp_path):
         setup_offline.extract_bundle(tar_path, repo_root)
 
 
-def test_remove_extracted_bundle_deletes_wheelhouse_and_vendor_js_but_keeps_manifest(tmp_path):
-    repo_root = tmp_path
-    wheelhouse = repo_root / bundle_common.WHEELHOUSE_DIR_NAME
-    wheelhouse.mkdir()
-    (wheelhouse / "dummy.whl").write_bytes(b"x")
-    vendor = repo_root / "docs" / "_build" / "vendor"
-    vendor.mkdir(parents=True)
-    (vendor / "mermaid.min.js").write_bytes(b"x")
-    (vendor / "mermaid-layout-elk.min.js").write_bytes(b"x")
-    (vendor / "manifest.txt").write_text("v1\n", encoding="utf-8")
-
-    setup_offline.remove_extracted_bundle(repo_root)
-
-    assert not wheelhouse.exists()
-    assert not (vendor / "mermaid.min.js").exists()
-    assert not (vendor / "mermaid-layout-elk.min.js").exists()
-    assert (vendor / "manifest.txt").is_file()  # git 管理下のファイルは消さない
-
-
 # ── verify_local_checkout_matches_bundle_key (手順4・I-3) ──
 def test_verify_local_checkout_matches_bundle_key_passes_on_match(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "same-key")
@@ -823,7 +804,9 @@ def test_verify_local_checkout_matches_bundle_key_passes_on_match(tmp_path, monk
     setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=tmp_path)
 
 
-def test_verify_local_checkout_matches_bundle_key_raises_and_cleans_up_on_mismatch(tmp_path, monkeypatch):
+def test_verify_local_checkout_matches_bundle_key_raises_without_deleting_existing_extraction(
+    tmp_path, monkeypatch
+):
     repo_root = tmp_path
     wheelhouse = repo_root / bundle_common.WHEELHOUSE_DIR_NAME
     wheelhouse.mkdir()
@@ -840,10 +823,10 @@ def test_verify_local_checkout_matches_bundle_key_raises_and_cleans_up_on_mismat
     with pytest.raises(RuntimeError):
         setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)
 
-    # 不一致は改ざんと同様に展開済みの重量物を残さない(半端な状態で setup-dev.bat を
-    # 迎えさせない)。
-    assert not wheelhouse.exists()
-    assert not (vendor / "mermaid.min.js").exists()
+    # 不一致の検知は展開の前に行うため、直前まで揃っていた展開済みの重量物には手を
+    # 触れない(消すと、前回まで完全だった wheelhouse / vendor JS を失うだけになる)。
+    assert (wheelhouse / "dummy.whl").is_file()
+    assert (vendor / "mermaid.min.js").is_file()
     assert (vendor / "manifest.txt").is_file()
 
 

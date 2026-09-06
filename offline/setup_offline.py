@@ -26,7 +26,6 @@ HTTP 取得を行う関数は呼び出し側から差し替え可能にしてい
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -121,29 +120,20 @@ def verify_bundle_sha256_sidecar(bundle_path: Path, sha_path: Path) -> None:
 # ── 手順2: 手元のソースが重量物と対の組であることの確認(展開の前に行う) ──
 
 
-def remove_extracted_bundle(repo_root: Path = ROOT) -> None:
-    """展開済みの重量物(python-wheelhouse / vendor の JS 2 件)を削除する。manifest.txt は git 管理下なので残す。"""
-    wheelhouse_dir = repo_root / bundle_common.WHEELHOUSE_DIR_NAME
-    if wheelhouse_dir.is_dir():
-        shutil.rmtree(wheelhouse_dir, ignore_errors=True)
-    vendor_dir = repo_root / "docs" / "_build" / "vendor"
-    for name in bundle_common.VENDOR_JS_ASSET_NAMES:
-        p = vendor_dir / name
-        if p.is_file():
-            p.unlink(missing_ok=True)
-
-
 def verify_local_checkout_matches_bundle_key(key_path: Path, repo_root: Path = ROOT) -> None:
     """手元の checkout が、取得した重量物と対の組であることを content-key で確かめる。
 
     **必ず `extract_bundle` の前に呼ぶこと。** `docs/_build/vendor/manifest.txt` は git 追跡下で
     clean clone に必ず存在するため展開前でも算出できる。展開後に測ると、バンドル同梱の
     manifest.txt が git 管理下の実体を上書きし、manifest だけの差分を検知できなくなる。
+
+    不一致時は例外を送出するだけで、既存の展開物(python-wheelhouse / vendor の JS)には
+    手を触れない。展開の前に呼ぶ検査なので、ここで削除すると前回までの完全な展開結果を
+    失うだけで、対の組を取り戻す助けにはならない。
     """
     bundle_key = bundle_common.read_bundle_key(key_path)
     local_key = bundle_common.compute_content_key(repo_root)
     if local_key != bundle_key:
-        remove_extracted_bundle(repo_root)
         raise RuntimeError(
             "手元のソースと重量物が対の組ではありません"
             f"(ローカル content-key={local_key} / bundle.key={bundle_key})。\n"
