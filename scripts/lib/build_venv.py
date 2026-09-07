@@ -3,15 +3,12 @@
 """共通ライブラリ: Python exe ビルド用の隔離 venv 準備。
 
 `graph-editor/scripts/build.py` / `pdf-to-svg/scripts/build.py` から import して使う
-(両者でほぼ同一だった venv 作成〜wheel install ロジックを 1 か所へ集約。monorepo
+(両者でほぼ同一だった venv 作成〜依存導入のロジックを 1 か所へ集約。monorepo
 `scripts/lib/build-python-venv.ps1` の移植)。
 
-**wheelhouse は必須 (fail-closed)。** monorepo 版はオンライン `pip install` へのフォール
-バックを持っていたが、本リポでは意図的に落とす。フォールバックを残すと「オフラインで
-組み立てられる」という前提を検証しないまま実行が通ってしまい、依存が知らぬ間にネット
-ワーク上のパッケージへ差し替わりうる (requirements の形式検査は `--find-links` 等の混入を
-防ぐが、wheelhouse 自体が無ければ検査の意味が無い)。ビルドできない状態は「ビルドできない」
-と明示して止めることを選ぶ。
+依存は PyPI から導入する。requirements の形式検査は導入の前に必ず通す
+(`assert_requirements_file`)。索引がネットワーク上にあるぶん、オプション行や直 URL 参照で
+解決先を差し替えられないことの確認は省けない。
 """
 
 from __future__ import annotations
@@ -40,21 +37,9 @@ def resolve_python_launcher() -> list[str] | None:
     return None
 
 
-def require_wheelhouse(wheelhouse_dir: Path) -> None:
-    """`wheelhouse_dir` が無ければ `RuntimeError`。**fail-closed の唯一の入口。**"""
-    if not wheelhouse_dir.is_dir():
-        raise RuntimeError(
-            f"wheelhouse がありません: {wheelhouse_dir}\n"
-            "  本リポは wheelhouse 必須(fail-closed)。オンライン fallback は行わない"
-            "(オフラインで組み立てられることを隠さないため)。先に offline\\setup-offline.bat"
-            " 等で wheelhouse を用意すること。"
-        )
-
-
 def build_venv(
     project_dir: Path,
     requirements_path: Path,
-    wheelhouse_dir: Path,
     *,
     clean: bool = False,
 ) -> Path:
@@ -92,24 +77,18 @@ def build_venv(
             raise RuntimeError("ビルド venv の作成に失敗しました。")
 
     # requirements の形式検査。**pip へ渡すすべての入口で行う** (検査が一部の入口にしか
-    # 無いと、そこを迂回する経路が素通りする)。`--no-index` は requirements 内の
-    # `--find-links <URL>` や直 URL 参照を止めないので、オフラインでも省略できない。
+    # 無いと、そこを迂回する経路が素通りする)。
     assert_requirements_file(requirements_path)
 
     print("=" * 44)
     print(" [1/2] 依存ライブラリをインストール (隔離 venv 内)")
     print("=" * 44)
-    require_wheelhouse(wheelhouse_dir)
-    print(f"[setup] オフライン wheelhouse から install: {wheelhouse_dir}")
     result = subprocess.run(
         [
             str(venv_python),
             "-m",
             "pip",
             "install",
-            "--no-index",
-            "--find-links",
-            str(wheelhouse_dir),
             "-r",
             str(requirements_path),
         ]

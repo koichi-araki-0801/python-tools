@@ -177,22 +177,6 @@ def test_main_returns_nonzero_when_no_target_given():
 
 
 # ── build_venv.py の純粋部品 ──
-def test_require_wheelhouse_raises_when_missing(tmp_path):
-    missing = tmp_path / "no-such-wheelhouse"
-    try:
-        build_venv.require_wheelhouse(missing)
-    except RuntimeError as exc:
-        assert "wheelhouse" in str(exc)
-    else:
-        raise AssertionError("wheelhouse が無いのに RuntimeError が送出されなかった")
-
-
-def test_require_wheelhouse_passes_when_present(tmp_path):
-    present = tmp_path / "wheelhouse"
-    present.mkdir()
-    build_venv.require_wheelhouse(present)  # 例外を送出しないことを確認
-
-
 def test_resolve_python_launcher_finds_py_or_python():
     # この開発機(Windows)は `py -3.13` の前提を持つ (README / setup_dev.py と同じ前提)。
     # CI(ubuntu)は `py` ランチャが無く `python` へフォールバックし、`shutil.which` は
@@ -211,8 +195,7 @@ def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path
     project_dir.mkdir()
     requirements_path = tmp_path / "requirements.txt"
     requirements_path.write_text("markdown-it-py\n", encoding="utf-8")
-    wheelhouse_dir = tmp_path / "python-wheelhouse"
-    wheelhouse_dir.mkdir()
+    pip_cmds: list[list[str]] = []
 
     # 既存の健全な venv を装う(python.exe が存在し --version が成功する)ことで、実際の
     # `python -m venv` 作成(重い実処理)を経由せずに、検査 → pip install の呼び出し順序
@@ -226,6 +209,7 @@ def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path
             calls.append("venv_probe")
         elif "pip" in cmd:
             calls.append("pip_install")
+            pip_cmds.append(list(cmd))
         else:
             calls.append("other")
         return subprocess.CompletedProcess(args=cmd, returncode=0)
@@ -235,10 +219,14 @@ def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path
         build_venv, "assert_requirements_file", lambda path: calls.append("assert_requirements_file")
     )
 
-    result = build_venv.build_venv(project_dir, requirements_path, wheelhouse_dir)
+    result = build_venv.build_venv(project_dir, requirements_path)
 
     assert result == venv_python
     assert calls.index("assert_requirements_file") < calls.index("pip_install")
+    # オンライン導入なので索引を塞ぐ引数は付けない (requirements は -r で渡すだけ)。
+    assert "--no-index" not in pip_cmds[0]
+    assert "--find-links" not in pip_cmds[0]
+    assert pip_cmds[0][-2:] == ["-r", str(requirements_path)]
 
 
 # ── bundle_common: requirements.txt 列挙 (git 経路 / FS フォールバック経路の一致) ──

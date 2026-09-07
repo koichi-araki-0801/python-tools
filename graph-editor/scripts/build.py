@@ -3,7 +3,7 @@
 """LabelEditor (SVG ラベル位置エディタ) の配布 exe を隔離 venv 内でビルドする。
 
 共通ライブラリ `scripts/lib/build_venv.py` で隔離 venv (`.venv-build`) を用意し、
-wheelhouse から (オフライン専用・fail-closed) 依存を install した後、PyInstaller の
+依存を install した後、PyInstaller の
 `--onefile` で `dist/LabelEditor.exe` (単一ファイル、実行に Python 不要) を生成する。
 venv 準備ロジックは pdf-to-svg の同名スクリプトと共通化してある。
 
@@ -28,7 +28,6 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE = PROJECT_DIR.parent
-WHEELHOUSE = WORKSPACE / "python-wheelhouse"
 REQUIREMENTS = PROJECT_DIR / "requirements.txt"
 
 sys.path.insert(0, str(WORKSPACE / "scripts" / "lib"))
@@ -54,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         venv_python = build_venv(
-            PROJECT_DIR, REQUIREMENTS, WHEELHOUSE, clean=(args.action == "clean")
+            PROJECT_DIR, REQUIREMENTS, clean=(args.action == "clean")
         )
 
         print()
