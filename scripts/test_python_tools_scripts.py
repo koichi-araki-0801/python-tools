@@ -17,7 +17,9 @@ content-key 照合 → 展開の各部品を対象とする。HTTP 取得は注�
 """
 
 import hashlib
+import io
 import pathlib
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -37,6 +39,7 @@ import build_venv  # noqa: E402
 import bundle_common  # noqa: E402
 import setup_offline  # noqa: E402
 import setup_dev  # noqa: E402
+import fetch_docs_vendor  # noqa: E402
 import pre_push  # noqa: E402
 import post_commit  # noqa: E402
 
@@ -1050,3 +1053,196 @@ def test_repo_configs_workspace_has_all_required_fields():
     # .husky シムと docs/_samples 除外は monorepo 固有の必須設定
     assert ".husky/" in workspace["shell_shim_prefixes"]
     assert "docs/_samples/" in workspace["finding_id_skip_prefixes"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# scripts/fetch_docs_vendor.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+_VENDOR_A = "mermaid.min.js"
+_VENDOR_B = "mermaid-layout-elk.min.js"
+
+
+def _vendor_fixture(tmp_path, contents):
+    """manifest と空の vendor ディレクトリを作り、(vendor_dir, manifest_path, expected) を返す。"""
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    lines = ["# コメント行", ""]
+    expected = {}
+    for name, body in contents.items():
+        digest = hashlib.sha256(body).hexdigest()
+        expected[name] = digest
+        lines.append(f"{name}  version=1.2.3  sha256={digest}")
+    manifest = vendor / "manifest.txt"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return vendor, manifest, expected
+
+
+def _make_tar(path, members):
+    """{アーカイブ内の名前: bytes} から tar.gz を作る。"""
+    with tarfile.open(path, "w:gz") as tf:
+        for name, body in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tf.addfile(info, io.BytesIO(body))
+
+
+def test_parse_manifest_reads_name_and_sha256():
+    text = (
+        "# 説明行\n"
+        "\n"
+        "mermaid.min.js             version=11.12.2  sha256=" + "a" * 64 + "\n"
+        "mermaid-layout-elk.min.js  source=@mermaid-js/layout-elk@0.2.2  sha256=" + "b" * 64 + "\n"
+    )
+    assert fetch_docs_vendor.parse_manifest(text) == {
+        "mermaid.min.js": "a" * 64,
+        "mermaid-layout-elk.min.js": "b" * 64,
+    }
+
+
+def test_parse_manifest_ignores_lines_without_sha256():
+    # sha256 トークンを持たない行は「期待値が無い」ため対象にしない
+    # (拾ってしまうと検証できないファイルを配置対象へ入れることになる)。
+    text = "notes.txt  version=1\nmermaid.min.js  sha256=" + "c" * 64 + "\n"
+    assert fetch_docs_vendor.parse_manifest(text) == {"mermaid.min.js": "c" * 64}
+
+
+def test_vendor_is_current_true_when_all_files_match(tmp_path):
+    vendor, _manifest, expected = _vendor_fixture(tmp_path, {_VENDOR_A: b"payload"})
+    (vendor / _VENDOR_A).write_bytes(b"payload")
+    assert fetch_docs_vendor.vendor_is_current(vendor, expected) is True
+
+
+def test_vendor_is_current_false_when_missing_or_mismatched(tmp_path):
+    vendor, _manifest, expected = _vendor_fixture(tmp_path, {_VENDOR_A: b"payload"})
+    assert fetch_docs_vendor.vendor_is_current(vendor, expected) is False
+    (vendor / _VENDOR_A).write_bytes(b"other")
+    assert fetch_docs_vendor.vendor_is_current(vendor, expected) is False
+
+
+def test_fetch_skips_download_when_already_current(tmp_path):
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, {_VENDOR_A: b"payload"})
+    (vendor / _VENDOR_A).write_bytes(b"payload")
+    calls = []
+
+    def downloader(url, dest):
+        calls.append(url)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is True
+    assert calls == []
+
+
+def test_fetch_places_files_on_success(tmp_path):
+    bodies = {_VENDOR_A: b"aaa", _VENDOR_B: b"bbb"}
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, bodies)
+    archive = tmp_path / "src.tar.gz"
+    _make_tar(archive, bodies)
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is True
+    assert (vendor / _VENDOR_A).read_bytes() == b"aaa"
+    assert (vendor / _VENDOR_B).read_bytes() == b"bbb"
+
+
+def test_fetch_rejects_unexpected_member_and_keeps_existing(tmp_path):
+    # manifest に無い名前のメンバが 1 件でもあれば展開しない。
+    bodies = {_VENDOR_A: b"aaa"}
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, bodies)
+    (vendor / _VENDOR_A).write_bytes(b"old")
+    archive = tmp_path / "src.tar.gz"
+    _make_tar(archive, {_VENDOR_A: b"aaa", "evil.js": b"x"})
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+    assert (vendor / _VENDOR_A).read_bytes() == b"old"
+    assert not (vendor / "evil.js").exists()
+
+
+def test_fetch_rejects_path_traversal_member(tmp_path):
+    bodies = {_VENDOR_A: b"aaa"}
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, bodies)
+    archive = tmp_path / "src.tar.gz"
+    _make_tar(archive, {_VENDOR_A: b"aaa", "../escaped.js": b"x"})
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+    assert not (tmp_path / "escaped.js").exists()
+
+
+def test_fetch_rejects_non_regular_member(tmp_path):
+    bodies = {_VENDOR_A: b"aaa"}
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, bodies)
+    archive = tmp_path / "src.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        info = tarfile.TarInfo(_VENDOR_A)
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tf.addfile(info)
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+
+
+def test_fetch_fails_on_sha256_mismatch_and_keeps_existing(tmp_path):
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, {_VENDOR_A: b"aaa"})
+    (vendor / _VENDOR_A).write_bytes(b"old")
+    archive = tmp_path / "src.tar.gz"
+    _make_tar(archive, {_VENDOR_A: b"tampered"})
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+    assert (vendor / _VENDOR_A).read_bytes() == b"old"
+
+
+def test_fetch_fails_when_member_missing(tmp_path):
+    bodies = {_VENDOR_A: b"aaa", _VENDOR_B: b"bbb"}
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, bodies)
+    archive = tmp_path / "src.tar.gz"
+    _make_tar(archive, {_VENDOR_A: b"aaa"})
+
+    def downloader(url, dest):
+        shutil.copyfile(archive, dest)
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+    assert not (vendor / _VENDOR_A).exists()
+
+
+def test_fetch_returns_false_when_download_raises(tmp_path):
+    vendor, manifest, _expected = _vendor_fixture(tmp_path, {_VENDOR_A: b"aaa"})
+
+    def downloader(url, dest):
+        raise OSError("ネットワークに到達できません")
+
+    assert fetch_docs_vendor.fetch(vendor, manifest, downloader=downloader) is False
+
+
+def test_fetch_returns_false_when_manifest_missing(tmp_path):
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    assert fetch_docs_vendor.fetch(vendor, vendor / "manifest.txt", downloader=None) is False
+
+
+def test_asset_url_points_at_release_download():
+    url = fetch_docs_vendor.asset_url()
+    assert url == (
+        "https://github.com/koichi-araki-0801/python-tools/releases/download/"
+        "docs-vendor-v1/docs-vendor.tar.gz"
+    )
+
+
+def test_repo_manifest_lists_both_runtime_files():
+    # 実リポの manifest が 2 件を持つこと (書式変更でパーサが空を返す退行の検出)。
+    text = (REPO_ROOT / "docs" / "_build" / "vendor" / "manifest.txt").read_text(encoding="utf-8")
+    entries = fetch_docs_vendor.parse_manifest(text)
+    assert set(entries) == {"mermaid.min.js", "mermaid-layout-elk.min.js"}
+    assert all(len(v) == 64 for v in entries.values())
