@@ -144,8 +144,7 @@ def find_pip_call_files(
     末尾の `"` に阻まれて一致しなくなる(検査対象から黙って落ちる。実証済み)。`-z` は
     `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
     この問題が構造的に起きない。同型の修正が `scripts/check_comments.py`
-    (`_staged_files`)・`offline/lib/bundle_common.py`(`list_requirements_files_via_git`)・
-    `scripts/setup_dev.py`(`list_requirements`)の計 4 箇所にある。
+    (`_staged_files`)・`scripts/setup_dev.py`(`list_requirements`)の計 3 箇所にある。
     """
     cmd = ["git", "-C", str(repo_root), "ls-files", "-z"]
     if runner is None:

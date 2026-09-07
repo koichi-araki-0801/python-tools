@@ -3,17 +3,13 @@
 
 `check_requirements.py` のテストベクタは monorepo `offline/lib/verify.Tests.ps1`
 (`Test-OfflineRequirementLine`) の受理/拒否ケースを逐語移植する。`build_venv.py` は
-実際の venv 作成・pip install を伴わない純粋な部品 (wheelhouse fail-closed 判定・
-Python ランチャ解決) だけを単体対象とする。実際にビルドが通ることは
+実際の venv 作成・依存導入を伴わない純粋な部品 (Python ランチャ解決・検査と導入の順序)
+だけを単体対象とする。実際にビルドが通ることは
 `graph-editor/scripts/build.bat` / `pdf-to-svg/scripts/build.bat` の実行で確認する。
 
-`offline/lib/bundle_common.py` は content-key 2 経路一致・bundle.key 読み書き・pip 入口列挙
-ガードを対象とする。requirements 列挙のテストは実 git (`ls-files`/`init`/`add`/`commit`) を
-ローカルで実行する (ネットワークには一切アクセスしない)。
-
-`offline/setup_offline.py` は手元のバンドル探索 → Release からの HTTPS 取得 → `.sha256` 照合 →
-content-key 照合 → 展開の各部品を対象とする。HTTP 取得は注入可能で実ネットワークへはアクセス
-しない。
+実 git を使うテスト (`ls-files`/`init`/`add`/`commit`) はローカルで完結し、ネットワークには
+一切アクセスしない。`fetch_docs_vendor.py` の HTTP 取得も注入可能で、実ネットワークへは
+アクセスしない。
 """
 
 import hashlib
@@ -28,16 +24,12 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "hooks"))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "offline"))
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "offline" / "lib"))
 
 import pytest  # noqa: E402
 
 import check_requirements  # noqa: E402
 import check_comments  # noqa: E402
 import build_venv  # noqa: E402
-import bundle_common  # noqa: E402
-import setup_offline  # noqa: E402
 import setup_dev  # noqa: E402
 import fetch_docs_vendor  # noqa: E402
 import pre_push  # noqa: E402
@@ -229,7 +221,7 @@ def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path
     assert pip_cmds[0][-2:] == ["-r", str(requirements_path)]
 
 
-# ── bundle_common: requirements.txt 列挙 (git 経路 / FS フォールバック経路の一致) ──
+# ── テスト用の一時 git repo (requirements 列挙・pip 入口ガードのテストで使う) ──
 def _init_git_repo(repo: pathlib.Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
@@ -242,172 +234,6 @@ def _init_git_repo(repo: pathlib.Path) -> None:
         cwd=repo,
         check=True,
     )
-
-
-def test_requirements_files_via_git_and_filesystem_match(tmp_path):
-    (tmp_path / "requirements.txt").write_text("a\n", encoding="utf-8")
-    sub = tmp_path / "sub"
-    sub.mkdir()
-    (sub / "dev-requirements.txt").write_text("b\n", encoding="utf-8")
-    # gitignore 相当 (追跡しない) の除外ディレクトリ。両経路とも除外することを確認する。
-    # git 側は「そもそも追跡しない (add しない)」ことで、FS 側は名前判定で、同じ集合へ倒す。
-    wheelhouse = tmp_path / "python-wheelhouse"
-    wheelhouse.mkdir()
-    (wheelhouse / "requirements.txt").write_text("ignored\n", encoding="utf-8")
-    venv_dir = tmp_path / ".venv-build"
-    venv_dir.mkdir()
-    (venv_dir / "requirements.txt").write_text("ignored\n", encoding="utf-8")
-    # M-6 回帰: `.gitignore` に列挙されたビルド生成物ディレクトリ (dist/build/out 等) は
-    # git 側では未追跡で最初から候補に入らない。FS フォールバックにも同じ除外が無いと、
-    # ここに紛れ込んだファイルだけ FS 側が拾ってしまう非対称になる。
-    for name in ("dist", "build", "out", "coverage", "test-results", "__pycache__"):
-        d = tmp_path / name
-        d.mkdir()
-        (d / "requirements.txt").write_text("ignored\n", encoding="utf-8")
-
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "add",
-         "requirements.txt", "sub/dev-requirements.txt"],
-        cwd=tmp_path,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init"],
-        cwd=tmp_path,
-        check=True,
-    )
-
-    via_git = bundle_common.list_requirements_files_via_git(tmp_path)
-    via_fs = bundle_common.list_requirements_files_via_filesystem(tmp_path)
-    assert via_git is not None
-    rel_git = sorted(p.relative_to(tmp_path).as_posix() for p in via_git)
-    rel_fs = sorted(p.relative_to(tmp_path).as_posix() for p in via_fs)
-    assert rel_git == rel_fs == ["requirements.txt", "sub/dev-requirements.txt"]
-
-
-def test_list_requirements_files_via_git_returns_none_when_git_unavailable(tmp_path, monkeypatch):
-    # git 実行ファイルを発見できない環境では git 経路は None (呼び出し元が FS フォールバック
-    # へ切り替える)。PATH を空同然にして `git` を解決不能にする。
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert bundle_common.list_requirements_files_via_git(tmp_path) is None
-
-
-def test_list_requirements_files_prefers_git_when_available(tmp_path):
-    (tmp_path / "requirements.txt").write_text("a\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
-    files = bundle_common.list_requirements_files(tmp_path)
-    assert [p.name for p in files] == ["requirements.txt"]
-
-
-# ── list_requirements_files_via_git: 非 ASCII パスの quotepath 回帰 (I-1) ──
-def test_list_requirements_files_via_git_handles_non_ascii_directory_name(tmp_path):
-    # git は既定 (core.quotepath=true) で非 ASCII パスを引用符 + 8 進エスケープした
-    # 文字列で返す。`-z` (NUL 区切り) を使わないと `repo_root / line` が実在しないパスに
-    # なり、この日本語ディレクトリ配下の requirements.txt が黙って候補から落ちる。
-    jp_dir = tmp_path / "日本語ディレクトリ"
-    jp_dir.mkdir()
-    (jp_dir / "requirements.txt").write_text("a\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
-
-    files = bundle_common.list_requirements_files_via_git(tmp_path)
-    assert files is not None
-    rel = [p.relative_to(tmp_path).as_posix() for p in files]
-    assert "日本語ディレクトリ/requirements.txt" in rel
-
-
-# ── bundle_common: content-key ──
-def test_compute_content_key_changes_with_requirements_content(tmp_path):
-    req = tmp_path / "requirements.txt"
-    req.write_text("pkgA==1.0\n", encoding="utf-8")
-    key1 = bundle_common.compute_content_key(tmp_path, requirements_files=[req])
-    req.write_text("pkgA==2.0\n", encoding="utf-8")
-    key2 = bundle_common.compute_content_key(tmp_path, requirements_files=[req])
-    assert key1 != key2
-    assert len(key1) == 64
-    int(key1, 16)  # hex digest であること
-
-
-def test_compute_content_key_folds_in_vendor_manifest(tmp_path):
-    req = tmp_path / "requirements.txt"
-    req.write_text("pkgA==1.0\n", encoding="utf-8")
-    vendor = tmp_path / "docs" / "_build" / "vendor"
-    vendor.mkdir(parents=True)
-    manifest = vendor / "manifest.txt"
-    manifest.write_text("mermaid.min.js version=1\n", encoding="utf-8")
-    key_before = bundle_common.compute_content_key(tmp_path, requirements_files=[req])
-    manifest.write_text("mermaid.min.js version=2\n", encoding="utf-8")
-    key_after = bundle_common.compute_content_key(tmp_path, requirements_files=[req])
-    assert key_before != key_after
-
-
-def test_compute_content_key_via_git_and_filesystem_paths_agree(tmp_path):
-    # 「両経路は最初から同一集合」を content-key の値でも固定する。
-    (tmp_path / "requirements.txt").write_text("pkgA==1.0\n", encoding="utf-8")
-    vendor = tmp_path / "docs" / "_build" / "vendor"
-    vendor.mkdir(parents=True)
-    (vendor / "manifest.txt").write_text("m\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
-
-    key_via_git = bundle_common.compute_content_key(
-        tmp_path, requirements_files=bundle_common.list_requirements_files_via_git(tmp_path)
-    )
-    key_via_fs = bundle_common.compute_content_key(
-        tmp_path, requirements_files=bundle_common.list_requirements_files_via_filesystem(tmp_path)
-    )
-    assert key_via_git == key_via_fs
-
-
-def test_compute_content_key_is_line_ending_invariant(tmp_path):
-    # Windows worktree (既定 core.autocrlf=true) は CRLF、GitHub の archive zip (codeload) は
-    # LF になる。同じ内容が改行コードだけの違いで別の content-key を生むと、配布先での
-    # bundle.key 突き合わせが恒久的に不一致になる。
-    repo_crlf = tmp_path / "crlf"
-    repo_lf = tmp_path / "lf"
-    for repo, newline in ((repo_crlf, "\r\n"), (repo_lf, "\n")):
-        repo.mkdir()
-        content = f"pkgA==1.0{newline}pkgB==2.0{newline}"
-        (repo / "requirements.txt").write_bytes(content.encode("utf-8"))
-        vendor = repo / "docs" / "_build" / "vendor"
-        vendor.mkdir(parents=True)
-        (vendor / "manifest.txt").write_bytes(f"mermaid.min.js version=1{newline}".encode("utf-8"))
-
-    key_crlf = bundle_common.compute_content_key(
-        repo_crlf, requirements_files=[repo_crlf / "requirements.txt"]
-    )
-    key_lf = bundle_common.compute_content_key(
-        repo_lf, requirements_files=[repo_lf / "requirements.txt"]
-    )
-    assert key_crlf == key_lf
-
-
-# ── bundle_common: bundle.key の読み書き ──
-def test_bundle_key_round_trip(tmp_path):
-    path = tmp_path / "bundle.key"
-    bundle_common.write_bundle_key(path, "deadbeef" * 8)
-    assert bundle_common.read_bundle_key(path) == "deadbeef" * 8
-
-
-# ── bundle_common: バンドル共通部品 ──
-def test_build_tar_command_includes_wheelhouse_and_vendor_from_bundle_common(tmp_path):
-    cmd = bundle_common.build_tar_command("tar", tmp_path / "b.tar.gz", tmp_path)
-    assert cmd[:2] == ["tar", "-czf"]
-    assert bundle_common.WHEELHOUSE_DIR_NAME in cmd
-    assert bundle_common.VENDOR_DIR_POSIX in cmd
-
-
-def test_sha256_file_matches_hashlib(tmp_path):
-    p = tmp_path / "x.bin"
-    p.write_bytes(b"payload")
-    assert bundle_common.sha256_file(p) == hashlib.sha256(b"payload").hexdigest()
-
-
-def test_assert_vendor_assets_present_raises_when_js_missing(tmp_path):
-    vendor = tmp_path / "docs" / "_build" / "vendor"
-    vendor.mkdir(parents=True)
-    (vendor / "manifest.txt").write_text("v1\n", encoding="utf-8")
-    with pytest.raises(RuntimeError):
-        bundle_common.assert_vendor_assets_present(tmp_path)
 
 
 # ── _FakeRunner / _completed: subprocess.run 互換の呼び出し記録スタブ(post-commit の runner 検証で使う) ──
@@ -511,25 +337,22 @@ def test_list_requirements_finds_root_and_nested_files(tmp_path, monkeypatch):
     assert rel == ["requirements.txt", "sub/dev-requirements.txt"]
 
 
-# ── check_wheelhouse: fail-closed(--online 未指定なら必須。M-5) ──
-def test_check_wheelhouse_exits_when_missing_and_not_online(monkeypatch, tmp_path):
-    monkeypatch.setattr(setup_dev, "WHEELHOUSE", tmp_path / "no-such-wheelhouse")
-    with pytest.raises(SystemExit) as excinfo:
-        setup_dev.check_wheelhouse(False)
-    assert excinfo.value.code == 1
+# ── build_pip_command: 索引を塞がずに PyPI から導入する ──
+def test_build_pip_command_installs_from_index(tmp_path):
+    req_a = tmp_path / "requirements.txt"
+    req_b = tmp_path / "dev-requirements.txt"
+    cmd = setup_dev.build_pip_command(["py", "-3.13"], [req_a, req_b])
+    assert cmd[:5] == ["py", "-3.13", "-m", "pip", "install"]
+    assert "--no-index" not in cmd
+    assert "--find-links" not in cmd
+    assert cmd[5:] == ["-r", str(req_a), "-r", str(req_b)]
 
 
-def test_check_wheelhouse_passes_when_present(monkeypatch, tmp_path):
-    wheelhouse = tmp_path / "python-wheelhouse"
-    wheelhouse.mkdir()
-    monkeypatch.setattr(setup_dev, "WHEELHOUSE", wheelhouse)
-    setup_dev.check_wheelhouse(False)  # 例外を送出しないことを確認
-
-
-def test_check_wheelhouse_skips_check_when_online(monkeypatch, tmp_path):
-    # --online (明示 opt-in) のときは wheelhouse 不在でも fail-closed の対象外。
-    monkeypatch.setattr(setup_dev, "WHEELHOUSE", tmp_path / "no-such-wheelhouse")
-    setup_dev.check_wheelhouse(True)  # 例外を送出しないことを確認
+def test_setup_dev_has_no_online_flag():
+    # `--online` は既定がオンラインになったことで意味を失った。受け付けないことを固定する
+    # (残っていると「明示 opt-in が要る」という誤解が生きたままになる)。
+    with pytest.raises(SystemExit):
+        setup_dev.parse_args(["--online"])
 
 
 # ── check_requirements: assert_requirements_file と同じ契約 (RuntimeError。M-4) ──
@@ -637,225 +460,6 @@ def test_main_staged_passes_clean_tree(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["check_comments.py", "--staged"])
     code = check_comments.main()
     assert code == 0
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# offline/setup_offline.py
-# ═══════════════════════════════════════════════════════════════════════════
-
-# ── find_local_bundle: 直下優先、無ければ bk\ ──
-def test_find_local_bundle_prefers_repo_root(tmp_path):
-    (tmp_path / bundle_common.BUNDLE_NAME).write_bytes(b"b")
-    (tmp_path / bundle_common.BUNDLE_KEY_NAME).write_text("k", encoding="ascii")
-    bk = tmp_path / "bk"
-    bk.mkdir()
-    (bk / bundle_common.BUNDLE_NAME).write_bytes(b"old")
-    (bk / bundle_common.BUNDLE_KEY_NAME).write_text("old", encoding="ascii")
-    found = setup_offline.find_local_bundle(tmp_path)
-    assert found == (tmp_path / bundle_common.BUNDLE_NAME, tmp_path / bundle_common.BUNDLE_KEY_NAME)
-
-
-def test_find_local_bundle_falls_back_to_bk(tmp_path):
-    bk = tmp_path / "bk"
-    bk.mkdir()
-    (bk / bundle_common.BUNDLE_NAME).write_bytes(b"b")
-    (bk / bundle_common.BUNDLE_KEY_NAME).write_text("k", encoding="ascii")
-    assert setup_offline.find_local_bundle(tmp_path) == (bk / bundle_common.BUNDLE_NAME, bk / bundle_common.BUNDLE_KEY_NAME)
-
-
-def test_find_local_bundle_requires_both_files(tmp_path):
-    (tmp_path / bundle_common.BUNDLE_NAME).write_bytes(b"b")
-    assert setup_offline.find_local_bundle(tmp_path) is None
-
-
-# ── download_release_assets: 3 アセットを HTTPS で取得(注入したダウンローダで検証) ──
-def test_download_release_assets_fetches_bundle_sha256_and_key(tmp_path):
-    urls: list[str] = []
-
-    def fake_download(url, dest):
-        urls.append(url)
-        dest.write_bytes(b"x")
-
-    bundle, sha, key = setup_offline.download_release_assets(
-        "offline-bundle-v1", tmp_path, owner="o", repo="r", http_download=fake_download
-    )
-    base = "https://github.com/o/r/releases/download/offline-bundle-v1"
-    assert urls == [
-        f"{base}/{bundle_common.BUNDLE_NAME}",
-        f"{base}/{bundle_common.BUNDLE_NAME}.sha256",
-        f"{base}/{bundle_common.BUNDLE_KEY_NAME}",
-    ]
-    assert bundle.is_file() and sha.is_file() and key.is_file()
-
-
-def test_download_release_assets_raises_when_download_fails(tmp_path):
-    def failing(url, dest):
-        raise OSError("boom")
-
-    with pytest.raises(RuntimeError):
-        setup_offline.download_release_assets("t", tmp_path, owner="o", repo="r", http_download=failing)
-
-
-# ── verify_bundle_sha256_sidecar: Release の .sha256(転送破損の検知) ──
-def test_verify_bundle_sha256_sidecar_passes_on_match(tmp_path):
-    b = tmp_path / "b.tar.gz"
-    b.write_bytes(b"payload")
-    s = tmp_path / "b.tar.gz.sha256"
-    s.write_text(f"{hashlib.sha256(b'payload').hexdigest()}  b.tar.gz", encoding="ascii")
-    setup_offline.verify_bundle_sha256_sidecar(b, s)
-
-
-def test_verify_bundle_sha256_sidecar_raises_on_mismatch(tmp_path):
-    b = tmp_path / "b.tar.gz"
-    b.write_bytes(b"payload")
-    s = tmp_path / "b.tar.gz.sha256"
-    s.write_text(f"{'0' * 64}  b.tar.gz", encoding="ascii")
-    with pytest.raises(RuntimeError):
-        setup_offline.verify_bundle_sha256_sidecar(b, s)
-
-
-# ── main: 手元のバンドルがあれば取得しない / 無ければ取得して .sha256 を照合する ──
-def test_main_uses_local_bundle_without_download(monkeypatch, tmp_path):
-    calls: list[str] = []
-    monkeypatch.setattr(setup_offline, "ROOT", tmp_path)
-    monkeypatch.setattr(setup_offline, "find_local_bundle", lambda root: (tmp_path / "b", tmp_path / "k"))
-    monkeypatch.setattr(setup_offline, "download_release_assets", lambda *a, **k: calls.append("download"))
-    monkeypatch.setattr(setup_offline, "verify_bundle_sha256_sidecar", lambda *a, **k: calls.append("sha256"))
-    monkeypatch.setattr(
-        setup_offline, "verify_local_checkout_matches_bundle_key", lambda *a, **k: calls.append("key")
-    )
-    monkeypatch.setattr(setup_offline, "extract_bundle", lambda *a, **k: calls.append("extract"))
-    assert setup_offline.main([]) == 0
-    assert calls == ["key", "extract"]
-
-
-def test_main_downloads_and_checks_sidecar_when_no_local_bundle(monkeypatch, tmp_path):
-    calls: list[str] = []
-    monkeypatch.setattr(setup_offline, "ROOT", tmp_path)
-    monkeypatch.setattr(setup_offline, "find_local_bundle", lambda root: None)
-
-    def fake_download(tag, dest_dir, **kwargs):
-        calls.append("download")
-        return dest_dir / "b", dest_dir / "b.sha256", dest_dir / "k"
-
-    monkeypatch.setattr(setup_offline, "download_release_assets", fake_download)
-    monkeypatch.setattr(setup_offline, "verify_bundle_sha256_sidecar", lambda *a, **k: calls.append("sha256"))
-    monkeypatch.setattr(
-        setup_offline, "verify_local_checkout_matches_bundle_key", lambda *a, **k: calls.append("key")
-    )
-    monkeypatch.setattr(setup_offline, "extract_bundle", lambda *a, **k: calls.append("extract"))
-    assert setup_offline.main([]) == 0
-    assert calls == ["download", "sha256", "key", "extract"]
-
-
-# ── extract_bundle (手順5) ──
-def _make_bundle_tar(tmp_path, *, include_vendor=True):
-    stage = tmp_path / "stage"
-    wheelhouse = stage / bundle_common.WHEELHOUSE_DIR_NAME
-    wheelhouse.mkdir(parents=True)
-    (wheelhouse / "dummy.whl").write_bytes(b"x")
-    if include_vendor:
-        vendor = stage / "docs" / "_build" / "vendor"
-        vendor.mkdir(parents=True)
-        (vendor / "manifest.txt").write_text("v1\n", encoding="utf-8")
-        (vendor / "mermaid.min.js").write_bytes(b"x")
-        (vendor / "mermaid-layout-elk.min.js").write_bytes(b"x")
-    tar_path = tmp_path / bundle_common.BUNDLE_NAME
-    with tarfile.open(tar_path, "w:gz") as tf:
-        tf.add(wheelhouse, arcname=bundle_common.WHEELHOUSE_DIR_NAME)
-        if include_vendor:
-            tf.add(stage / "docs", arcname="docs")
-    return tar_path
-
-
-def test_extract_bundle_creates_wheelhouse_and_vendor(tmp_path):
-    tar_path = _make_bundle_tar(tmp_path)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    setup_offline.extract_bundle(tar_path, repo_root)
-    assert (repo_root / bundle_common.WHEELHOUSE_DIR_NAME / "dummy.whl").is_file()
-    assert (repo_root / "docs" / "_build" / "vendor" / "manifest.txt").is_file()
-
-
-def test_extract_bundle_raises_when_vendor_assets_missing(tmp_path):
-    tar_path = _make_bundle_tar(tmp_path, include_vendor=False)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    with pytest.raises(RuntimeError):
-        setup_offline.extract_bundle(tar_path, repo_root)
-
-
-# ── verify_local_checkout_matches_bundle_key (手順4・I-3) ──
-def test_verify_local_checkout_matches_bundle_key_passes_on_match(tmp_path, monkeypatch):
-    monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "same-key")
-    key_path = tmp_path / "bundle.key"
-    key_path.write_text("same-key", encoding="ascii")
-
-    # 例外が出ないことの確認。
-    setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=tmp_path)
-
-
-def test_verify_local_checkout_matches_bundle_key_raises_without_deleting_existing_extraction(
-    tmp_path, monkeypatch
-):
-    repo_root = tmp_path
-    wheelhouse = repo_root / bundle_common.WHEELHOUSE_DIR_NAME
-    wheelhouse.mkdir()
-    (wheelhouse / "dummy.whl").write_bytes(b"x")
-    vendor = repo_root / "docs" / "_build" / "vendor"
-    vendor.mkdir(parents=True)
-    (vendor / "mermaid.min.js").write_bytes(b"x")
-    (vendor / "manifest.txt").write_text("v1\n", encoding="utf-8")
-
-    monkeypatch.setattr(bundle_common, "compute_content_key", lambda repo_root: "local-key")
-    key_path = repo_root / "bundle.key"
-    key_path.write_text("published-key", encoding="ascii")
-
-    with pytest.raises(RuntimeError):
-        setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)
-
-    # 不一致の検知は展開の前に行うため、直前まで揃っていた展開済みの重量物には手を
-    # 触れない(消すと、前回まで完全だった wheelhouse / vendor JS を失うだけになる)。
-    assert (wheelhouse / "dummy.whl").is_file()
-    assert (vendor / "mermaid.min.js").is_file()
-    assert (vendor / "manifest.txt").is_file()
-
-
-# ── I-3: 展開前後での照合結果の違いを実際に固定する ──
-def test_i3_checking_before_extraction_detects_manifest_drift_that_after_extraction_misses(tmp_path):
-    """公開後に `docs/_build/vendor/manifest.txt` だけが更新されたシナリオ:
-    バンドル(公開時点)は旧 manifest("v1")を同梱・content-key に含める。手元チェックアウト
-    は新 manifest("v2")へ進んでいる。展開の**前**に照合すれば不一致を検知できる一方、
-    展開の**後**に測ると、バンドル同梱の旧 manifest が手元の新 manifest を上書きしてしまい
-    検知できなくなる(旧実装で実際に起きていたバグ。I-3 の修正が「展開前」を要求する理由を
-    実際に両方の順序を実行して固定する)。
-    """
-    # バンドル同梱の manifest は "v1"(`_make_bundle_tar` の既定値)。
-    tar_path = _make_bundle_tar(tmp_path)
-
-    # 公開時の content-key ("v1" の requirements + manifest から算出) を bundle.key として保存。
-    stage = tmp_path / "publish_stage"
-    (stage / "docs" / "_build" / "vendor").mkdir(parents=True)
-    (stage / "requirements.txt").write_text("pkgA==1.0\n", encoding="utf-8")
-    (stage / "docs" / "_build" / "vendor" / "manifest.txt").write_text("v1\n", encoding="utf-8")
-    published_key = bundle_common.compute_content_key(stage)
-    key_path = tmp_path / "bundle.key"
-    bundle_common.write_bundle_key(key_path, published_key)
-
-    # 手元チェックアウトは公開後に manifest だけ "v2" へ更新された状態。
-    repo_root = tmp_path / "repo"
-    (repo_root / "docs" / "_build" / "vendor").mkdir(parents=True)
-    (repo_root / "requirements.txt").write_text("pkgA==1.0\n", encoding="utf-8")
-    (repo_root / "docs" / "_build" / "vendor" / "manifest.txt").write_text("v2\n", encoding="utf-8")
-
-    # I-3 の新順序: 展開の前に照合すれば不一致を検知する。
-    with pytest.raises(RuntimeError):
-        setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)
-
-    # 対照 (旧順序の再現): 展開の後に測ると、バンドル同梱の "v1" manifest が repo_root の
-    # "v2" を上書きし、不一致が構造的に検知できなくなる。
-    setup_offline.extract_bundle(tar_path, repo_root)
-    setup_offline.verify_local_checkout_matches_bundle_key(key_path, repo_root=repo_root)  # 例外なし = 検知漏れ
 
 
 # ═══════════════════════════════════════════════════════════════════════════

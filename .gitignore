@@ -7,12 +7,9 @@ test-results/
 coverage/
 docs/_build/vendor/mermaid.min.js
 docs/_build/vendor/mermaid-layout-elk.min.js
-python-wheelhouse/
-offline-deps-bundle.tar.gz*
-bundle.key
 CLAUDE.md
 .claude/
 .mcp.json
 
-# 配布担当の端末にだけ置くバンドル生成スクリプトと、撤去した配布機構の複製
+# 撤去した配布機構の複製
 local-only/
