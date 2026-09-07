@@ -59,7 +59,7 @@ jobs:
       - name: Install Edge for browser-marked tests
         run: python -m playwright install --with-deps msedge
 
-      # scripts/ 自身の単体テスト(pip 入口ガード・requirements 検査・offline の setup)を
+      # scripts/ 自身の単体テスト(pip 入口ガード・requirements 検査・docs vendor 取得)を
       # 先に走らせる(依存が薄く早期に失敗を検出できるため)。pdf-to-svg / graph-editor /
       # docs/_build は `test/` に同名モジュール(`test_edge_launch.py` 等)を含むため
       # 1 回の `pytest` 呼び出しへまとめない(import file mismatch。個別実行はローカルの

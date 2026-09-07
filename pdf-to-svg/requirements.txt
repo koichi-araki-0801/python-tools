@@ -1,5 +1,5 @@
 # PdfToSvg exe ビルド/実行に必要な依存
-# scripts\build.bat が隔離 venv 内へ install する（オフライン時は同梱 python-wheelhouse から）。
+# scripts\build.bat が隔離 venv 内へ install する。
 # 版は == で完全固定する（ピンの正典。pyproject.toml 側は互換宣言のみ。設計書 §8.5）。
 PyMuPDF==1.28.2
 Pillow==12.3.0

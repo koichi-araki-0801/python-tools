@@ -1,6 +1,6 @@
 # python-tools
 
-帳票図版の加工ツール群(`pdf-to-svg` / `graph-editor`)。Python 専用・オフライン配布対応。
+帳票図版の加工ツール群(`pdf-to-svg` / `graph-editor`)。Python 専用。
 
 - `pdf-to-svg`: PDF から SVG への変換・辞書置換ツール(Edge シェル UI)。
   - 運用報告書の「当社のスチュワードシップ活動」の図だけを切り出してグレースケール SVG にする専用モードあり。
@@ -22,22 +22,34 @@ setup-dev.bat
 行うこと:
 
 1. `py -3.13` と Edge の存在確認。
-2. `python-wheelhouse/`(オフライン wheel 置き場)の存在確認。既定は fail-closed —
-   無ければ「先に offline\setup-offline.bat を実行してください」と表示して失敗する。
-   ネットワーク接続がある環境でオンライン導入したい場合のみ `setup-dev.bat --online`
-   を明示指定する。
-3. `git ls-files -- '*requirements.txt'` で動的に列挙した requirements 一式を
-   `pip install`(既定はオフライン wheelhouse から `--no-index --find-links`)。
+2. `git ls-files -- '*requirements.txt'` で動的に列挙した requirements 一式を
+   PyPI から導入する。
+3. docs の mermaid ランタイムを GitHub Releases から取得する(下記「docs の mermaid
+   ランタイム」節)。取得できなくても警告に留めてセットアップは続行する。
 4. `git config core.hooksPath scripts/hooks` — 下記「開発フロー」節の 3 フックを
    有効化する。
 
-### オフライン重量物の取得
+### docs の mermaid ランタイム
 
-`offline\setup-offline.bat` は、リポジトリ直下(または `bk\`)に `offline-deps-bundle.tar.gz` と
-`bundle.key` があればそれを、無ければ GitHub Releases(タグ `offline-bundle-v1`)から HTTPS で
-取得して展開する。展開の前に `bundle.key` と手元の requirements / manifest の content-key を
-突き合わせ、不一致なら止まる。詳細は `offline/README-offline.md`。重量物の生成と Release の
-更新は配布担当の端末にある git 管理外の `local-only/offline-publish/publish-bundle.bat` で行う。
+`docs/_build/vendor/` の `mermaid.min.js` / `mermaid-layout-elk.min.js`(合わせて約 4MB)は
+git に入れず、GitHub Releases(タグ `docs-vendor-v1`)の `docs-vendor.tar.gz` として配布する。
+`setup-dev.bat` が `scripts/fetch_docs_vendor.py` を呼んで取得し、git 管理下の
+`docs/_build/vendor/manifest.txt` に書かれた sha256 と全件一致したときだけ配置する。
+既に一致していれば取得しない。
+
+取得できなくてもセットアップは成功で終わる。この 2 ファイルは docs の HTML ビルドだけが要る
+依存で、未配置のときは mermaid 図が整形コード表示になる(`md2html.py` が警告を積む)。
+
+`mermaid-layout-elk.min.js` は `@mermaid-js/layout-elk` を esbuild で単一 IIFE へ自前バンドル
+したもので、CDN に同一物は無い。版を差し替えるときはリポジトリ所有者が次を行う。
+
+```bat
+tar -czf docs-vendor.tar.gz -C docs\_build\vendor mermaid.min.js mermaid-layout-elk.min.js
+gh release upload docs-vendor-v1 docs-vendor.tar.gz --clobber
+```
+
+併せて `docs/_build/vendor/manifest.txt` の sha256 を新しい実体の値へ更新してコミットする。
+更新を忘れると他端末の取得は sha256 不一致で配置されず警告が出る(黙って違う実体を使うことはない)。
 
 ## 開発フロー(Git hooks)
 

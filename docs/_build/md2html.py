@@ -14,12 +14,11 @@ docs ビルドの唯一の成果物系統。原稿を
 設計方針:
   - Markdown 解析は `markdown-it-py`、front-matter は `python-frontmatter`。docs 固有の描画
     （見出しシフト + TOC・mermaid フェンス・callout・base64 画像図）だけを自前トークン walker で
-    組む（下記 render 節）。依存は `docs/_build/requirements.txt`・オフライン時は同梱
-    `python-wheelhouse` から導入する。
+    組む（下記 render 節）。依存は `docs/_build/requirements.txt` に固定し PyPI から導入する。
   - 画像は `docs/<project>/images/*.png` を base64 data-URI でインライン（1 枚で自己完結）。
   - **ライトモード固定**（`prefers-color-scheme` は使わない）。配色は docs 共通のデザイン
     トークン（ACCENT #1F5C99 / INK #20242C / MUTED #606874 ほか）に固定。
-  - Mermaid: `docs/_build/vendor/mermaid.min.js`（git 管理外・オフライン重量物バンドル同梱）を
+  - Mermaid: `docs/_build/vendor/mermaid.min.js`（git 管理外。`setup-dev.bat` が GitHub Releases から取得）を
     HTML へインラインしクライアント描画（ライトテーマ固定・flowchart は直角ステップ）。vendor 未配置
     時は `<pre class="mermaid">` を整形コードとして表示し警告を積む。
 
