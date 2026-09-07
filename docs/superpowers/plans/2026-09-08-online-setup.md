@@ -1,6 +1,6 @@
 # オンライン構築への移行 実装計画
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** オフライン構築の資産を撤去し、依存は PyPI から、docs の mermaid ランタイムは GitHub Releases から取得するオンライン構築へ一本化する。
 
@@ -42,7 +42,7 @@
   - `main(argv: list[str] | None = None) -> int`
   - Task 3 の `setup_dev.py` が `fetch()` を呼ぶ。
 
-- [ ] **Step 1: テストの import 節へ新モジュールを足す**
+- [x] **Step 1: テストの import 節へ新モジュールを足す**
 
 `scripts/test_python_tools_scripts.py` の先頭 import 節(`import setup_dev` などが並ぶ箇所)へ 1 行加える。
 
@@ -50,7 +50,7 @@
 import fetch_docs_vendor  # noqa: E402
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `scripts/test_python_tools_scripts.py` の末尾へ次の節をまるごと追加する。
 
@@ -250,12 +250,12 @@ def test_repo_manifest_lists_both_runtime_files():
 
 テストが使う `io` / `shutil` / `tarfile` / `hashlib` が import 済みかを確認し、無ければ先頭の import 節へ足す。
 
-- [ ] **Step 3: テストを実行して失敗を確認**
+- [x] **Step 3: テストを実行して失敗を確認**
 
 Run: `py -3.13 -m pytest scripts -k fetch_docs_vendor or manifest or vendor_is_current`
 Expected: FAIL(`ModuleNotFoundError: No module named 'fetch_docs_vendor'`)
 
-- [ ] **Step 4: 実装を書く**
+- [x] **Step 4: 実装を書く**
 
 Create `scripts/fetch_docs_vendor.py`:
 
@@ -462,17 +462,17 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 5: テストを実行して通過を確認**
+- [x] **Step 5: テストを実行して通過を確認**
 
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS(既存 83 件 + 新規 14 件)
 
-- [ ] **Step 6: コメント規約検査**
+- [x] **Step 6: コメント規約検査**
 
 Run: `py -3.13 scripts\check_comments.py`
 Expected: 0 error
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add scripts/fetch_docs_vendor.py scripts/test_python_tools_scripts.py
@@ -494,7 +494,7 @@ git commit -m "feat(docs): mermaid ランタイムを Release から取得する
 - Produces: `build_venv(project_dir: Path, requirements_path: Path, *, clean: bool = False) -> Path`
   — 第 3 引数の `wheelhouse_dir` が無くなる。`require_wheelhouse` は消える。
 
-- [ ] **Step 1: テストを新しい契約へ書き換える**
+- [x] **Step 1: テストを新しい契約へ書き換える**
 
 `scripts/test_python_tools_scripts.py` から次を削除する。
 
@@ -513,12 +513,12 @@ git commit -m "feat(docs): mermaid ランタイムを Release から取得する
     assert install_cmd[-2:] == ["-r", str(requirements_path)]
 ```
 
-- [ ] **Step 2: テストを実行して失敗を確認**
+- [x] **Step 2: テストを実行して失敗を確認**
 
 Run: `py -3.13 -m pytest scripts -k build_venv`
 Expected: FAIL(`build_venv() missing 1 required positional argument: 'wheelhouse_dir'` または `--no-index` の表明で落ちる)
 
-- [ ] **Step 3: `build_venv.py` を書き換える**
+- [x] **Step 3: `build_venv.py` を書き換える**
 
 モジュール docstring の後半を差し替える。
 
@@ -572,7 +572,7 @@ install の実行部を次へ置き換える。
     # 無いと、そこを迂回する経路が素通りする)。
 ```
 
-- [ ] **Step 4: 呼び出し側 2 ファイルを直す**
+- [x] **Step 4: 呼び出し側 2 ファイルを直す**
 
 `graph-editor/scripts/build.py` と `pdf-to-svg/scripts/build.py` の双方で、次を行う。
 
@@ -583,12 +583,12 @@ install の実行部を次へ置き換える。
 
 `WORKSPACE` 定数は `sys.path.insert` で使っているため残す。
 
-- [ ] **Step 5: テストを実行して通過を確認**
+- [x] **Step 5: テストを実行して通過を確認**
 
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add scripts/lib/build_venv.py graph-editor/scripts/build.py pdf-to-svg/scripts/build.py scripts/test_python_tools_scripts.py
@@ -607,7 +607,7 @@ git commit -m "refactor(build): exe ビルド venv の依存導入をオンラ�
 - Consumes: `fetch_docs_vendor.fetch()`(Task 1)。
 - Produces: `build_pip_command(py: list[str], requirements: list[Path]) -> list[str]` — 組み立てを関数へ切り出してテスト可能にする。`WHEELHOUSE` 定数と `check_wheelhouse()` は消える。`parse_args()` から `--online` が消える。
 
-- [ ] **Step 1: テストを書き換える**
+- [x] **Step 1: テストを書き換える**
 
 `scripts/test_python_tools_scripts.py` から次の 3 件を削除する。
 
@@ -639,12 +639,12 @@ def test_setup_dev_has_no_online_flag():
 `parse_args()` が引数リストを受け取れる必要があるため、実装側のシグネチャを
 `parse_args(argv: list[str] | None = None)` にする(Step 3)。
 
-- [ ] **Step 2: テストを実行して失敗を確認**
+- [x] **Step 2: テストを実行して失敗を確認**
 
 Run: `py -3.13 -m pytest scripts -k "pip_command or online_flag or check_wheelhouse"`
 Expected: FAIL(`AttributeError: module 'setup_dev' has no attribute 'build_pip_command'`)
 
-- [ ] **Step 3: `setup_dev.py` を書き換える**
+- [x] **Step 3: `setup_dev.py` を書き換える**
 
 1. モジュール docstring の手順表を次へ差し替える。
 
@@ -732,17 +732,17 @@ def main() -> int:
     return 0
 ```
 
-- [ ] **Step 4: テストを実行して通過を確認**
+- [x] **Step 4: テストを実行して通過を確認**
 
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS
 
-- [ ] **Step 5: 実際に走らせて確認**
+- [x] **Step 5: 実際に走らせて確認**
 
 Run: `setup-dev.bat`
 Expected: 依存が PyPI から導入され、vendor は配置済みのため取得を省略し、最後まで通る。
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add scripts/setup_dev.py scripts/test_python_tools_scripts.py
@@ -764,7 +764,7 @@ git commit -m "refactor(setup): 依存導入をオンラインへ切り替え do
 - Consumes: なし。
 - Produces: なし(撤去のみ)。
 
-- [ ] **Step 1: テストから offline への依存を落とす**
+- [x] **Step 1: テストから offline への依存を落とす**
 
 `scripts/test_python_tools_scripts.py` から次を削除する。
 
@@ -779,19 +779,19 @@ git commit -m "refactor(setup): 依存導入をオンラインへ切り替え do
 
 削除後に未使用となる import(`tarfile` などを Task 1 の新テストが使うなら残す)を整理する。
 
-- [ ] **Step 2: テストを実行して通過を確認**
+- [x] **Step 2: テストを実行して通過を確認**
 
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS(`bundle_common` / `setup_offline` を参照するテストが 1 件も残っていない)
 
-- [ ] **Step 3: `offline/` を削除する**
+- [x] **Step 3: `offline/` を削除する**
 
 ```bash
 git rm -r offline
 rm -rf offline/__pycache__
 ```
 
-- [ ] **Step 4: `.gitignore` から 3 行を削除する**
+- [x] **Step 4: `.gitignore` から 3 行を削除する**
 
 削除するのは次の 3 行。
 
@@ -807,7 +807,7 @@ bundle.key
 「配布担当の端末にだけ置くバンドル生成スクリプトと、撤去した配布機構の複製」は
 「撤去した配布機構の複製」へ改める。
 
-- [ ] **Step 5: `check_comments.py` の python-tools 設定を直す**
+- [x] **Step 5: `check_comments.py` の python-tools 設定を直す**
 
 `REPO_CONFIGS["python-tools"]` の `skip_dir_names` と `ps1_skip_dir_names` から
 `"python-wheelhouse"` を削除する。`REPO_CONFIGS["workspace"]` は monorepo と対で保守する
@@ -816,14 +816,14 @@ bundle.key
 `check_comments.py` の `_staged_files` 付近にある「同型の修正が … `offline/lib/bundle_common.py`
 … の計 4 箇所にある」という注記を、`offline/lib/bundle_common.py` を除いた「計 3 箇所」へ直す。
 
-- [ ] **Step 6: `check_requirements.py` の注記を直す**
+- [x] **Step 6: `check_requirements.py` の注記を直す**
 
 `find_pip_call_files` の docstring にある同型注記から `offline/lib/bundle_common.py`
 (`list_requirements_files_via_git`)への言及を落とし、「計 3 箇所」へ直す。
 `is_offline_requirement_line` という関数名と、その由来を説明する冒頭コメントは変更しない
 (monorepo と対で保守する範囲)。
 
-- [ ] **Step 7: 検査とテストを走らせる**
+- [x] **Step 7: 検査とテストを走らせる**
 
 Run: `py -3.13 scripts\check_comments.py`
 Expected: 0 error
@@ -831,7 +831,7 @@ Expected: 0 error
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add -A
@@ -851,7 +851,7 @@ git commit -m "chore(offline): オフライン構築の資産一式を撤去す�
 - Consumes: なし。
 - Produces: なし(既存の入口の挙動を変えるのみ)。
 
-- [ ] **Step 1: `build_all.bat` を書き換える**
+- [x] **Step 1: `build_all.bat` を書き換える**
 
 冒頭コメントと分岐を次へ置き換える(CRLF・`chcp 65001 >nul` は維持)。
 
@@ -869,7 +869,7 @@ py -3.13 "%~dp0build_all.py" %*
 exit /b %ERRORLEVEL%
 ```
 
-- [ ] **Step 2: `requirements.txt` のコメントを直す**
+- [x] **Step 2: `requirements.txt` のコメントを直す**
 
 2 行目を次へ差し替える。
 
@@ -877,7 +877,7 @@ exit /b %ERRORLEVEL%
 # build_all.bat が導入する(PyPI から)。
 ```
 
-- [ ] **Step 3: `md2html.py` の設計方針コメントを直す**
+- [x] **Step 3: `md2html.py` の設計方針コメントを直す**
 
 「依存は `docs/_build/requirements.txt`・オフライン時は同梱 `python-wheelhouse` から導入する。」を
 「依存は `docs/_build/requirements.txt` に固定し PyPI から導入する。」へ改める。
@@ -885,12 +885,12 @@ exit /b %ERRORLEVEL%
 Mermaid の説明にある「（git 管理外・オフライン重量物バンドル同梱）」を
 「（git 管理外。`setup-dev.bat` が GitHub Releases から取得する）」へ改める。
 
-- [ ] **Step 4: docs ビルドを実行して確認**
+- [x] **Step 4: docs ビルドを実行して確認**
 
 Run: `docs\_build\build_all.bat`
 Expected: 依存が導入され HTML が生成される。mermaid 図が描画されている(vendor は配置済みのため)。
 
-- [ ] **Step 5: テストと検査**
+- [x] **Step 5: テストと検査**
 
 Run: `py -3.13 -m pytest docs/_build`
 Expected: PASS
@@ -898,7 +898,7 @@ Expected: PASS
 Run: `py -3.13 -m pytest scripts`
 Expected: PASS(pip 入口ガードが `docs/_build/build_all.bat` を検出し続けること)
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add docs/_build/build_all.bat docs/_build/requirements.txt docs/_build/md2html.py
@@ -921,7 +921,7 @@ git commit -m "refactor(docs): docs ビルドの依存導入をオンライン�
 - Consumes: なし。
 - Produces: なし。
 
-- [ ] **Step 1: `README.md` の冒頭とセットアップ節を書き換える**
+- [x] **Step 1: `README.md` の冒頭とセットアップ節を書き換える**
 
 3 行目の「Python 専用・オフライン配布対応。」を「Python 専用。」へ改める。
 
@@ -939,7 +939,7 @@ git commit -m "refactor(docs): docs ビルドの依存導入をオンライン�
    有効化する。
 ```
 
-- [ ] **Step 2: 「オフライン重量物の取得」節を差し替える**
+- [x] **Step 2: 「オフライン重量物の取得」節を差し替える**
 
 節の見出しと本文をまるごと次へ置き換える。
 
@@ -967,7 +967,7 @@ gh release upload docs-vendor-v1 docs-vendor.tar.gz --clobber
 更新を忘れると他端末の取得は sha256 不一致で配置されず警告が出る(黙って違う実体を使うことはない)。
 ```
 
-- [ ] **Step 3: `manifest.txt` の説明を直す**
+- [x] **Step 3: `manifest.txt` の説明を直す**
 
 先頭のコメント 6 行のうち、配布方法を説明する部分を次へ差し替える(版と sha256 の 2 行は変えない)。
 
@@ -983,28 +983,28 @@ gh release upload docs-vendor-v1 docs-vendor.tar.gz --clobber
 # (global mermaidLayoutElk)。差し替えは同手順で再バンドルする。
 ```
 
-- [ ] **Step 4: 両プロジェクトの設計書を直す**
+- [x] **Step 4: 両プロジェクトの設計書を直す**
 
 `docs/graph-editor/src/設計書.md:471` の「（オフライン優先、共有 wheelhouse 使用）」を削除する。
 `docs/pdf-to-svg/src/設計書.md:735` の「（オフライン優先 = 共有 wheelhouse 使用）」を削除する。
 
-- [ ] **Step 5: CI のコメントを直す**
+- [x] **Step 5: CI のコメントを直す**
 
 `.github/workflows/ci.yml:62` の「(pip 入口ガード・requirements 検査・offline の setup)」を
 「(pip 入口ガード・requirements 検査・vendor 取得)」へ改める。CI の手順自体は変えない。
 
-- [ ] **Step 6: `CLAUDE.md` を直す**
+- [x] **Step 6: `CLAUDE.md` を直す**
 
 `.bat` ランチャ規約の雛形列挙から `offline/setup-offline.bat` を外し、
 `setup-dev.bat` と `scripts/check-requirements.bat` の 2 件にする。
 `CLAUDE.md` は `.gitignore` 済みのためコミット対象には入らない。
 
-- [ ] **Step 7: 検査**
+- [x] **Step 7: 検査**
 
 Run: `py -3.13 scripts\check_comments.py`
 Expected: 0 error
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add README.md docs/_build/vendor/manifest.txt docs/graph-editor/src/設計書.md docs/pdf-to-svg/src/設計書.md .github/workflows/ci.yml
@@ -1024,45 +1024,59 @@ git commit -m "docs: 構築手順の記述をオンライン構築の現状へ�
 - Consumes: なし。
 - Produces: なし。
 
-- [ ] **Step 1: 削除対象が git 管理外であることを確認**
+- [x] **Step 1: 削除対象が git 管理外であることを確認**
 
 Run: `git status --porcelain` と `git ls-files -- python-wheelhouse bundle.key offline-deps-bundle.tar.gz local-only`
 Expected: いずれも出力が空(追跡されていない)。
 
-- [ ] **Step 2: 削除する**
+- [x] **Step 2: 削除する**
 
 ```bash
 rm -rf python-wheelhouse local-only/offline-publish
 rm -f offline-deps-bundle.tar.gz offline-deps-bundle.tar.gz.sha256 offline-deps-bundle.tar.gz.sig bundle.key
 ```
 
-- [ ] **Step 3: 依存がインストール済みのまま動くことを確認**
+- [x] **Step 3: 依存がインストール済みのまま動くことを確認**
 
 Run: `py -3.13 -m pytest scripts` / `py -3.13 -m pytest docs/_build` /
 `py -3.13 -m pytest pdf-to-svg` / `py -3.13 -m pytest graph-editor`
 Expected: いずれも PASS(既に導入済みの依存で動く。wheelhouse を参照する経路が残っていない)。
 
-- [ ] **Step 4: e2e も含めた検証一式**
+- [x] **Step 4: e2e も含めた検証一式**
 
 Run: `py -3.13 -m pytest pdf-to-svg -m e2e` と `py -3.13 -m pytest graph-editor -m e2e`
 Expected: PASS
 
-- [ ] **Step 5: コミット不要**
+- [x] **Step 5: コミット不要**
 
 削除対象はすべて git 管理外のため、コミットは発生しない。`git status` が clean であることを確認する。
 
 ---
 
+## 実装時の差異(記録)
+
+- Task 3・4・7 は 1 コミットにまとめた。`scripts/test_python_tools_scripts.py` の変更が
+  3 つのタスクに跨り、ファイル単位で分けられなかったため。
+- Task 2 の `build_venv` テストは、既存の実装が呼び出しコマンドを `fake_run` のローカル
+  リストへ記録する形だったため、計画の `fake_run.calls` ではなく `pip_cmds` を足して
+  同じ内容を検証した。
+- 計画に無かった修正を 3 件足した。`graph-editor/dev-requirements.txt` と
+  `pdf-to-svg/dev-requirements.txt` の「wheelhouse 収集」への言及、
+  `pdf-to-svg/requirements.txt` の「オフライン時は同梱 python-wheelhouse から」への言及。
+  受け入れ基準の grep を満たすために必要だった。
+- 設計書 2 件を変更したため、`docs/_build/build_all.bat` で閲覧用 HTML 4 枚を再生成して
+  同じコミットに含めた。
+
 ## 受け入れ確認
 
 すべてのタスク完了後に次を実行する。
 
-- [ ] `git grep -niE "offline|wheelhouse"` の結果が、monorepo と対で保守する範囲
+- [x] `git grep -niE "offline|wheelhouse"` の結果が、monorepo と対で保守する範囲
   (`docs/コメント規約.md` の `.ps1` 例示・`check_comments.py` の `workspace` 設定・
   `check_requirements.py` の `is_offline_requirement_line`)だけであること。
-- [ ] `py -3.13 scripts\check_comments.py` が 0 error。
-- [ ] 4 ディレクトリの pytest がすべて PASS。
-- [ ] `pdf-to-svg` / `graph-editor` の e2e が PASS。
-- [ ] `python-wheelhouse/` が無い状態で `setup-dev.bat` が最後まで通る。
-- [ ] Release がまだ無い状態で vendor 取得が警告に留まり、セットアップが成功する
+- [x] `py -3.13 scripts\check_comments.py` が 0 error。
+- [x] 4 ディレクトリの pytest がすべて PASS。
+- [x] `pdf-to-svg` / `graph-editor` の e2e が PASS。
+- [x] `python-wheelhouse/` が無い状態で `setup-dev.bat` が最後まで通る。
+- [x] Release がまだ無い状態で vendor 取得が警告に留まり、セットアップが成功する
   (`docs/_build/vendor/` の 2 ファイルを一時退避して確認し、確認後に戻す)。
