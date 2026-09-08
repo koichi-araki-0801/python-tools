@@ -239,6 +239,18 @@ class BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
         self._slots = threading.BoundedSemaphore(max_connections or MAX_CONNECTIONS)
         super().__init__(*args, **kwargs)
 
+    @property
+    def available_slots(self) -> int:
+        """残っている同時接続の枠数。**観測専用**で、受理の判定には使わない
+        (判定は `process_request` の `acquire(blocking=False)` が原子的に行う)。
+
+        テストが「accept 済みの本数」を待ち合わせるための唯一の窓である。接続は張った
+        だけでは枠を取らない (listen キューに積まれるだけで、accept して初めて
+        `process_request` が走る) ため、これが無いと固定 sleep でしか枠の充填を判定できず、
+        遅い端末で上限の主張が黙って崩れる。`BoundedSemaphore` の内部カウンタを読むのは、
+        別のカウンタを並べて二重管理にすると本体と食い違いうるためである。"""
+        return self._slots._value
+
     def process_request(self, request, client_address):
         if not self._slots.acquire(blocking=False):
             self.shutdown_request(request)
