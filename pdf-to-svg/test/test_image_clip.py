@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
-from engine.pdf_engine import load_document
+import fitz
+
+from engine.pdf_engine import _clip_index, load_document
 from export.svg_exporter import page_to_svg
 from model.elements import ImageElement
 
@@ -41,12 +43,35 @@ def test_unclipped_image_has_no_clip(scanned_pdf):
             assert img.clip_d == ""
 
 
-def test_rect_only_clip_is_ignored(vector_pdf):
+def test_rect_only_clip_is_ignored():
     """items が矩形 1 個だけの clip は無視する (画像 bbox と同じで切り抜きの効果が無い)。
 
     ページ全体を覆う既定のクリップは全 PDF に付くため、これを拾うと無意味な
     <clipPath> が画像の数だけ増える。
+
+    `_clip_index` を直接呼んで検証する。画像を持たないページ (`vector_pdf` 等) で
+    `page_to_svg` の出力を見る形にすると、そもそも <image> も imgclip- も出しようが
+    ないため assertion が構造的に常に真になってしまい、「items が矩形 1 個だけの
+    clip は索引へ入れない」という仕様を検証できない (rect-only スキップ分岐を
+    削除しても壊れないテストになる)。対比として、re 以外の items を持つ clip は
+    同じ scissor でも索引に入ることも確かめ、「常に空になるだけの索引」に
+    すり替わっていないことを示す。
     """
-    doc = load_document(str(vector_pdf))
-    svg = page_to_svg(doc.pages[0])
-    assert "imgclip-" not in svg
+    scissor = fitz.Rect(50, 50, 150, 150)
+    rect_only_clip = {
+        "type": "clip",
+        "scissor": scissor,
+        "items": [("re", scissor)],
+    }
+    triangle_clip = {
+        "type": "clip",
+        "scissor": scissor,
+        "items": [
+            ("l", fitz.Point(50, 50), fitz.Point(150, 50)),
+            ("l", fitz.Point(150, 50), fitz.Point(150, 150)),
+            ("l", fitz.Point(150, 150), fitz.Point(50, 50)),
+        ],
+    }
+
+    assert _clip_index([rect_only_clip]) == {}
+    assert len(_clip_index([triangle_clip])) == 1
