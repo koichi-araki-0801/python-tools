@@ -5,12 +5,14 @@
 """
 import functools
 import http.server
+import io
 import os
 import threading
 from pathlib import Path
 
 import fitz
 import pytest
+from PIL import Image
 
 # GUI を伴うテストはオフスクリーンで実行 (`QT_QPA_PLATFORM=offscreen`)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -65,6 +67,42 @@ def scanned_pdf() -> Path:
     doc = fitz.open()
     page = doc.new_page(width=200, height=200)
     page.insert_image(fitz.Rect(0, 0, 200, 200), stream=img_bytes)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+@pytest.fixture(scope="session")
+def clipped_image_pdf() -> Path:
+    """三角形のクリップパスで切り抜いた画像を 1 枚だけ持つ PDF。
+
+    PyMuPDF には「クリップ付きで画像を貼る」API が無いため、画像を貼った後で
+    ページのコンテンツストリームを `q ... W n ... Q` で包み直して作る
+    (実 PDF がシェーディングを螺旋形へ切り抜いている構造の最小再現)。
+    """
+    FIXTURES.mkdir(exist_ok=True)
+    path = FIXTURES / "clipped_image_sample.pdf"
+
+    im_bytes = io.BytesIO()
+    im = Image.new("RGB", (60, 60))
+    for y in range(60):
+        for x in range(60):
+            im.putpixel((x, y), (255 - 4 * x, 30, 4 * x))
+    im.save(im_bytes, format="PNG")
+
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=200)
+    page.insert_image(fitz.Rect(50, 50, 150, 150), stream=im_bytes.getvalue())
+    page.clean_contents()
+    xref = page.get_contents()[0]
+    src = doc.xref_stream(xref)
+    # 三角形 (50,50)-(150,50)-(150,150) でクリップする。bbox は画像と同一の矩形になる。
+    # コンテンツストリームへ直書きする座標は PDF ネイティブ空間 (左下原点・y 上向き)
+    # であり、`get_drawings`/`get_text` が返すページ空間 (左上原点・y 下向き) とは
+    # y が反転している (`page.insert_image` 等の高レベル API は内部でこの反転を
+    # 吸収するが、生バイトを直接書くここでは自分で吸収する必要がある)。
+    # そのため raw y = 200 - page_y で書く: (50,150)→(150,150)→(150,50)。
+    doc.update_stream(xref, b"q 50 150 m 150 150 l 150 50 l h W n\n" + src + b"\nQ\n")
     doc.save(str(path))
     doc.close()
     return path

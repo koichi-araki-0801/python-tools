@@ -48,6 +48,11 @@ MAX_PAGES = 2_000  # 解析するページ数の上限
 MAX_PAGE_ELEMENTS = 12_000     # 1 ページに積む要素数 (実運用の密なページで 1〜2 千)
 MAX_DOC_ELEMENTS = 60_000      # 文書全体 (上限内のページを大量に並べる形を止める)
 
+# クリップ 1 個あたりの item 数上限。PDF 作成者 (= 攻撃者) が決められる値なので、
+# 巨大なパスで `d` 文字列を膨らませる形を止める。超過したクリップは
+# **適用せず** 従来どおり矩形で貼る (degrade。読み込み自体は止めない)。
+MAX_CLIP_ITEMS = 1_000
+
 # seqno 照合の索引パラメータ。候補は行バンド (高さ `_SEQNO_BAND_PT`) に登録し、
 # クエリと y が重なるバンドだけを見る。重なりが正なら y も必ず重なるので、
 # バンド絞り込みは結果を変えない (同点は元の並び順で解決する `_best_seqno` 参照)。
@@ -199,6 +204,11 @@ def _extract_page(
     sink = _PageElements(p, elements)
     seq = 0
     prev_seqno = 0
+    # 描画は `extended=True` で 1 回だけ取る。clip / group も返るようになるが、
+    # `type in ("f","s","fs")` の内容は `get_drawings()` と一致する (実測)。
+    # 2 回呼ぶと 1 ページ数百件の走査が二重になるため、ここで 1 本にまとめる。
+    drawings = page.get_drawings(extended=True)
+    clip_index = _clip_index(drawings)
     text_dict = page.get_text("dict")
     for block in text_dict.get("blocks", []):
         if sink.full:
@@ -207,7 +217,7 @@ def _extract_page(
             bbox = Rect.from_xyxy(*block["bbox"])
             # 照合失敗時は -1 (背景扱い): 画像は下敷きであることが大半
             seqno = image_index.match(bbox, -1)
-            img = _image_element(block, seqno * _Z_TIER + seq)
+            img = _image_element(block, seqno * _Z_TIER + seq, _clip_path_for(clip_index, bbox))
             if img is not None and sink.add(img):
                 seq += 1
         else:  # テキストブロック
@@ -224,9 +234,11 @@ def _extract_page(
                             break
                         seq += 1
 
-    for drawing in page.get_drawings():
+    for drawing in drawings:
         if sink.full:
             break
+        if drawing.get("type") not in ("f", "s", "fs"):
+            continue  # clip / group は要素ではない (クリップは画像へ紐づけ済み)
         seqno = int(drawing.get("seqno") or 0)
         for el in _drawing_elements(drawing, seqno * _Z_TIER + seq):
             if not sink.add(el):
@@ -418,8 +430,11 @@ def _clean_font(font: str) -> str:
     return font
 
 
-def _image_element(block: dict, z: int) -> Optional[ImageElement]:
-    """画像ブロックを ImageElement へ変換する。バイト列を持たないブロックは None。"""
+def _image_element(block: dict, z: int, clip_d: str = "") -> Optional[ImageElement]:
+    """画像ブロックを ImageElement へ変換する。バイト列を持たないブロックは None。
+
+    ``clip_d`` は PDF のクリップパス由来の切り抜き形状 (無いときは空文字列)。
+    """
     data = block.get("image")
     if not data:
         return None
@@ -430,6 +445,7 @@ def _image_element(block: dict, z: int) -> Optional[ImageElement]:
         rect=Rect.from_xyxy(*bbox),
         img_bytes=data,
         ext=block.get("ext", "png"),
+        clip_d=clip_d,
     )
 
 
@@ -518,3 +534,51 @@ def _items_to_path_d(items: list, close: bool) -> str:
     if close and d:
         d += " Z"
     return d
+
+
+def _clip_index(drawings: list) -> dict:
+    """`get_drawings(extended=True)` の `type="clip"` を scissor 矩形で索引する。
+
+    画像ブロック (`get_text("dict")`) はクリップ形状を持たないので、bbox が一致する
+    clip を引き当てて紐づける。キーは座標を小数第 1 位で丸めた 4 つ組で、線形走査
+    (画像数 × clip 数) を避ける — どちらの件数も PDF 作成者が決めるため、総当たりは
+    O(n^2) が素通りする (`_SeqnoIndex` と同じ理由)。
+
+    items が矩形 1 個だけの clip は索引へ入れない。画像 bbox と同一の矩形で切り抜きの
+    効果が無く (ページ全体の既定クリップがこの形)、拾うと無意味な `<clipPath>` が
+    画像の数だけ増えるだけだからである。
+    """
+    index: dict = {}
+    for d in drawings:
+        if d.get("type") != "clip":
+            continue
+        items = d.get("items") or []
+        if len(items) == 1 and items[0][0] == "re":
+            continue
+        scissor = d.get("scissor")
+        if scissor is None:
+            continue
+        key = (
+            round(scissor.x0, 1), round(scissor.y0, 1),
+            round(scissor.x1, 1), round(scissor.y1, 1),
+        )
+        index.setdefault(key, []).append(d)
+    return index
+
+
+def _clip_path_for(index: dict, bbox: Rect) -> str:
+    """画像 bbox に一致するクリップの SVG path `d` を返す。無ければ空文字列。
+
+    候補が複数あるときは最も内側 (`level` が最大) の 1 個を採る。SVG の `<clipPath>` は
+    サブパスを足すと**和集合**になり、入れ子クリップの交差にはならないため、複数を
+    1 個へ畳むと切り抜きが広がってしまう (最内だけを採るほうが、広げるより安全側)。
+    """
+    key = (round(bbox.x, 1), round(bbox.y, 1), round(bbox.x1, 1), round(bbox.y1, 1))
+    cands = index.get(key)
+    if not cands:
+        return ""
+    best = max(cands, key=lambda c: c.get("level") or 0)
+    items = best.get("items") or []
+    if len(items) > MAX_CLIP_ITEMS:
+        return ""
+    return _items_to_path_d(items, True)
