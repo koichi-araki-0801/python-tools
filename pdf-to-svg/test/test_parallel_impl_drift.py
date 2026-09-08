@@ -197,6 +197,13 @@ def test_connection_resource_limits_match():
     assert origin_guard.MAX_REQUEST_SECONDS == other.MAX_REQUEST_SECONDS
     # 定数を宣言しただけで配線し忘れる形 (`timeout` 未設定) をここで落とす。
     assert server.Handler.timeout == other.Handler.timeout == server.REQUEST_TIMEOUT
+    # 枠の残数を読む観測窓 (`available_slots`)。片側だけに足すと、そちらのテストしか
+    # 「accept 済みの本数」を待ち合わせられず、もう片方は固定 sleep へ戻るしかなくなる
+    # (= 上限が過小へ退行しても片側だけが黙って通る)。実装ごと一致させる。
+    ours = server.BoundedThreadingHTTPServer.available_slots
+    theirs = other.BoundedThreadingHTTPServer.available_slots
+    assert isinstance(ours, property) and isinstance(theirs, property)
+    assert inspect.getsource(ours.fget) == inspect.getsource(theirs.fget)
 
 
 # ── Edge の起動引数 ──

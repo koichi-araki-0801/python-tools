@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import socket
+import socketserver
 import threading
 import time
 import urllib.error
@@ -477,6 +479,28 @@ def _serve(session, token, **kwargs):
     return server
 
 
+def _wait_until(pred, msg: str, timeout: float = 10.0, interval: float = 0.02):
+    """`pred()` が真になるまで待つ (固定 sleep の置き換え)。
+
+    接続を張っただけでは枠は取られていない (listen キューに積まれるだけで、accept して
+    初めて `process_request` が走る)。固定 sleep で待つと遅い端末では枠が埋まる前に次の
+    接続を張ってしまい、上限の主張が黙って崩れる。条件で待てば、速い端末では即座に進む。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return
+        time.sleep(interval)
+    raise AssertionError(msg)
+
+
+def _get_ok(port: int) -> int:
+    """`GET /` を 1 回投げてステータスを返す (正常系が壊れていないことの確認用)。"""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as res:
+        res.read()
+        return res.status
+
+
 @pytest.fixture()
 def session(tmp_path):
     from dictionary.store import DictionaryStore
@@ -546,37 +570,106 @@ def test_dripping_connection_is_closed_by_the_request_deadline(monkeypatch, sess
         server.server_close()
 
 
-def test_connection_cap_refuses_extra_connections(monkeypatch, session):
-    """同時接続数の上限を超えた接続は受け付けず即切断する (スレッドを積み上げない)。"""
+def test_connection_cap_accepts_exactly_the_cap_and_refuses_the_next(monkeypatch, session):
+    """上限ちょうどまでは受理し、超えた接続は受け付けず即切断する (スレッドを積み上げない)。
+
+    受理を 1 本ずつ `available_slots` で主張するのが要点。まとめて張って最後の 1 本だけを
+    見る形だと、上限が過小へ退行して (例: 2 → 1) 2 本目が即切断されていても、3 本目の
+    切断は同じように観測できてしまい、テストは通り抜ける。
+    """
     monkeypatch.setattr(server_mod.Handler, "timeout", 5.0)
-    server = _serve(session, "cap-test-token", max_connections=2)
+    cap = 2
+    server = _serve(session, "cap-test-token", max_connections=cap)
     port = server.server_address[1]
+    assert server.available_slots == cap
     hogs = []
     try:
-        for _ in range(2):  # 無言接続で枠を 2 つとも埋める
-            s = socket.create_connection(("127.0.0.1", port), timeout=10)
-            hogs.append(s)
-        time.sleep(0.2)  # accept → ハンドラスレッド起動まで待つ
+        for taken in range(1, cap + 1):  # 無言接続で枠を 1 つずつ埋める
+            hogs.append(socket.create_connection(("127.0.0.1", port), timeout=10))
+            _wait_until(lambda taken=taken: server.available_slots == cap - taken,
+                        f"{taken} 本目の接続が受理されていない (上限が過小)")
+
         extra = socket.create_connection(("127.0.0.1", port), timeout=10)
         extra.settimeout(10)
         assert extra.recv(1) == b""  # 枠が無いので応答せず切断される
         extra.close()
+        # 拒否は枠を消費しない (`process_request` が acquire に失敗した側で return する)。
+        assert server.available_slots == 0
 
         for s in hogs:  # 枠を返せば通常のリクエストがまた通る
             s.close()
         hogs = []
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as res:
-                    assert res.status == 200
-                break
-            except urllib.error.URLError:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(0.1)
+        _wait_until(lambda: server.available_slots == cap, "枠が返っていない")
+        assert _get_ok(port) == 200
     finally:
         for s in hogs:
             s.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_connection_slots_are_released_after_each_request(monkeypatch, session):
+    """処理し終えた接続は枠を返す (上限を超える回数を捌いても詰まらない)。
+
+    枠の解放を落とすと上限が**片道で減り続け**、やがて全接続を拒否する。上限そのものを
+    見るテストは 1 巡しか回さないのでこの形を捕まえられない。上限より多い回数を逐次に
+    投げて、最後まで通り切ることと枠が満杯へ戻ることの両方を見る。
+    """
+    monkeypatch.setattr(server_mod.Handler, "timeout", 5.0)
+    cap = 2
+    server = _serve(session, "slot-release-token", max_connections=cap)
+    port = server.server_address[1]
+    try:
+        for i in range(cap + 3):  # 上限より多い回数を逐次に (枠が片道で減れば途中で詰まる)
+            assert _get_ok(port) == 200, f"{i + 1} 回目のリクエストが通らない"
+        _wait_until(lambda: server.available_slots == cap, "処理後に枠が返っていない")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_concurrent_requests_within_the_cap_all_succeed(monkeypatch, session):
+    """上限内の同時リクエストは全部成功する (上限が正常系を壊していない)。
+
+    逐次のテストは枠の取得と解放が 1 本ずつ交代する形しか通らない。ここは上限ぴったりの
+    多重度で上限の数倍を捌かせ、**取得と解放が競合する下でも**拒否が混ざらないことを見る。
+    """
+    monkeypatch.setattr(server_mod.Handler, "timeout", 5.0)
+    cap = 4
+    rounds = 3
+    server = _serve(session, "concurrent-token", max_connections=cap)
+    port = server.server_address[1]
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cap) as pool:
+            results = list(pool.map(lambda _: _get_ok(port), range(cap * rounds)))
+        assert results == [200] * (cap * rounds)
+        _wait_until(lambda: server.available_slots == cap, "処理後に枠が返っていない")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_connection_slot_is_released_when_the_handler_thread_cannot_start(monkeypatch, session):
+    """ハンドラスレッドの起動に失敗しても枠は返る。
+
+    取った枠を例外経路で漏らすと、上限が片道で減って最後には全接続を拒否する
+    (`process_request` の `except BaseException: release`)。
+    """
+    monkeypatch.setattr(server_mod.Handler, "timeout", 5.0)
+    cap = 2
+    server = _serve(session, "thread-fail-token", max_connections=cap)
+    port = server.server_address[1]
+
+    def _boom(self, request, client_address):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(socketserver.ThreadingMixIn, "process_request", _boom)
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        sock.settimeout(10)
+        assert sock.recv(1) == b""  # 起動できないので応答せず閉じられる
+        sock.close()
+        _wait_until(lambda: server.available_slots == cap, "例外経路で枠が漏れている")
+    finally:
         server.shutdown()
         server.server_close()
