@@ -170,3 +170,17 @@ def test_image_clip_survives_annotate():
     svg = page_to_svg(_page_with_clipped_image(), annotate=True)
     assert re.search(r'<image data-el="\d+" ', svg)
     assert "clip-path=" in svg
+
+
+def test_page_clip_and_image_clip_combine():
+    """ページ全体の clip (書き出し領域) と画像の clip_d (切り抜き形状) を同時に使うと、
+    <defs> が 2 ブロック出て (領域用の clip-... と画像用の imgclip-...)、どちらの id も
+    出力に現れ、<image> は imgclip- を参照する。"""
+    svg = page_to_svg(_page_with_clipped_image(), clip=Rect(0, 0, 100, 100))
+    assert svg.count("<defs>") == 2
+    assert '<clipPath id="clip-0-0-100-100">' in svg
+    assert '<g clip-path="url(#clip-0-0-100-100)">' in svg
+    cid = re.search(r'<clipPath id="(imgclip-[0-9a-f]+)">', svg).group(1)
+    assert f'<clipPath id="{cid}"><path d="M10,10 L50,10 L50,50 Z"/></clipPath>' in svg
+    assert f'clip-path="url(#{cid})"' in svg
+    assert svg.count("<image ") == 1

@@ -546,39 +546,51 @@ def _clip_index(drawings: list) -> dict:
 
     items が矩形 1 個だけの clip は索引へ入れない。画像 bbox と同一の矩形で切り抜きの
     効果が無く (ページ全体の既定クリップがこの形)、拾うと無意味な `<clipPath>` が
-    画像の数だけ増えるだけだからである。
+    画像の数だけ増えるだけだからである。items が空の clip も同じ理由で入れない
+    (切り抜く形が無いので索引に載せる意味が無い)。
     """
     index: dict = {}
-    for d in drawings:
-        if d.get("type") != "clip":
+    for drw in drawings:
+        if drw.get("type") != "clip":
             continue
-        items = d.get("items") or []
+        items = drw.get("items") or []
+        if not items:
+            continue
         if len(items) == 1 and items[0][0] == "re":
             continue
-        scissor = d.get("scissor")
+        scissor = drw.get("scissor")
         if scissor is None:
             continue
         key = (
             round(scissor.x0, 1), round(scissor.y0, 1),
             round(scissor.x1, 1), round(scissor.y1, 1),
         )
-        index.setdefault(key, []).append(d)
+        index.setdefault(key, []).append(drw)
     return index
 
 
 def _clip_path_for(index: dict, bbox: Rect) -> str:
     """画像 bbox に一致するクリップの SVG path `d` を返す。無ければ空文字列。
 
-    候補が複数あるときは最も内側 (`level` が最大) の 1 個を採る。SVG の `<clipPath>` は
-    サブパスを足すと**和集合**になり、入れ子クリップの交差にはならないため、複数を
-    1 個へ畳むと切り抜きが広がってしまう (最内だけを採るほうが、広げるより安全側)。
+    候補は最も内側 (`level` が大きい) を優先する。SVG の `<clipPath>` はサブパスを
+    足すと**和集合**になり、入れ子クリップの交差にはならないため、複数を 1 個へ畳むと
+    切り抜きが広がってしまう (最内だけを採るほうが、広げるより安全側)。
+
+    level 降順に走査し、**最初に非空の `d` を返した候補**を採る。level 最大の 1 個だけを
+    選んでから上限判定すると、選ばれた候補が item 数上限超のとき、同じ scissor に有効な
+    下位候補があってもクリップが落ちる。落ちた結果は不透明な矩形が下の図形を覆い隠す
+    状態で、この機能が直したバグ (螺旋切り抜きの消失) の無言の再発になる。どの候補も
+    使えなければ従来どおりクリップ無しへ degrade する。
     """
     key = (round(bbox.x, 1), round(bbox.y, 1), round(bbox.x1, 1), round(bbox.y1, 1))
     cands = index.get(key)
     if not cands:
         return ""
-    best = max(cands, key=lambda c: c.get("level") or 0)
-    items = best.get("items") or []
-    if len(items) > MAX_CLIP_ITEMS:
-        return ""
-    return _items_to_path_d(items, True)
+    for cand in sorted(cands, key=lambda c: c.get("level") or 0, reverse=True):
+        items = cand.get("items") or []
+        if len(items) > MAX_CLIP_ITEMS:
+            continue
+        d = _items_to_path_d(items, True)
+        if d:
+            return d
+    return ""

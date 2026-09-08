@@ -679,15 +679,11 @@ def test_clip_over_item_limit_degrades_to_no_clip():
     """item 数が上限を超えるクリップは適用しない (読み込みは止めず矩形で貼る)。
 
     クリップの item 数は PDF 作成者が決められるので、巨大なパスで `d` 文字列を
-    膨らませられないようにする。
+    膨らませられないようにする。候補が 1 つしかないときは、上限超なら従来どおり
+    "" になる (フォールバックする下位候補が無いため)。
     """
-    import pymupdf
-
-    from engine import pdf_engine
-    from model.elements import Rect
-
-    box = pymupdf.Rect(0, 0, 10, 10)
-    p = pymupdf.Point(0, 0)
+    box = fitz.Rect(0, 0, 10, 10)
+    p = fitz.Point(0, 0)
     items = [("l", p, p)] * (pdf_engine.MAX_CLIP_ITEMS + 1)
     index = pdf_engine._clip_index([
         {"type": "clip", "scissor": box, "items": items, "level": 1},
@@ -697,15 +693,10 @@ def test_clip_over_item_limit_degrades_to_no_clip():
 
 def test_clip_within_item_limit_is_applied():
     """上限内のクリップはそのまま適用する (上限が本来の経路を殺していないこと)。"""
-    import pymupdf
-
-    from engine import pdf_engine
-    from model.elements import Rect
-
-    box = pymupdf.Rect(0, 0, 10, 10)
+    box = fitz.Rect(0, 0, 10, 10)
     items = [
-        ("l", pymupdf.Point(0, 0), pymupdf.Point(10, 0)),
-        ("l", pymupdf.Point(10, 0), pymupdf.Point(10, 10)),
+        ("l", fitz.Point(0, 0), fitz.Point(10, 0)),
+        ("l", fitz.Point(10, 0), fitz.Point(10, 10)),
     ]
     index = pdf_engine._clip_index([
         {"type": "clip", "scissor": box, "items": items, "level": 1},
@@ -719,18 +710,44 @@ def test_innermost_clip_wins_when_several_match():
     SVG の <clipPath> はサブパスを足すと和集合になり交差にならないので、
     複数を畳むと切り抜きが広がってしまう。
     """
-    import pymupdf
-
-    from engine import pdf_engine
-    from model.elements import Rect
-
-    box = pymupdf.Rect(0, 0, 10, 10)
-    outer = [("l", pymupdf.Point(0, 0), pymupdf.Point(10, 0)),
-             ("l", pymupdf.Point(10, 0), pymupdf.Point(10, 10))]
-    inner = [("l", pymupdf.Point(1, 1), pymupdf.Point(9, 1)),
-             ("l", pymupdf.Point(9, 1), pymupdf.Point(9, 9))]
+    box = fitz.Rect(0, 0, 10, 10)
+    outer = [("l", fitz.Point(0, 0), fitz.Point(10, 0)),
+             ("l", fitz.Point(10, 0), fitz.Point(10, 10))]
+    inner = [("l", fitz.Point(1, 1), fitz.Point(9, 1)),
+             ("l", fitz.Point(9, 1), fitz.Point(9, 9))]
     index = pdf_engine._clip_index([
         {"type": "clip", "scissor": box, "items": outer, "level": 1},
         {"type": "clip", "scissor": box, "items": inner, "level": 3},
     ])
     assert "M1,1" in pdf_engine._clip_path_for(index, Rect.from_xyxy(0, 0, 10, 10))
+
+
+def test_clip_falls_back_to_a_lower_level_candidate_when_the_best_is_over_the_limit():
+    """level 最大の候補が item 数上限超のとき、有効な下位候補へフォールバックする。
+
+    直さない実装は「level 最大を選んでから」上限判定するため、選ばれた候補が上限超だと
+    同じ scissor に有効な下位候補があってもクリップが落ちる。落ちた結果は不透明な矩形が
+    下の図形を覆い隠す状態で、この機能が直したバグ (螺旋切り抜きの消失) の無言の再発になる。
+    """
+    box = fitz.Rect(0, 0, 10, 10)
+    huge = [("l", fitz.Point(0, 0), fitz.Point(0, 0))] * (pdf_engine.MAX_CLIP_ITEMS + 1)
+    valid = [
+        ("l", fitz.Point(1, 1), fitz.Point(9, 1)),
+        ("l", fitz.Point(9, 1), fitz.Point(9, 9)),
+    ]
+    index = pdf_engine._clip_index([
+        {"type": "clip", "scissor": box, "items": huge, "level": 3},   # 最内だが上限超
+        {"type": "clip", "scissor": box, "items": valid, "level": 1},  # 外側だが有効
+    ])
+    d = pdf_engine._clip_path_for(index, Rect.from_xyxy(0, 0, 10, 10))
+    assert d != ""
+    assert "M1,1" in d
+
+
+def test_clip_index_skips_clips_with_no_items():
+    """items が空の clip は索引に入らない (切り抜く形が無く索引に載せる意味が無い)。"""
+    box = fitz.Rect(0, 0, 10, 10)
+    index = pdf_engine._clip_index([
+        {"type": "clip", "scissor": box, "items": [], "level": 1},
+    ])
+    assert index == {}
