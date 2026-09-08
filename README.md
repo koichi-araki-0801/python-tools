@@ -22,8 +22,9 @@ setup-dev.bat
 行うこと:
 
 1. `py -3.13` と Edge の存在確認。
-2. `git ls-files -- '*requirements.txt'` で動的に列挙した requirements 一式を
-   PyPI から導入する。
+2. `scripts/setup_dev.py` の `REQUIREMENTS`(明示リスト)に挙げた requirements 一式を
+   PyPI から導入する。requirements を新設・移動したらこの一覧も更新する(更新漏れは
+   `scripts/test_python_tools_scripts.py` が落とす)。
 3. docs の mermaid ランタイムを GitHub Releases から取得する(下記「docs の mermaid
    ランタイム」節)。取得できなくても警告に留めてセットアップは続行する。
 4. `git config core.hooksPath scripts/hooks` — 下記「開発フロー」節の 3 フックを

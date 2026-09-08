@@ -25,10 +25,8 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
 
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 _SPEC = r"(?:==|>=|<=|~=|!=|>|<)\s*[A-Za-z0-9][A-Za-z0-9.*+!-]*"
@@ -112,6 +110,28 @@ _GUARD_SELF_EXCLUDE = frozenset({"scripts/check_requirements.py", "scripts/test_
 
 _PIP_SCAN_EXTENSIONS = (".py", ".yml", ".yaml", ".bat")
 
+# 走査から外すディレクトリ名。git の管理対象に頼らずファイルシステムを直接歩くため、
+# 生成物・依存物・撤去済み複製の置き場はここで名前によって落とす(列挙しないと
+# `local-only/` に残る撤去済み配布機構等が「未検査の pip 入口」として挙がる)。
+# `scripts/check_comments.py` の `skip_dir_names` と同じ考え方で、集合は各ガードが
+# 自前に持つ(検査どうしを相互 import しない)。
+_SCAN_SKIP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        "local-only",
+        "node_modules",
+        "dist",
+        "build",
+        "out",
+        "coverage",
+        "test-results",
+        "vendor",
+    }
+)
+_SCAN_SKIP_DIR_PREFIXES = (".venv",)
+
 # check_requirements の呼び出しを示す語。Python 側は識別子 `check_requirements`
 # (import / 関数名)、`.bat` 側は同ランチャのファイル名 `check-requirements`(ハイフン形。
 # `scripts/check-requirements.bat`)を呼ぶため、どちらの表記でも「検査を経由している」と
@@ -131,42 +151,42 @@ def has_check_requirements_marker(text: str) -> bool:
 _PIP_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])pip3?[\s\"'`,\-]{0,20}(install|download)\b")
 
 
-def find_pip_call_files(
-    repo_root: Path, *, runner: Callable[..., subprocess.CompletedProcess] | None = None
-) -> set[str]:
-    """`pip install` / `pip download` を呼ぶ(と読める)追跡ファイルの相対パス集合を返す。
+def _is_scan_skip_dir(name: str) -> bool:
+    return name in _SCAN_SKIP_DIR_NAMES or name.startswith(_SCAN_SKIP_DIR_PREFIXES)
 
-    走査対象は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
+
+def find_pip_call_files(repo_root: Path) -> set[str]:
+    """`pip install` / `pip download` を呼ぶ(と読める)ファイルの相対パス集合を返す。
+
+    走査はファイルシステムを直接歩く(git の管理対象は問わない)。git 列挙に頼ると、
+    ガードの結果が「作業コピーが git repo か」「そのファイルが追跡済みか」に左右され、
+    未追跡のまま置かれた無検査の pip 入口を素通しする。除外は `_SCAN_SKIP_DIR_NAMES` /
+    `_SCAN_SKIP_DIR_PREFIXES` のディレクトリ名だけで行う。
+
+    走査対象の拡張子は `_PIP_SCAN_EXTENSIONS`(`.py` / `.yml` / `.yaml` / `.bat`)に絞る。
     ガード自身の定義ファイルとテストファイルは除外する(`_GUARD_SELF_EXCLUDE`)。
-
-    列挙は `-z`(NUL 区切り)出力を使う。git は既定(`core.quotepath=true`)では非 ASCII
-    パスを引用符 + 8 進エスケープした文字列で返し、`rel.endswith(_PIP_SCAN_EXTENSIONS)` が
-    末尾の `"` に阻まれて一致しなくなる(検査対象から黙って落ちる。実証済み)。`-z` は
-    `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
-    この問題が構造的に起きない。同型の修正が `scripts/check_comments.py`
-    (`_staged_files`)・`scripts/setup_dev.py`(`list_requirements`)の計 3 箇所にある。
     """
-    cmd = ["git", "-C", str(repo_root), "ls-files", "-z"]
-    if runner is None:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    else:
-        result = runner(cmd)
-    if result.returncode != 0:
-        raise RuntimeError("git ls-files に失敗しました(pip 入口ガードを実行できません)。")
-
     hits: set[str] = set()
-    for rel in result.stdout.split("\0"):
-        if not rel or rel in _GUARD_SELF_EXCLUDE:
-            continue
-        if not rel.endswith(_PIP_SCAN_EXTENSIONS):
-            continue
-        path = repo_root / rel
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        if _PIP_CALL_RE.search(text):
-            hits.add(rel)
+
+    def walk(directory: Path) -> None:
+        for entry in sorted(directory.iterdir(), key=lambda p: p.name):
+            if entry.is_dir():
+                if not _is_scan_skip_dir(entry.name):
+                    walk(entry)
+                continue
+            if entry.suffix not in _PIP_SCAN_EXTENSIONS:
+                continue
+            rel = entry.relative_to(repo_root).as_posix()
+            if rel in _GUARD_SELF_EXCLUDE:
+                continue
+            try:
+                text = entry.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            if _PIP_CALL_RE.search(text):
+                hits.add(rel)
+
+    walk(repo_root)
     return hits
 
 

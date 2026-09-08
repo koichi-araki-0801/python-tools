@@ -5,13 +5,16 @@
 行うこと:
   1. `py -3.13` と Microsoft Edge の存在確認 (どちらもこのリポの前提)。
   2. requirements の形式検査 (`check_requirements`)。
-  3. requirements を PyPI から `pip` で導入する。列挙は
-     `git ls-files -- '*requirements.txt'`(ハードコードしない。ファイルが増減しても追随する)。
+  3. requirements を PyPI から `pip` で導入する。対象は `REQUIREMENTS` の明示リスト
+     (git の管理対象からは探さない。追加・移動時はこの一覧を更新する)。
   4. docs の mermaid ランタイムを GitHub Releases から取得する (`fetch_docs_vendor`)。
      取得できなくても警告に留めて続行する — docs の HTML ビルドだけが要る依存で、
      未配置時は整形コード表示へフォールバックするため。
   5. `git config core.hooksPath scripts/hooks` (コメント規約検査の pre-commit フックを有効化)。
   6. 実行内容のサマリを表示する。
+
+`--list-requirements` を付けた場合は上記を一切行わず、導入対象の requirements を
+1 行 1 件で出力して終了する (CI が同じ一覧を参照するための入口)。
 """
 
 from __future__ import annotations
@@ -26,6 +29,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON_VERSION = "3.13"
 HOOKS_PATH = "scripts/hooks"
+
+# 導入対象の requirements (リポジトリルートからの相対パス)。git の管理対象から動的に
+# 列挙せず、ここへ明示する。requirements を新設・移動したらこの一覧も更新する
+# (更新漏れは `scripts/test_python_tools_scripts.py` の
+# `test_requirements_constant_matches_files_in_repository` が落とす)。
+REQUIREMENTS: tuple[str, ...] = (
+    "docs/_build/requirements.txt",
+    "graph-editor/dev-requirements.txt",
+    "graph-editor/requirements.txt",
+    "pdf-to-svg/dev-requirements.txt",
+    "pdf-to-svg/requirements.txt",
+)
 
 # `setup-dev.bat` はスクリプト直接起動 (`py -3.13 "%~dp0scripts\setup_dev.py"`) のため
 # `sys.path[0]` は既に `scripts/` になっているが、`pytest` 等の別経路からの import でも
@@ -91,28 +106,25 @@ def check_edge() -> None:
 
 # ── 2. requirements ──
 def list_requirements() -> list[Path]:
-    """`*requirements.txt` を git 管理対象から動的に列挙する (ハードコードしない)。
+    """導入対象の requirements を `REQUIREMENTS` (明示リスト) から解決する。
 
-    列挙は `-z` (NUL 区切り) 出力を使う。git は既定 (`core.quotepath=true`) では非 ASCII
-    パスを引用符 + 8 進エスケープした文字列で返し、`ROOT / line` が実在しないパスになって
-    黙って install 対象から落ちる (実証済み)。`-z` は `core.quotepath` の設定に関わらず
-    エスケープなしの生バイト列を NUL 区切りで返すため、この問題が構造的に起きない。
-    同型の修正が `scripts/check_comments.py` (`_staged_files`)・
-    `scripts/check_requirements.py` (`find_pip_call_files`) の計 3 箇所にある。
+    列挙を git (`ls-files`) へ委ねない。導入対象が「作業コピーが git repo か」
+    「そのファイルが追跡済みか」に左右されると、未追跡・未 clone の状態で対象が
+    黙って減り、依存が欠けたまま「成功」で終わる。何を入れるかはリポジトリの
+    決めごとなので、ソース上に書き出して固定する。
+
+    リストと実体のずれ (移動・改名・新設) は 2 段で捕まえる。実行時はここで存在確認して
+    止め、`scripts/test_python_tools_scripts.py` の
+    `test_requirements_constant_matches_files_in_repository` がリポジトリ内の実在集合との
+    一致を固定する (新設した requirements の登録漏れはテストが落とす)。
     """
-    out = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*requirements.txt"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        # `encoding` を明示しないと Windows既定ロケール(cp932 等)で decode され、`git` が
-        # 出す UTF-8 出力で読み取りスレッド内 `UnicodeDecodeError` になりうる。
-        encoding="utf-8",
-        errors="replace",
-    )
-    files = [ROOT / p for p in out.stdout.split("\0") if p]
-    return sorted(files, key=lambda p: p.relative_to(ROOT).as_posix())
+    missing = [rel for rel in REQUIREMENTS if not (ROOT / rel).is_file()]
+    if missing:
+        raise RuntimeError(
+            "REQUIREMENTS に列挙したファイルが見つかりません "
+            f"(移動・改名したら scripts/setup_dev.py の一覧も更新してください): {', '.join(missing)}"
+        )
+    return [ROOT / rel for rel in REQUIREMENTS]
 
 
 def check_requirements(requirements: list[Path]) -> None:
@@ -132,6 +144,11 @@ def check_requirements(requirements: list[Path]) -> None:
 # ── 3. セットアップ本体 ──
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--list-requirements",
+        action="store_true",
+        help="導入対象の requirements を 1 行 1 件で出力して終了する (CI から使う)",
+    )
     return parser.parse_args(argv)
 
 
@@ -147,15 +164,23 @@ def build_pip_command(py: list[str], requirements: list[Path]) -> list[str]:
     return cmd
 
 
-def main() -> int:
-    parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    # 列挙だけを求められた場合は、前提ツールの確認も導入も行わずに一覧を出して終える。
+    # CI (`.github/workflows/ci.yml`) はこの出力で対象を受け取り、`REQUIREMENTS` を
+    # 唯一の正として共有する (CI 側へパスを書き写すとリストが二重管理になる)。
+    if args.list_requirements:
+        for req in list_requirements():
+            print(req.relative_to(ROOT).as_posix())
+        return 0
 
     py = resolve_python()
     check_edge()
 
     requirements = list_requirements()
     if not requirements:
-        print("[error] requirements.txt が 1 件も見つかりません (git ls-files の結果が空)。", file=sys.stderr)
+        print("[error] requirements.txt が 1 件も列挙されていません (REQUIREMENTS が空)。", file=sys.stderr)
         return 1
 
     check_requirements(requirements)

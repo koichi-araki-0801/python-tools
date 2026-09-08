@@ -7,8 +7,8 @@
 だけを単体対象とする。実際にビルドが通ることは
 `graph-editor/scripts/build.bat` / `pdf-to-svg/scripts/build.bat` の実行で確認する。
 
-実 git を使うテスト (`ls-files`/`init`/`add`/`commit`) はローカルで完結し、ネットワークには
-一切アクセスしない。`fetch_docs_vendor.py` の HTTP 取得も注入可能で、実ネットワークへは
+実 git を使うテスト (`init`/`add`/`commit`。`check_comments` のステージ済みファイル列挙)
+はローカルで完結し、ネットワークには一切アクセスしない。`fetch_docs_vendor.py` の HTTP 取得も注入可能で、実ネットワークへは
 アクセスしない。
 """
 
@@ -221,7 +221,7 @@ def test_build_venv_checks_requirements_before_pip_install(monkeypatch, tmp_path
     assert pip_cmds[0][-2:] == ["-r", str(requirements_path)]
 
 
-# ── テスト用の一時 git repo (requirements 列挙・pip 入口ガードのテストで使う) ──
+# ── テスト用の一時 git repo (check_comments のステージ済みファイル列挙のテストで使う) ──
 def _init_git_repo(repo: pathlib.Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
@@ -293,16 +293,40 @@ def test_pip_entrypoint_guard_scans_bat_launchers_too():
 
 
 def test_find_pip_call_files_detects_non_ascii_named_file(tmp_path):
-    # I-2 回帰: git は既定 (core.quotepath=true) で非 ASCII パスを引用符 + 8 進エスケープ
-    # した文字列で返す。`-z` を使わないと `rel.endswith(_PIP_SCAN_EXTENSIONS)` が末尾の
-    # `"` に阻まれて一致せず、無検査の pip 呼び出しが黙って通過する
-    # (実証: 「セットアップ.bat」に無検査 pip を置いてもガードテストが緑のまま)。
+    # I-2 回帰: 非 ASCII 名のファイルが走査から黙って落ちないこと
+    # (git 列挙時代は quotepath のエスケープで拡張子一致が壊れ、「セットアップ.bat」に
+    # 無検査 pip を置いてもガードテストが緑のままだった)。ファイルシステム走査へ移した
+    # 現在も、同じ形の取りこぼしが起きないことを固定する。
     jp_bat = tmp_path / "セットアップ.bat"
     jp_bat.write_text("pip install -r requirements.txt\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
 
     found = check_requirements.find_pip_call_files(tmp_path)
     assert "セットアップ.bat" in found
+
+
+def test_find_pip_call_files_scans_without_git(tmp_path, monkeypatch):
+    # 走査は git 管理下かどうかに依存しない (git を持たない作業コピーでも同じ結果になる)。
+    # git を呼んでいないことは `subprocess.run` を落とし穴に差し替えて機械的に固定する。
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "install.py").write_text('subprocess.run(["pip", "install", "x"])\n', encoding="utf-8")
+
+    def _no_subprocess(*args, **kwargs):  # pragma: no cover - 呼ばれたら失敗させるための番人
+        raise AssertionError(f"find_pip_call_files が外部プロセスを起動した: {args}")
+
+    monkeypatch.setattr(subprocess, "run", _no_subprocess)
+    found = check_requirements.find_pip_call_files(tmp_path)
+    assert found == {"nested/install.py"}
+
+
+def test_find_pip_call_files_skips_excluded_directories(tmp_path):
+    # 走査対象を git 管理下に絞らなくなった分、生成物・複製の置き場を名前で除外する
+    # (除外しないと `local-only/` の撤去済み配布機構等が未検査の pip 入口として挙がる)。
+    for name in ("local-only", "node_modules", ".venv-build", "__pycache__"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "x.py").write_text('subprocess.run(["pip", "install", "x"])\n', encoding="utf-8")
+
+    assert check_requirements.find_pip_call_files(tmp_path) == set()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -310,31 +334,46 @@ def test_find_pip_call_files_detects_non_ascii_named_file(tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_list_requirements_handles_non_ascii_directory_name(tmp_path, monkeypatch):
-    # I-1 回帰: `-z` を使わないと git の quotepath エスケープで `ROOT / line` が実在しない
-    # パスになり、日本語ディレクトリ配下の requirements.txt が黙って install 対象から落ちる。
-    jp_dir = tmp_path / "日本語ディレクトリ"
-    jp_dir.mkdir()
-    (jp_dir / "requirements.txt").write_text("a\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
+def test_list_requirements_returns_the_explicit_constant(monkeypatch):
+    # 列挙は明示リスト (`REQUIREMENTS`) が正。git 等の外部コマンドには一切依存しない。
+    def _no_subprocess(*args, **kwargs):  # pragma: no cover - 呼ばれたら失敗させるための番人
+        raise AssertionError(f"list_requirements が外部プロセスを起動した: {args}")
 
-    monkeypatch.setattr(setup_dev, "ROOT", tmp_path)
+    monkeypatch.setattr(subprocess, "run", _no_subprocess)
     files = setup_dev.list_requirements()
-    rel = [p.relative_to(tmp_path).as_posix() for p in files]
-    assert "日本語ディレクトリ/requirements.txt" in rel
+    rel = [p.relative_to(REPO_ROOT).as_posix() for p in files]
+    assert rel == list(setup_dev.REQUIREMENTS)
 
 
-def test_list_requirements_finds_root_and_nested_files(tmp_path, monkeypatch):
-    (tmp_path / "requirements.txt").write_text("a\n", encoding="utf-8")
-    sub = tmp_path / "sub"
-    sub.mkdir()
-    (sub / "dev-requirements.txt").write_text("b\n", encoding="utf-8")
-    _init_git_repo(tmp_path)
-
+def test_list_requirements_rejects_missing_file(tmp_path, monkeypatch):
+    # 明示リストは実体とずれうる (移動・改名)。存在しないものを黙って飛ばすと、その
+    # requirements が install されないまま「成功」で終わる。必ず止める。
     monkeypatch.setattr(setup_dev, "ROOT", tmp_path)
-    files = setup_dev.list_requirements()
-    rel = sorted(p.relative_to(tmp_path).as_posix() for p in files)
-    assert rel == ["requirements.txt", "sub/dev-requirements.txt"]
+    with pytest.raises(RuntimeError):
+        setup_dev.list_requirements()
+
+
+def test_requirements_constant_matches_files_in_repository():
+    # 明示リストの更新漏れ検出。リポジトリ内に実在する `*requirements.txt` の集合と
+    # `REQUIREMENTS` の一致を固定する (新設した requirements が setup から黙って
+    # 落ちる / 撤去したものが残り続ける、の両方をここで落とす)。
+    skip_dirs = {".git", "__pycache__", ".pytest_cache", "local-only", "node_modules"}
+    found = set()
+    for path in REPO_ROOT.rglob("*requirements.txt"):
+        rel = path.relative_to(REPO_ROOT)
+        if any(part in skip_dirs or part.startswith(".venv") for part in rel.parts[:-1]):
+            continue
+        found.add(rel.as_posix())
+    assert found == set(setup_dev.REQUIREMENTS)
+
+
+def test_main_list_requirements_prints_one_path_per_line(capsys):
+    # CI (`.github/workflows/ci.yml`) はこの出力で requirements を受け取る。CI 側にパスを
+    # 書き写すと `REQUIREMENTS` とずれるため、列挙の正を 1 つに保つための入口。
+    code = setup_dev.main(["--list-requirements"])
+    assert code == 0
+    printed = capsys.readouterr().out.split()
+    assert printed == list(setup_dev.REQUIREMENTS)
 
 
 # ── build_pip_command: 索引を塞がずに PyPI から導入する ──
