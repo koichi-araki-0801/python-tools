@@ -437,8 +437,8 @@ def _staged_files() -> frozenset[str]:
     後続の `(ROOT / p).is_file()` 判定が常に偽になって検査対象から黙って落ちる (実証済み。
     本リポの docs 原稿 14 件は全件日本語ファイル名でこれに該当していた)。`-z` は
     `core.quotepath` の設定に関わらずエスケープなしの生バイト列を NUL 区切りで返すため、
-    この問題が構造的に起きない。同型の修正が `scripts/check_requirements.py`
-    (`find_pip_call_files`)・`scripts/setup_dev.py`(`list_requirements`)の計 3 箇所にある。
+    この問題が構造的に起きない。git の列挙を使う検査は現在ここだけで (pip 入口ガードと
+    setup の requirements 列挙は git に依存しない形へ移した)、`-z` の規約もここで閉じている。
     """
     out = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"],

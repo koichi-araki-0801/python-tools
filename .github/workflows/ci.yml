@@ -43,14 +43,14 @@ jobs:
       # の `KNOWN_PIP_ENTRYPOINTS` — このファイルもそこへ登録済みで、ガードテスト
       # `scripts/test_python_tools_scripts.py` が検査経由を機械確認する)。
       - name: Check requirements files
-        run: python scripts/check_requirements.py $(git ls-files -- '*requirements.txt')
+        run: python scripts/check_requirements.py $(python scripts/setup_dev.py --list-requirements)
 
-      # `git ls-files -- '*requirements.txt'` で動的に列挙する(`setup_dev.py` の
-      # `list_requirements` と同じ考え方。ファイルが増減しても追随する)。
+      # 対象は `scripts/setup_dev.py` の `REQUIREMENTS`(明示リスト)を唯一の正とし、
+      # `--list-requirements` で受け取る(ここへパスを書き写すと二重管理になる)。
       - name: Install Python dependencies
         run: |
           set -eu
-          for req in $(git ls-files -- '*requirements.txt'); do
+          for req in $(python scripts/setup_dev.py --list-requirements); do
             python -m pip install -r "$req"
           done
 
