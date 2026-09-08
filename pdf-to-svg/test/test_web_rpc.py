@@ -446,7 +446,7 @@ def test_export_svg_name_and_clip(session):
             "clip": {"x": 0, "y": 0, "w": 100, "h": 100}, "figIndex": 2}
     data = rpc_methods.dispatch(session, "exportSvg", args)
     assert data["name"] == "部品表_p1_fig2_gray.svg"
-    assert 'viewBox="0 0 100 100"' in data["svg"]
+    assert 'viewBox="0 0 106 106"' in data["svg"]   # clip + CLIP_MARGIN
     assert "data-el=" not in data["svg"]
     # grayscale だけ → _gray、clip だけ → _fig1、どちらも無し → 従来名
     assert rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0, "grayscale": True})["name"] == "部品表_p1_gray.svg"

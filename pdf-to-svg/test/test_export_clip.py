@@ -11,7 +11,7 @@ import re
 import pytest
 from PIL import Image
 
-from export.svg_exporter import page_to_svg
+from export.svg_exporter import CLIP_MARGIN, page_to_svg
 from model.document import Page, RasterBackground
 from model.elements import ImageElement, LineElement, PathElement, Rect, RectElement, TextElement
 
@@ -69,25 +69,45 @@ def test_grayscale_output_is_deterministic():
 
 
 def test_clip_sets_viewbox_and_drops_outside_elements():
+    # viewBox は clip を CLIP_MARGIN (6) 分広げた矩形。ページ (300x200) の外へは出さない。
     svg = page_to_svg(_page(), clip=Rect(0, 0, 100, 100))
-    assert 'viewBox="0 0 100 100"' in svg
-    assert 'width="100"' in svg and 'height="100"' in svg
+    assert 'viewBox="0 0 106 106"' in svg
+    assert 'width="106"' in svg and 'height="106"' in svg
     assert "Hello" in svg                      # (10,10) は clip 内
     assert 'x="200"' not in svg               # (200,150) の矩形は clip 外
     # id は clip 矩形ごとに決定的 (座標を含む)。複数ページを 1 文書に inline しても衝突しない。
-    assert '<clipPath id="clip-0-0-100-100">' in svg
-    assert '<rect x="0" y="0" width="100" height="100"/>' in svg
-    assert '<g clip-path="url(#clip-0-0-100-100)">' in svg
+    assert '<clipPath id="clip-0-0-106-106">' in svg
+    assert '<rect x="0" y="0" width="106" height="106"/>' in svg
+    assert '<g clip-path="url(#clip-0-0-106-106)">' in svg
     assert svg.rstrip().endswith("</g>\n</svg>")
 
 
 def test_clip_offset_origin():
     svg = page_to_svg(_page(), clip=Rect(100, 100, 100, 100))
-    assert 'viewBox="100 100 100 100"' in svg
+    assert 'viewBox="94 94 112 106"' in svg     # 下辺はページ高さ (200) でクランプ
     assert "Hello" not in svg                  # clip 外
     assert 'd="M120 120' in svg                # 曲線は clip 内
-    assert '<clipPath id="clip-100-100-100-100">' in svg
-    assert '<g clip-path="url(#clip-100-100-100-100)">' in svg
+    assert '<clipPath id="clip-94-94-112-106">' in svg
+    assert '<g clip-path="url(#clip-94-94-112-106)">' in svg
+
+
+def test_margin_is_uniform_on_all_four_sides():
+    """四辺に同じ幅の余白を置く。境界線上にある罫線が clip で半分に切られるのを防ぐ。"""
+    svg = page_to_svg(_page(), clip=Rect(50, 50, 100, 100))
+    m = CLIP_MARGIN
+    assert f'viewBox="{50 - m:g} {50 - m:g} {100 + 2 * m:g} {100 + 2 * m:g}"' in svg
+
+
+def test_margin_does_not_pull_in_elements_outside_the_clip():
+    """要素の取捨は余白を足す前の clip で決まる (余白に図の外の本文が映り込まない)。"""
+    pg = Page(index=0, width_pt=300, height_pt=200)
+    pg.elements = [
+        TextElement(bbox=Rect(10, 10, 20, 10), text="inside", origin_x=10, origin_y=20, z=0),
+        TextElement(bbox=Rect(52, 10, 20, 10), text="outside", origin_x=52, origin_y=20, z=1),
+    ]
+    svg = page_to_svg(pg, clip=Rect(0, 0, 50, 50))
+    assert ">inside<" in svg
+    assert ">outside<" not in svg
 
 
 def test_clip_id_is_unique_per_rect_within_a_document():
@@ -98,7 +118,7 @@ def test_clip_id_is_unique_per_rect_within_a_document():
     id1 = re.search(r'clipPath id="([^"]+)"', svg1).group(1)
     id2 = re.search(r'clipPath id="([^"]+)"', svg2).group(1)
     assert id1 != id2
-    assert id2 == "clip-10-20-30-40"
+    assert id2 == "clip-4-14-42-52"
 
 
 def test_clip_with_zero_size_is_rejected():
@@ -184,3 +204,28 @@ def test_page_clip_and_image_clip_combine():
     assert f'<clipPath id="{cid}"><path d="M10,10 L50,10 L50,50 Z"/></clipPath>' in svg
     assert f'clip-path="url(#{cid})"' in svg
     assert svg.count("<image ") == 1
+
+
+def test_zero_height_line_on_the_clip_edge_is_kept():
+    """clip の辺にちょうど乗る罫線 (高さ 0 / 幅 0) を落とさない。
+
+    実 PDF の図では外枠の下辺が図の最下端と同じ座標にあり、clip の下辺と一致する。
+    半開区間の交差判定 (`bbox.intersects`) だとこれが「交差しない」になり、枠の下辺だけが
+    書き出しから消える。
+    """
+    pg = Page(index=0, width_pt=300, height_pt=200)
+    pg.elements = [
+        LineElement(bbox=Rect(10, 50, 40, 0), x0=10, y0=50, x1=50, y1=50, color="#111111", z=0),
+        LineElement(bbox=Rect(50, 10, 0, 30), x0=50, y0=10, x1=50, y1=40, color="#222222", z=1),
+    ]
+    svg = page_to_svg(pg, clip=Rect(0, 0, 50, 50))
+    assert 'stroke="#111111"' in svg      # 下辺に乗る水平線
+    assert 'stroke="#222222"' in svg      # 右辺に乗る垂直線
+
+
+def test_degenerate_element_outside_the_clip_is_still_dropped():
+    pg = Page(index=0, width_pt=300, height_pt=200)
+    pg.elements = [
+        LineElement(bbox=Rect(10, 60, 40, 0), x0=10, y0=60, x1=50, y1=60, color="#333333", z=0),
+    ]
+    assert 'stroke="#333333"' not in page_to_svg(pg, clip=Rect(0, 0, 50, 50))

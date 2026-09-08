@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import unicodedata
 from typing import Callable, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
@@ -27,8 +28,27 @@ from model.elements import (
 )
 
 
+# 切り出し (clip) の四辺へ均等に置く余白 (pt)。実 PDF では図の外枠の罫線が図の最下端と
+# ちょうど同じ座標にあり、余白なしで切り出すと `<clipPath>` が線幅の外半分を落として枠が
+# 消える。余白は viewBox と `<clipPath>` にだけ効かせ、**要素の取捨には効かせない**
+# (効かせると、図のすぐ上にある本文の行が余白へ映り込む。実測で間隔は 1.5pt しかない)。
+CLIP_MARGIN = 6.0
+
+
 def _fmt(v: float) -> str:
     return f"{v:.3f}".rstrip("0").rstrip(".")
+
+
+def _with_margin(clip: Rect, page: Page) -> Rect:
+    """clip の四辺へ `CLIP_MARGIN` を足す。ページの外へは出さない。"""
+    x = max(0.0, clip.x - CLIP_MARGIN)
+    y = max(0.0, clip.y - CLIP_MARGIN)
+    return Rect(
+        x,
+        y,
+        min(page.width_pt, clip.x1 + CLIP_MARGIN) - x,
+        min(page.height_pt, clip.y1 + CLIP_MARGIN) - y,
+    )
 
 
 def _clip_id(rect: Rect) -> str:
@@ -103,7 +123,9 @@ def page_to_svg(
     """
     color_fn: ColorFn = to_gray_color if grayscale else sanitize_color
     image_fn: ImageFn = to_gray_image if grayscale else _identity_image
-    rect = clip if clip is not None else page.export_rect()
+    # 要素の取捨は clip そのもの、viewBox と `<clipPath>` は余白を足した矩形で行う。
+    select = clip if clip is not None else page.export_rect()
+    rect = _with_margin(clip, page) if clip is not None else select
     lines: List[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     viewbox = f"{_fmt(rect.x)} {_fmt(rect.y)} {_fmt(rect.w)} {_fmt(rect.h)}"
@@ -152,7 +174,7 @@ def page_to_svg(
     for el in page.live_elements():
         if not isinstance(el, ImageElement) or not el.clip_d:
             continue
-        if not _intersects_export(el.bbox, rect):
+        if not _intersects_export(el.bbox, select):
             continue
         cid = _image_clip_id(el.clip_d)
         if cid not in seen_clip_ids:
@@ -170,13 +192,13 @@ def page_to_svg(
     # スキャン背景
     if page.background is not None:
         b = page.background
-        if _intersects_export(b.rect, rect):
+        if _intersects_export(b.rect, select):
             data, ext = image_fn(b.png_bytes, "png")
             lines.append(_image_tag(b.rect, data, ext))
 
     text_els: List[TextElement] = []
     for el in page.live_elements():
-        if not _intersects_export(el.bbox, rect):
+        if not _intersects_export(el.bbox, select):
             continue
         svg = _element_to_svg(el, color_fn, image_fn)
         if svg:
@@ -208,9 +230,16 @@ def _with_data_el(svg: str, el_id: int) -> str:
 
 
 def _intersects_export(bbox: Rect, export: Rect) -> bool:
-    # 幅・高さが 0 の要素 (細い罫線等) も拾えるよう緩めに交差判定
-    if bbox.w == 0 and bbox.h == 0:
-        return export.x <= bbox.x <= export.x1 and export.y <= bbox.y <= export.y1
+    # 幅または高さが 0 の要素 (水平・垂直の罫線、点) は閉区間で判定する。`Rect.intersects` は
+    # 半開区間なので、書き出し領域の辺にちょうど乗る罫線を「交差しない」と見なして落として
+    # しまう。図の外枠の下辺は図の最下端と同じ座標にあるのが普通で、切り出すと枠が開く。
+    if bbox.w == 0 or bbox.h == 0:
+        return (
+            export.x <= bbox.x1
+            and bbox.x <= export.x1
+            and export.y <= bbox.y1
+            and bbox.y <= export.y1
+        )
     return bbox.intersects(export)
 
 
@@ -292,6 +321,29 @@ def _paint(attr: str, color, color_fn: ColorFn = sanitize_color) -> str:
     return _attr(attr, color_fn(color)) if color else _attr(attr, "none")
 
 
+# 中黒。全角約物のうち唯一、字面が枠の中央に来る。
+_MIDDLE_DOT = "・"
+
+
+def _fullwidth_punct_anchor(text: str) -> Optional[str]:
+    """全角約物 1 文字なら字面を寄せる向き ("start"/"middle"/"end")、それ以外は None。
+
+    元 PDF は等幅の和文フォントで組まれ、開き約物は全角枠の右半分・閉じ約物と句読点は
+    左半分に字面が来る前提で座標が付いている。同梱の BIZ UDPGothic はプロポーショナルで
+    約物の字面を枠の左へ詰めるため、開き約物をそのまま原点へ置くと直前の閉じ約物と重なる
+    (実 PDF の ``］［`` は全角枠がほぼ同じ位置にある)。寄せ方は Unicode の一般カテゴリで
+    決まるので、文字を列挙しない。
+    """
+    if len(text) != 1 or unicodedata.east_asian_width(text) not in ("W", "F"):
+        return None
+    category = unicodedata.category(text)
+    if category not in ("Ps", "Pe", "Pi", "Pf", "Po"):
+        return None
+    if text == _MIDDLE_DOT:
+        return "middle"
+    return "end" if category in ("Ps", "Pi") else "start"
+
+
 def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
     # 代替フォントでも崩れないよう和文補完 + 汎用名のフォールバックチェーンを付与
     family = fonts.fallback_css(el.font_family, el.text)
@@ -309,6 +361,15 @@ def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
     if el.text == el.original_text:
         # 未編集: 元 PDF のベースライン原点に置く (従来出力と完全一致)。
         x, y, base = el.origin_x, el.origin_y, ""
+        punct = _fullwidth_punct_anchor(el.text) if el.bbox.w > 0 else None
+        if punct is not None:
+            # 全角約物は字面が枠の半分しかない。textLength で全角幅へ引き伸ばすとグリフ
+            # そのものが倍幅になって潰れるため、幅合わせをやめて字面の寄せだけ復元する。
+            stretch = ""
+            if punct == "end":
+                x, base = el.bbox.x1, ' text-anchor="end"'
+            elif punct == "middle":
+                x, base = el.bbox.x + el.bbox.w / 2, ' text-anchor="middle"'
     elif el.wrap_align is not None:
         # 折返し畳み込み置換: 縦は下揃え (origin_y = 最終行のベースラインに据え直し済み)、
         # 横は元の折返し行の揃え (`wrap_align`) を text-anchor で踏襲する。全幅への
