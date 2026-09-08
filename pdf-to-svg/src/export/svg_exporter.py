@@ -6,6 +6,7 @@ GUI なしでテスト可能・フォント名の崩れも起きない。
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 from typing import Callable, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
@@ -40,6 +41,16 @@ def _clip_id(rect: Rect) -> str:
     """
     raw = "clip-" + _fmt(rect.x) + "-" + _fmt(rect.y) + "-" + _fmt(rect.w) + "-" + _fmt(rect.h)
     return re.sub(r"[^0-9A-Za-z_-]", "_", raw)
+
+
+def _image_clip_id(d: str) -> str:
+    """画像のクリップ形状ごとに決定的な ``<clipPath>`` id を作る。
+
+    同じ形状は同じ id になるので、複数の画像が同じ切り抜きを共有しても定義は 1 個で済む。
+    座標を id へ並べる ``_clip_id`` と違い、path の ``d`` は任意長になりうるのでダイジェストを使う
+    (id の長さを一定に保つため。値そのものは決定的で、同一モデルからは常に同じ id が出る)。
+    """
+    return "imgclip-" + hashlib.sha1(d.encode("utf-8")).hexdigest()[:16]
 
 
 # 既知拡張子だけの固定表 (`web/server.py` の `_MIME` と同型)。PDF から抽出した画像の ext は
@@ -131,6 +142,30 @@ def page_to_svg(
             + "/></clipPath></defs>"
         )
         lines.append("<g " + _attr("clip-path", "url(#" + clip_id + ")") + ">")
+
+    # 画像のクリップ形状はここで <defs> へまとめ、個々の <image> は url(#...) で参照する。
+    # 要素タグを単一タグに保つための分離である (`_with_data_el` は開きタグの最初の空白へ
+    # 属性を差し込むので、要素の直列化が <defs> で始まると data-el が <defs> に付いてしまう)。
+    # 収集は描画と同じ交差判定で行う (書き出し領域の外にある画像の定義を残さない)。
+    clip_defs: List[Tuple[str, str]] = []
+    seen_clip_ids = set()
+    for el in page.live_elements():
+        if not isinstance(el, ImageElement) or not el.clip_d:
+            continue
+        if not _intersects_export(el.bbox, rect):
+            continue
+        cid = _image_clip_id(el.clip_d)
+        if cid not in seen_clip_ids:
+            seen_clip_ids.add(cid)
+            clip_defs.append((cid, el.clip_d))
+    if clip_defs:
+        parts = ["<defs>"]
+        for cid, d in clip_defs:
+            parts.append(
+                "<clipPath " + _attr("id", cid) + "><path " + _attr("d", d) + "/></clipPath>"
+            )
+        parts.append("</defs>")
+        lines.append("".join(parts))
 
     # スキャン背景
     if page.background is not None:
@@ -230,7 +265,8 @@ def _element_to_svg(el, color_fn: ColorFn = sanitize_color, image_fn: ImageFn = 
         )
     if isinstance(el, ImageElement):
         data, ext = image_fn(el.img_bytes, el.ext)
-        return _image_tag(el.rect, data, ext)
+        clip_id = _image_clip_id(el.clip_d) if el.clip_d else None
+        return _image_tag(el.rect, data, ext, clip_id)
     return ""
 
 
@@ -319,9 +355,10 @@ def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
     )
 
 
-def _image_tag(rect: Rect, data: bytes, ext: str) -> str:
+def _image_tag(rect: Rect, data: bytes, ext: str, clip_id: Optional[str] = None) -> str:
     b64 = base64.b64encode(data).decode("ascii")
     href = f"data:{_mime(ext)};base64,{b64}"
+    clip = " " + _attr("clip-path", "url(#" + clip_id + ")") if clip_id else ""
     return (
         "<image "
         + _attr("x", _fmt(rect.x))
@@ -333,5 +370,6 @@ def _image_tag(rect: Rect, data: bytes, ext: str) -> str:
         + _attr("height", _fmt(rect.h))
         + " "
         + _attr("xlink:href", href)
+        + clip
         + "/>"
     )

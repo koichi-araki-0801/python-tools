@@ -108,3 +108,65 @@ def test_clip_with_zero_size_is_rejected():
 
 def test_no_clip_has_no_clippath():
     assert "clipPath" not in page_to_svg(_page())
+
+
+def _page_with_clipped_image() -> Page:
+    """クリップ形状を持つ画像 1 枚だけのページ。"""
+    pg = Page(index=0, width_pt=100, height_pt=100)
+    pg.elements = [
+        ImageElement(
+            bbox=Rect(10, 10, 40, 40),
+            rect=Rect(10, 10, 40, 40),
+            img_bytes=_png((255, 0, 0)),
+            ext="png",
+            z=0,
+            clip_d="M10,10 L50,10 L50,50 Z",
+        )
+    ]
+    return pg
+
+
+def test_image_clip_emits_clippath_and_reference():
+    """クリップ形状を持つ画像は <defs><clipPath> を伴い、<image> がそれを参照する。"""
+    svg = page_to_svg(_page_with_clipped_image())
+    cid = re.search(r'<clipPath id="(imgclip-[0-9a-f]+)">', svg).group(1)
+    assert f'<clipPath id="{cid}"><path d="M10,10 L50,10 L50,50 Z"/></clipPath>' in svg
+    assert f'clip-path="url(#{cid})"' in svg
+    # <image> は単一タグのままであること (annotate の data-el 差し込みが開きタグを壊さない)
+    assert svg.count("<image ") == 1
+
+
+def test_image_without_clip_has_no_clippath():
+    """clip_d が空の画像は従来どおり <clipPath> を作らない (既存出力を変えない)。"""
+    pg = _page_with_clipped_image()
+    pg.elements[0].clip_d = ""
+    svg = page_to_svg(pg)
+    assert "clipPath" not in svg
+    assert "clip-path" not in svg
+
+
+def test_same_clip_shape_is_defined_once():
+    """同じ形状を使う画像が複数あっても <clipPath> の定義は 1 個にまとまる。"""
+    from copy import deepcopy
+
+    pg = _page_with_clipped_image()
+    dup = deepcopy(pg.elements[0])
+    dup.z = 2
+    pg.elements.append(dup)
+    svg = page_to_svg(pg)
+    assert svg.count("<clipPath ") == 1
+    assert svg.count("clip-path=") == 2
+
+
+def test_image_clip_id_is_deterministic():
+    """同一モデルからは常に同一の id が出る (決定的出力の不変則)。"""
+    a = page_to_svg(_page_with_clipped_image())
+    b = page_to_svg(_page_with_clipped_image())
+    assert a == b
+
+
+def test_image_clip_survives_annotate():
+    """annotate=True でも <image> の開きタグに data-el が入り、clip-path が残る。"""
+    svg = page_to_svg(_page_with_clipped_image(), annotate=True)
+    assert re.search(r'<image data-el="\d+" ', svg)
+    assert "clip-path=" in svg

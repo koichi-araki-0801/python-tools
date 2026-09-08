@@ -205,3 +205,7 @@ class ImageElement(Element):
     # raw 画像バイト列を base64 で SVG に埋め込む。ext は "png"/"jpeg" 等。
     img_bytes: bytes = b""
     ext: str = "png"
+    # PDF のクリップパス (`W n`) 由来の切り抜き形状。SVG path の "d" 文字列で、
+    # 空文字列はクリップ無し。シェーディングを螺旋等の形へ切り抜いて描く PDF では、
+    # これが無いと bbox の矩形がそのまま貼られ、下の図形を覆い隠す。
+    clip_d: str = ""
