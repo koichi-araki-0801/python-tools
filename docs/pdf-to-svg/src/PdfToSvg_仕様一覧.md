@@ -95,5 +95,6 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 11 | `test_shell_rpc.py` | RPC ディスパッチのJSON化可能性 | JSON化できる | 未 |
 | 12 | `test_figure_detect.py` | スチュワードシップ図の文字アンカー検出（見出し・ラベル数・背景/帯の除外・不動点ループの停止） | 合成ページで矩形検出が正しい | 未 |
 | 13 | `test_grayscale.py` | 色hex・色名・alpha・`none`/`currentColor`のグレー化、画像RGB→L/RGBA→LA、巨大画素・壊れたバイトは原本、`lru_cache` | Pillowの`convert("L")`と一致 | 未 |
-| 14 | `test_export_clip.py` | `clip`のviewBox/width/height、交差外要素の除外、`<clipPath>`、`grayscale=True`でカラーhexが残らないこと、既定OFFのバイト一致 | クロップ・グレー化出力が正しい | 未 |
+| 14 | `test_export_clip.py` | `clip`のviewBox/width/height、交差外要素の除外、`<clipPath>`、`grayscale=True`でカラーhexが残らないこと、既定OFFのバイト一致、画像の`clip_d`の`<defs>`集約・同一形状の重複排除・`annotate`との併存・ページclipとの組合せ | クロップ・グレー化出力が正しい | 未 |
 | 15 | `test_pdftosvg_app_flow_e2e.py::test_gray_figure_flow` | チェックON→手順4直行→候補が採用済み→書き出しファイル名に`_fig1_gray`が付く（E2E） | 一連の動線が通る | 未 |
+| 16 | `test_image_clip.py` | クリップ下で描かれた画像に`clip_d`が入る、SVGに`<clipPath>`と`clip-path`が出る、クリップ無しの画像は`clip_d`が空、items が矩形1個だけのclipは索引へ入れない | 切り抜き形状が再現される | 未 |
