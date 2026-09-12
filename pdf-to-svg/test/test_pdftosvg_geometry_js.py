@@ -81,3 +81,40 @@ def test_rectiou_zero_area_rect_is_0(geo):
     a = "{x:0,y:0,w:0,h:0}"
     b = "{x:0,y:0,w:10,h:10}"
     assert js(geo, f"window.__geo.rectIoU({a}, {b})") == 0
+
+
+def test_copyrect_returns_an_independent_copy(geo):
+    assert js(geo, """(() => {
+        const a = { x: 1, y: 2, w: 3, h: 4 };
+        const b = window.__geo.copyRect(a);
+        b.x = 99;
+        return [a.x, b.x, b.y, b.w, b.h];
+    })()""") == [1, 99, 2, 3, 4]
+
+
+def test_clamptopage_keeps_a_rect_inside_the_page(geo):
+    assert js(geo, "window.__geo.clampToPage({x: -10, y: -10, w: 40, h: 40}, 100, 100)") == {
+        "x": 0, "y": 0, "w": 30, "h": 30,
+    }
+
+
+def test_clamptopage_collapses_a_rect_fully_outside(geo):
+    assert js(geo, "window.__geo.clampToPage({x: 200, y: 200, w: 10, h: 10}, 100, 100)") == {
+        "x": 100, "y": 100, "w": 0, "h": 0,
+    }
+
+
+def test_min_size_pt_is_exported(geo):
+    assert js(geo, "window.__geo.MIN_SIZE_PT") == 4
+
+
+def test_pagesizeof_reads_the_viewbox(geo):
+    assert js(geo, """(() => {
+        const ns = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(ns, "svg");
+        svg.setAttribute("viewBox", "0 0 300 200");
+        document.body.appendChild(svg);
+        const r = window.__geo.pageSizeOf(svg);
+        svg.remove();
+        return r;
+    })()""") == {"w": 300, "h": 200}

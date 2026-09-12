@@ -5,35 +5,18 @@
 // `initFigure` で注入された `render` (app.js) へ委譲する。
 // オーバーレイは SVG の外 (host 直下の div) に置くので、`bakeSvg` 相当の書き出しには
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
-// 矩形操作の純粋ヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`)
-// は手順 3 の上書きオーバーレイ (`cover.js`) も採用矩形と同じ流儀で使うため、ここで
-// エクスポートして共有する (複製しない)。
+// 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`) は
+// 手順 3 の上書きオーバーレイ (`cover.js`) と共有するため `geometry.js` にある。
 import { esc } from "./dom.js";
-import { clientToPage, rectIoU } from "./geometry.js";
+import { clientToPage, rectIoU, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT } from "./geometry.js";
 import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";
 
 var ui = { render: function () {} };
 function initFigure(deps) { ui = deps; }
 
-var MIN_SIZE_PT = 4; // これ未満の矩形は誤クリックとみなして作らない
 // 採用済みと大きく重なる候補は隠す。伸縮しても隠れたまま、採用を外せば戻る
 // (等値比較だと伸縮で採用側の座標がずれた瞬間に元候補が再出現し、二重書き出しにつながるため)。
 var CAND_HIDE_IOU = 0.5;
-
-function copyRect(r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; }
-
-// ページ外へはみ出した矩形をページ内へ収める (サーバの clip 検証は「ページ内・正の寸法」を要求する)
-function clampToPage(r, w, h) {
-  var x0 = Math.max(0, Math.min(r.x, w)), y0 = Math.max(0, Math.min(r.y, h));
-  var x1 = Math.max(0, Math.min(r.x + r.w, w)), y1 = Math.max(0, Math.min(r.y + r.h, h));
-  return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
-}
-
-// ページ幅・高さ (pt)。viewBox の原点は常に 0,0 (書き出し矩形はページ全体) なので width/height だけ見る
-function pageSizeOf(svgEl) {
-  var vb = svgEl.viewBox.baseVal;
-  return { w: vb.width, h: vb.height };
-}
 
 /** 左レール: ページ一覧 + 候補/採用のバッジ。クリックでページ移動 */
 function buildFigRail(navId) {
@@ -83,16 +66,6 @@ function buildFigSelist(elId) {
   el.querySelectorAll("[data-g]").forEach(function (row) {
     row.addEventListener("click", function () { S.page = +row.dataset.g; ui.render(); });
   });
-}
-
-/** ページ座標 (pt) の矩形を host 相対の px に置く */
-function placeRect(box, r, svgEl, host) {
-  var sr = svgEl.getBoundingClientRect(), hb = host.getBoundingClientRect(), vb = svgEl.viewBox.baseVal;
-  var sx = sr.width / vb.width, sy = sr.height / vb.height;
-  box.style.left = ((r.x - vb.x) * sx + sr.left - hb.left) + "px";
-  box.style.top = ((r.y - vb.y) * sy + sr.top - hb.top) + "px";
-  box.style.width = (r.w * sx) + "px";
-  box.style.height = (r.h * sy) + "px";
 }
 
 /** 候補 (点線) と採用 (実線) を host に重ねる。呼ぶたびに全部描き直す */
@@ -188,7 +161,4 @@ function installFigDrag(host) {
   });
 }
 
-export {
-  initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag,
-  copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT,
-};
+export { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag };

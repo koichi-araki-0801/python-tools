@@ -1,6 +1,10 @@
 // =============================================================================
-// geometry.js — PdfToSvg のページ座標・範囲指定の純粋ヘルパ (状態非依存)
+// geometry.js — PdfToSvg のページ座標と矩形操作のヘルパ
 // =============================================================================
+// 画面の状態 (`state.js` の `S`) には依存しない。DOM は読む (`clientToPage` /
+// `pageSizeOf` が `viewBox` と要素の実寸を見る) し、`placeRect` は箱の `style` を書くが、
+// どれも「渡された引数だけで決まる」ので手順 3 のオーバーレイ (`cover.js`) と手順 4 の
+// 採用矩形 (`figure.js`) が同じ実装を共有できる。
 
 // クライアント座標 → SVG `viewBox` 座標 (ページ pt)。
 export function clientToPage(svgEl, clientX, clientY) {
@@ -10,6 +14,33 @@ export function clientToPage(svgEl, clientX, clientY) {
     x: vb.x + ((clientX - r.left) / r.width) * vb.width,
     y: vb.y + ((clientY - r.top) / r.height) * vb.height,
   };
+}
+
+/** ページ座標 (pt) の矩形を host 相対の px に置く */
+export function placeRect(box, r, svgEl, host) {
+  var sr = svgEl.getBoundingClientRect(), hb = host.getBoundingClientRect(), vb = svgEl.viewBox.baseVal;
+  var sx = sr.width / vb.width, sy = sr.height / vb.height;
+  box.style.left = ((r.x - vb.x) * sx + sr.left - hb.left) + "px";
+  box.style.top = ((r.y - vb.y) * sy + sr.top - hb.top) + "px";
+  box.style.width = (r.w * sx) + "px";
+  box.style.height = (r.h * sy) + "px";
+}
+
+export var MIN_SIZE_PT = 4; // これ未満の矩形は誤クリックとみなして作らない
+
+export function copyRect(r) { return { x: r.x, y: r.y, w: r.w, h: r.h }; }
+
+// ページ外へはみ出した矩形をページ内へ収める (サーバの clip 検証は「ページ内・正の寸法」を要求する)
+export function clampToPage(r, w, h) {
+  var x0 = Math.max(0, Math.min(r.x, w)), y0 = Math.max(0, Math.min(r.y, h));
+  var x1 = Math.max(0, Math.min(r.x + r.w, w)), y1 = Math.max(0, Math.min(r.y + r.h, h));
+  return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+}
+
+// ページ幅・高さ (pt)。viewBox の原点は常に 0,0 (書き出し矩形はページ全体) なので width/height だけ見る
+export function pageSizeOf(svgEl) {
+  var vb = svgEl.viewBox.baseVal;
+  return { w: vb.width, h: vb.height };
 }
 
 /** 2 つの矩形 {x,y,w,h} の IoU (重なり面積 / 合併面積)。重ならなければ 0 */

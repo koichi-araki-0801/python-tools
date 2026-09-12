@@ -3,11 +3,10 @@
 // =============================================================================
 // 置いた上書きは `coverList` RPC が返す矩形をモデルの正として HTML の箱で重ね、ドラッグ中は
 // 箱だけを動かし、mouseup の 1 回だけ `updateCover` を送る (`figure.js` の採用矩形と同じ流儀)。
-// 矩形操作の純粋ヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`)
-// は `figure.js` の採用矩形の実装とロジックが同一なので、複製せずそちらから読む。
-import { clientToPage } from "./geometry.js";
+// 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`) は
+// 手順 4 の採用矩形と同じ流儀なので `geometry.js` から共有して読む。
+import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT } from "./geometry.js";
 import { S } from "./state.js";
-import { copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT } from "./figure.js";
 
 let ui = null; // { rpc, afterEdit, pageOf } を app.js が注入する
 
