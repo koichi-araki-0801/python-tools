@@ -46,8 +46,10 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 4 | 入力 | suggest_join | `bool（既定 false）` | クリック取り込みで折返し 2 行を連結するか |
 | 5 | 入力 | 枠線色/幅 | `hex / 0.5〜20pt` | 枠線追加 |
 | 6 | 入力 | 書き出す範囲 | `表示中のページのみ / 全ページ / スキップを除く / ページを指定` | ページ選別 |
+| 6.1 | 入力 | 上書きの矩形/置換語 | `{x,y,w,h}` / 200 文字まで | 手動の上書き |
 | 7 | 出力 | SVGファイル | `決定的SVG` | 実<text>保持・使用グリフのみWOFF2埋込 |
 | 8 | 出力 | PNG背景 | `ラスタ（SCAN_RENDER_SCALE=2.0）` | スキャンページ背景 |
+| 8.1 | 出力 | 上書き矩形 | `<g><rect><text>` | 不可視OCR文字の置換箇所・手動の上書き。色は画像から採色 |
 | 9 | 設定 | config.py | `frozen exe / ソース共通` | データ置き場（既定 %LOCALAPPDATA%\PdfToSvg\data）に辞書・ログ・作業領域。`PDFTOSVG_DATA_DIR` で明示指定可 |
 | 10 | 出力 | グレー書き出しファイル名 | `<元ファイル名>_p<N>_fig<k>_gray.svg` / `<元ファイル名>_gray_svg.zip` | 図だけをグレースケールで書き出すモードの命名。`k` は同ページ内の採用順（1 始まり）。カラー版の `_pN.svg` と衝突しない |
 
@@ -73,6 +75,9 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 15 | RPC | `dictJson / dictImportJson` | 辞書JSONの文字列受け渡し（ファイル保存/読込はブラウザ側） |
 | 16 | RPC | `setSuggestJoin` | クリック取り込み連結フラグ更新 |
 | 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線（Undoへpush） |
+| 17.1 | RPC | `addCover` | 手動の上書きを 1 つ追加（引数 `fileIndex, pageInFile, rect, text`。不可視かつ置換済み扱いの `TextElement` を作り Undo へ push） |
+| 17.2 | RPC | `coverList` | 指定ページの手動の上書き一覧を取得（引数 `fileIndex, pageInFile`。返り値 `{covers: [{elId, rect, text}]}`） |
+| 17.3 | RPC | `updateCover` | 手動の上書きの矩形/置換語を変更（引数 `fileIndex, pageInFile, elId` + 任意で `rect, text`。`UpdateCoverCommand` で Undo へ push） |
 | 18 | RPC | `undo / redo` | 操作の取消 / やり直し |
 | 19 | RPC | `exportSvg` | 範囲指定で SVG 書き出し。引数に `grayscale`, `clip`, `figIndex: int = 1` を追加。`clip` があれば `_fig<k>`、`grayscale` が真なら `_gray` を独立して付け加える（`<stem>_p<N>[_fig<k>][_gray].svg`）。UI のグレーモードは常に両方を送るため成果物は `<stem>_p<N>_fig<k>_gray.svg` |
 | 20 | RPC | `zipEntries` | 複数 SVG を ZIP 1 本にまとめて base64 で返す |
@@ -98,3 +103,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 14 | `test_export_clip.py` | `clip`のviewBox/width/height、交差外要素の除外、`<clipPath>`、`grayscale=True`でカラーhexが残らないこと、既定OFFのバイト一致、画像の`clip_d`の`<defs>`集約・同一形状の重複排除・`annotate`との併存・ページclipとの組合せ | クロップ・グレー化出力が正しい | 未 |
 | 15 | `test_pdftosvg_app_flow_e2e.py::test_gray_figure_flow` | チェックON→手順4直行→候補が採用済み→書き出しファイル名に`_fig1_gray`が付く（E2E） | 一連の動線が通る | 未 |
 | 16 | `test_image_clip.py` | クリップ下で描かれた画像に`clip_d`が入る、SVGに`<clipPath>`と`clip-path`が出る、クリップ無しの画像は`clip_d`が空、items が矩形1個だけのclipは索引へ入れない | 切り抜き形状が再現される | 未 |
+| 17 | `test_ocr_layer.py` | 不可視span への`invisible`付与、未置換の書き出し省略/編集画面の透明描画、置換済みの`<g><rect><text>`と採色（帯色・単色領域の黒白倒し）、グレー化での灰色化、`MAX_COVER_IMAGE_PIXELS`超過時の白フォールバックと`ExportReport.cover_fallback`、不可視文字を持たないPDFのバイト一致、書き出さない不可視文字をフォント埋込対象から除外、スキャン背景からの採色 | 不可視OCR文字層の検出・隠し描画が正しい | 未 |
+| 18 | `test_cover.py` | 量子化16階調での最頻色/次点色の決定性、代表色は箱の平均値、`MIN_CONTRAST`未満での黒/白への倒し、bboxの画像範囲へのクランプ、`MAX_COVER_IMAGE_PIXELS`超過・壊れた画像の`None`化 | `cover.py`の採色ロジックが正しい | 未 |
+| 19 | `test_pdftosvg_app_flow_e2e.py::test_ocr_layer_upload_notifies` | 画像+不可視OCR文字層のPDFアップロード時のトースト通知（E2E） | 検出ページ数が通知される | 未 |
+| 20 | `test_pdftosvg_app_flow_e2e.py::test_manual_cover_tool_places_cover` ほか | 「上書き」ツールでのドラッグ配置、角ハンドルでの伸縮、置換語の変更（選択中の編集が次の上書きへ漏れないこと含む）、Undoでの巻き戻し（E2E） | 手動の上書きの配置・編集が正しく反映される | 未 |
