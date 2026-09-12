@@ -24,13 +24,16 @@ OCR 結果の文字が不可視(PDF の文字描画モード 3)で重ねてあ�
 2. 置換していない OCR 文字を書き出し SVG に描かない(二重描画の解消)。ただし編集画面では
    クリック取り込みと確認一覧のマーカーが今までどおり効くようにする。
 3. 不可視文字を持たない PDF の出力はバイト単位で変えない。
+4. 元の文字が読み取れない(文字層が無い、または OCR が化けて辞書が当たらない)ページでは、
+   利用者が範囲をドラッグして置換語を入れる手動の上書きへフォールバックできる。
 
 ## 決定事項
 
 利用者との確認(dig)により、次を決定済みとする。
 
-1. 対象は「画像 + 不可視 OCR 文字層」の形態に限る。文字がアウトライン化(パス化)された
-   PDF は対象外で、OCR は行わない(設計書 16.2 節の非対応を維持)。
+1. 自動の辞書置換で扱うのは「画像 + 不可視 OCR 文字層」の形態に限る。文字が
+   アウトライン化(パス化)された PDF や文字層の無いスキャンは自動では扱わず、OCR は
+   行わない(設計書 16.2 節の非対応を維持)。これらは手動の上書き(決定事項 15)で補う。
 2. 隠す矩形の色は背景画像の画素から自動で採る。常に白にはしない(帯や塗りセルの上で
    白抜きの穴になる)。
 3. 矩形はモデルに持たず、書き出し時に exporter が合成する。グレー化・切り出しと同じ
@@ -57,10 +60,17 @@ OCR 結果の文字が不可視(PDF の文字描画モード 3)で重ねてあ�
     コミットしない)。
 14. 既存フィクスチャの期待値は更新しない。不可視文字を持たない PDF の出力バイト一致は
     既存テストで固定し、本機能のテストは別に足す。
+15. 元の文字が読み取れない場合のフォールバックは手動の上書きとする。利用者が範囲を
+    ドラッグし、置換語を入力する。矩形の色は自動置換と同じく背景画像から採り、置換語が
+    空なら矩形だけを重ねる。
+16. 手動の上書きはモデルに「不可視かつ置換済み扱いの `TextElement`」として持つ。矩形の
+    採色・描画は自動置換と同じ exporter の経路を使い、追加・削除・Undo は枠線
+    (`addBorder`)と同じ仕組みに乗せる。
 
 ## 非目標
 
-- アウトライン化された文字の復元、スキャンページ(`is_scanned`)への OCR。
+- アウトライン化された文字の自動復元、スキャンページ(`is_scanned`)への OCR。
+- 手動の上書きの位置・文字の後からの編集(消して置き直す)。
 - 明朝/ゴシックの利用者選択、矩形色・文字色の利用者指定。
 - 画像の回転・傾き(`ImageElement.rect` への線形写像だけを扱う)と `clip_d` の考慮。
 - 矩形合成の ON/OFF オプション、RPC 引数の追加。
@@ -92,6 +102,9 @@ OCR 結果の文字が不可視(PDF の文字描画モード 3)で重ねてあ�
 | 可視(従来) | 従来どおり `<text>` | 従来どおり `<text data-el>` |
 | 不可視・未置換(`dict_match is None`) | 出さない | `<text fill-opacity="0" data-el>` |
 | 不可視・置換済み | `<g><rect/><text/></g>` | `<g data-el><rect/><text/></g>` |
+
+「置換済み」は `dict_match is not None` で判定する。手動の上書き(6 節)もこの枝を通り、
+`text` が空なら `<rect/>` だけを出す(`<g>` で包む点は同じ)。
 
 - 透明で描く `<text>` は `fill` を残したまま `fill-opacity="0"` を付ける。SVG の
   既定 `pointer-events="visiblePainted"` は `fill="none"` だと当たり判定から外れるが、
@@ -137,7 +150,8 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 `page_to_svg` 側の組み立て:
 
 - 採取元は「text の bbox の中心を含む `ImageElement` のうち z が最大のもの」。無ければ
-  `pixels=None` として fallback。
+  スキャンページの `page.background`(`RasterBackground`。手動の上書きで使う)。どちらも
+  無ければ `pixels=None` として fallback。
 - 画像のデコードは 1 回の `page_to_svg` 呼び出しの中で画像ごと 1 度(要素 id をキーにした
   ローカル辞書)。呼び出しをまたぐキャッシュは持たない(バイト列キーのキャッシュを
   `to_gray_image` が持つのは変換結果が大きいため。ここでは解決済みの色 2 つを要素ごとに
@@ -155,6 +169,8 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 足す必要が無い。
 
 ### 4. Web 層と UI(`src/web/rpc_methods.py`、`resources/web/app.js`)
+
+自動置換に関する変更は次のとおり。手動の上書きは 6 節にまとめる。
 
 - `rpc_state` に `ocrPages`(不可視文字を 1 つ以上持つページの数)を足す。`truncated` /
   `noBackground` と同じ集計の並びに置く。
@@ -189,13 +205,64 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 - E2E(`test/*.e2e.ts`): 透明文字のクリックで `dictSuggest` が飛ぶこと、置換後の `<g>` に
   マーカーが付くこと。
 
-### 6. 文書
+### 6. 手動の上書き(フォールバック)
+
+元の文字が読み取れないページ(文字層が無い、または OCR の誤りで辞書が当たらない)では、
+自動では場所も語も決められない。そこで利用者が範囲を指定して置換語を置く手動の経路を、
+手順 3 の「枠線」ツールと同じ形で足す。
+
+**モデル**: `TextElement` に `manual_cover: bool = False` を足す。手動の上書きは次の値を
+持つ `TextElement` で、通常の要素と同じく `page.elements` に入る。
+
+| 属性 | 値 |
+|---|---|
+| `bbox` / `origin_x` / `origin_y` | ドラッグした矩形(原点は矩形の左下) |
+| `z` | ページ内の最大 z + 1(`addBorder` と同じ。元の文字とパスを必ず覆う) |
+| `text` / `original_text` | 入力した置換語(空可) |
+| `invisible` | `True` |
+| `manual_cover` | `True` |
+| `dict_match` | `DictMatch(source="", target=text)`(exporter の「置換済み」判定を通すため) |
+| `dict_revert` | `None`(戻す対象ではない) |
+| `font_family` / `weight` / `italic` | フォント名無しとして `fonts.map_font("", text)` の既定 |
+| `font_size` | 矩形の高さ × 0.7 を 4〜200pt にクランプ |
+| `color` | 使わない(採取した文字色で描く) |
+
+**RPC** `addCover {fileIndex, pageInFile, rect, text}`: `rect` の検査は `addBorder` と同じ
+(有限・ページ内・正の大きさ)。`text` は `sanitize_text` を通し、200 文字で切る。要素を
+作って `AddElementCommand` で push する(Undo 可)。削除は手順 3 の選択ツールで要素を
+選んで削除する既存経路(`DeleteCommand`)で、削除一覧には「上書き「語」」と出す
+(`rpc_removedList` の `label`)。
+
+**exporter**: 2 節の「不可視・置換済み」の枝をそのまま通る。色の採取元は 2 節のとおり
+(画像 → スキャン背景 → 無ければ白/黒へ倒す)。アウトライン文字だけのベクターページでは
+下に画像が無いので白になる。
+
+**確認一覧・state**: `rpc_planPage` は `manual_cover` の要素を除く(辞書置換ではなく、
+「戻す」の対象でもない)。`_page_has_replacements` は変更しない(`plan_replacements` は
+`dict_match` 付きの要素を候補にしないため、手動の上書きが要確認に数えられることは無い
+ことをテストで確かめる)。
+
+**UI**: 手順 3 の `float-tools` に「上書き」ボタン(`data-tool="cover"`)を足す。
+`border-opts` と同じ位置に `cover-opts`(置換語の入力欄 1 つ)を出し、ドラッグの mouseup で
+`addCover` を呼ぶ。ドラッグの仕組み(`cropDrag` / ラバーバンド)は `border` と共用し、
+`mode === "cover"` の分岐を足すだけにする。置換語は入力欄に残し、続けて複数箇所へ同じ語を
+置けるようにする。ブラウザの `prompt()` は使わない(モーダルは拡張のイベントを止める)。
+
+**テスト**: `test_ocr_layer.py` に手動の上書きの節を足す。`addCover` が要素を作り
+`pageSvg` に `<g data-el><rect><text>` が出ること、`text` 空なら `<rect>` だけ、`undo` で消える
+こと、スキャンページで背景 PNG から採色すること、ベクターページ(画像無し)で白になり
+`coverFallback` に数えられること、`planPage` に出ないこと、`removedList` のラベル。
+E2E で「上書き」ツールのドラッグ → 入力 → 描画までを 1 本。
+
+### 7. 文書
 
 - `docs/pdf-to-svg/src/設計正典.md`: 中核原則に「不可視 OCR 文字層の扱い」を 1 項、
   セキュリティの資源上限に `MAX_COVER_IMAGE_PIXELS` を追記。
-- `docs/pdf-to-svg/src/設計書.md`: 3.1 節(`invisible`)、4.1 節(texttrace の `type`)、
-  5.1 節(不可視文字の 3 分岐と `cover.py`)、7.2 節(`ocrPages` / `coverFallback`)、
-  8 節(トースト)。
+- `docs/pdf-to-svg/src/設計書.md`: 3.1 節(`invisible` / `manual_cover`)、4.1 節
+  (texttrace の `type`)、5.1 節(不可視文字の 3 分岐と `cover.py`)、7.2 節(`ocrPages` /
+  `coverFallback` / `addCover`)、7.3 節(`addCover` は `AddElementCommand`)、8 節(トースト・
+  「上書き」ツール)。
+- `docs/pdf-to-svg/src/操作手順書.md`(利用者向け): 手順 3 の「上書き」ツールの使い方。
 - `docs/pdf-to-svg/src/PdfToSvg_仕様一覧.md`: 出力・テストの行を追加。
 - `docs/_build/build_all.py` で HTML を再生成し、リリースの配布物を差し替える。
 
