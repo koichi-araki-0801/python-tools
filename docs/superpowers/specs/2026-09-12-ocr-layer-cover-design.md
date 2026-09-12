@@ -143,7 +143,7 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 - `sample_colors` は `bbox` を `img_rect` からの線形写像で画素座標へ変換し、画像の範囲で
   クランプする。範囲が空なら fallback。
 - 量子化した色の出現回数を数え、(件数の降順, 量子化値の昇順) で並べる。先頭が背景色、
-  2 番目が文字色。代表色は量子化した箱の中心値を使う(決定的で、JPEG ノイズに引かれない)。
+  2 番目が文字色。代表色は箱に入った画素の平均値(整数へ丸め)を使う(箱の中心値だと白い紙が `#f8f8f8` になる)。
 - 2 番目が無い、または背景色とのチャンネル差の最大が `MIN_CONTRAST` 未満なら、背景の
   輝度(Rec.601、`grayscale._luma` と同じ)が 128 以上で黒、未満で白を文字色にする。
   この倒しは `fallback=False`(背景色は採れている)。
@@ -195,7 +195,7 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
   - engine: 不可視 span に `invisible=True`、可視 span は `False`。
   - exporter: 未置換は `annotate=False` で `<text>` が出ず、`annotate=True` で
     `fill-opacity="0"` 付きで出る。置換後は `<g><rect><text>` の順で、`rect` の `fill` が
-    帯色(量子化の箱の中心値)、白地では `#f8f8f8` 相当(量子化後の白の箱の中心値)になる。
+    帯色(量子化の箱の平均値)、白地では `#ffffff` になる。
     文字色は帯の上で黒/白の倒し、グレー化で `rect` / `text` とも灰色になる。
   - degrade: 画素上限を超える画像(モンキーパッチで上限を下げる)で白/黒になり
     `ExportReport.cover_fallback` が数えられる。
