@@ -62,16 +62,19 @@ def e2e_page(e2e_server):
         browser.close()
 
 
-# サーバのセッション(開いている文書・Undo)はテスト間で共有される。各テストは自分が
-# 前提とするファイル構成を作れるよう、先に読み込み済みの文書を空にする。
+# サーバのセッション(開いている文書・辞書・Undo)はテスト間で共有される。各テストは自分が
+# 前提とする構成を作れるよう、先に文書と辞書を空にする。辞書をテスト末尾で消す形にすると、
+# アサートが落ちたときに実行されず、次のテストへ語が漏れる。
 def reset_session(page):
     page.evaluate("""async () => {
         const w = window;
         for (let i = 0; i < 20; i++) {
             const st = await w.rpc("state");
-            if (!st.files.length) return;
+            if (!st.files.length) break;
             await w.rpc("removeFile", { fileIndex: 0 });
         }
+        const dict = await w.rpc("dictList");
+        for (const e of dict.entries) await w.rpc("dictDelete", { id: e.id });
     }""")
 
 
@@ -105,7 +108,7 @@ def test_four_step_flow(e2e_page):
     page.fill("#dict-src", "Revenue")
     page.fill("#dict-tgt", "売上高")
     page.click("#dict-add")
-    expect(page.locator("#dict-count")).to_contain_text("1")
+    expect(page.locator("#dict-count")).to_have_text("登録済みの用語（1）")
     # 辞書に語を足しただけで、その語に当たるページは「要確認」に上がる(再適用の前でも)
     expect(page.locator("#nav-hint")).to_contain_text("要確認 1")
     page.click("#btn-reapply")
@@ -534,15 +537,6 @@ def test_confirm_marker_is_drawn_over_replaced_invisible_text_group(e2e_page, oc
     }""")
     assert abs(pos["markCx"] - pos["rectX"]) < 1
     assert abs(pos["markCy"] - pos["rectY"]) < 1
-
-    # 辞書はセッション間で共有され `reset_session` の対象外なので、後続テスト (例えば
-    # `_goto_step3` は「辞書が空」を前提にする) を汚さないよう自分で片付ける。
-    page.evaluate("""async () => {
-        const list = await window.rpc("dictList");
-        for (const e of list.entries) {
-            if (e.source === "Header Text") await window.rpc("dictDelete", { id: e.id });
-        }
-    }""")
 
 
 def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):

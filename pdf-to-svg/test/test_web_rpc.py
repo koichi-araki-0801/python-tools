@@ -627,6 +627,17 @@ def test_update_cover_rejects_non_cover_and_empty_update(session):
         )
 
 
+def test_update_cover_rejects_a_deleted_cover(session):
+    """削除した上書きは `updateCover` の対象にならない (Undo でオーバーレイが古い id を
+    握ったまま操作しても、消えた要素を書き換えない)。"""
+    el_id = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    rpc_methods.dispatch(session, "applyDelete", _cover_args(elIds=[el_id]))
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateCover", _cover_args(elId=el_id, text="B"))
+
+
 def test_manual_cover_is_not_a_dictionary_change(session):
     el_id = rpc_methods.dispatch(
         session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
