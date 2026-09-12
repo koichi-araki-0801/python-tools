@@ -447,3 +447,48 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     page.click("#btn-back")
     expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
     page.uncheck("#chk-gray")
+
+
+def _goto_step3(page, pdf_path):
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(pdf_path))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    page.click("#btn-next")  # 辞書が空なので未確認ガードは出ない
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#trim-stage svg")).to_be_visible()
+
+
+def test_ocr_layer_upload_notifies(e2e_page, ocr_layer_pdf):
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(ocr_layer_pdf))
+    expect(page.locator("#toast")).to_contain_text("OCR 文字のページを 1 ページ検出", timeout=30_000)
+
+
+def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    expect(page.locator("#cover-opts")).to_be_visible()
+    page.fill("#cover-text", "手動語")
+    box = page.locator("#trim-stage svg").bounding_box()
+    # ページ座標 (20,120)-(120,140) 付近 (白地の不可視文字の上) をドラッグする
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator('#trim-stage svg g[data-el] text', has_text="手動語")).to_have_count(1)
+    covers = page.evaluate("""async () => {
+        const st = await window.rpc("state");
+        return (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers;
+    }""")
+    assert len(covers) == 1 and covers[0]["text"] == "手動語"

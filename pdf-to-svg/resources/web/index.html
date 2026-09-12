@@ -27,7 +27,8 @@
   .crop-rubber { position: absolute; border: 2px solid var(--accent);
     background: oklch(0.58 0.105 240/0.12); pointer-events: none; border-radius: 2px; }
   .editor.tool-crop .page-host, .editor.tool-crop .doc-stage,
-  .editor.tool-border .page-host, .editor.tool-border .doc-stage { cursor: crosshair; }
+  .editor.tool-border .page-host, .editor.tool-border .doc-stage,
+  .editor.tool-cover .page-host, .editor.tool-cover .doc-stage { cursor: crosshair; }
   .editor.tool-select .page-host [data-el] { cursor: pointer; }
   /* 手順2: 文字クリックで「元の語」に取り込めることを示す */
   .screen[data-screen="2"] .page-host text[data-el] { cursor: pointer; }
@@ -165,11 +166,15 @@
             <button data-tool="select" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 19 12l-6.2 1.4L9.5 20 5.5 3.5Z"></path></svg>選択</button>
             <button data-tool="crop" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v13.5A1.5 1.5 0 0 0 8.5 18H21"></path><path d="M3 7h13.5A1.5 1.5 0 0 1 18 8.5V21"></path></svg>範囲削除</button>
             <button data-tool="border" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1.5"></rect></svg>枠線</button>
+            <button data-tool="cover" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="9" rx="1.5"></rect><path d="M8 12.5h8"></path></svg>上書き</button>
           </div>
           <div class="ft-div"></div>
           <div class="border-opts" id="border-opts" hidden="">
             <input type="color" id="border-color" value="#000000" title="枠線の色">
             <label class="bo-w"><input type="number" id="border-width" value="1" min="0.5" max="20" step="0.5" title="線の太さ（pt）">pt</label>
+          </div>
+          <div class="cover-opts" id="cover-opts" hidden="">
+            <input type="text" id="cover-text" maxlength="200" placeholder="置換語（空なら矩形だけ）" title="矩形の上に描く語。選んだ上書きがあればその語を変える">
           </div>
           <button class="btn ghost" id="btn-deletesel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"></path><path d="M6 7v12.5A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7"></path><path d="M10 11v6M14 11v6"></path></svg>削除</button>
         </div>

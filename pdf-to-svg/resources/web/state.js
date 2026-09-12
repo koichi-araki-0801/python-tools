@@ -22,8 +22,11 @@ var S = {
   filterFor: { 2: "all", 3: "pending" },
   selFor: { 2: {}, 3: {} },     // ページレール選択 (global idx -> true)
   collapsed: {},        // "step:fi" -> true (レールのファイル折り畳み)
-  tool: "select",       // 手順3 ツール (select/crop/border)
+  tool: "select",       // 手順3 ツール (select/crop/border/cover)
   cropDrag: null,       // 範囲ドラッグ中の状態 {origin,rubber,mode}
+  coverText: "",        // 上書きツールの置換語 (空なら矩形だけ)
+  coverSel: null,       // 上書きツールで選んでいる要素 id (null = 未選択。入力欄は次に置く語)
+  coverDrag: null,      // 上書きの移動・伸縮中の状態 (cover.js が使う)
   elSel: {},            // "fi:pi" -> {elId:true} (要素選択)
   svgCache: {},         // "fi:pi" -> {svg,width,height}
   zoomFor: { 2: 1, 3: 1, 4: 1 },        // 手順2/3/4 のキャンバス内ズーム倍率

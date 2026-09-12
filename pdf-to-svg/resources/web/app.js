@@ -111,7 +111,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
 
   // ── 4. 読み込み ──
   // 資源上限による劣化の直前値 (要素の切り捨て / 背景の欠落)。同じ状態で何度も通知しない。
-  var degradedNoticed = { truncated: 0, noBackground: 0 };
+  var degradedNoticed = { truncated: 0, noBackground: 0, ocrPages: 0 };
   async function reloadState() {
     var st = await rpc("state");
     applyState(st);
@@ -124,8 +124,12 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     if (st.noBackground && st.noBackground !== degradedNoticed.noBackground) {
       msgs.push(st.noBackground + " ページは大きすぎて背景画像を生成できませんでした");
     }
+    if (st.ocrPages && st.ocrPages !== degradedNoticed.ocrPages) {
+      msgs.push("画像 + OCR 文字のページを " + st.ocrPages + " ページ検出しました。置換箇所は画像の上に矩形で上書きします");
+    }
     degradedNoticed.truncated = st.truncated || 0;
     degradedNoticed.noBackground = st.noBackground || 0;
+    degradedNoticed.ocrPages = st.ocrPages || 0;
     if (msgs.length) toast(msgs.join(" / "));
   }
 
@@ -175,7 +179,10 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
   // ── 6. ページ SVG ──
   async function ensureSvg(fi, pi) {
     var k = svgKey(fi, pi);
-    if (!S.svgCache[k]) S.svgCache[k] = await rpc("pageSvg", { fileIndex: fi, pageInFile: pi, grayscale: S.gray });
+    if (!S.svgCache[k]) {
+      S.svgCache[k] = await rpc("pageSvg", { fileIndex: fi, pageInFile: pi, grayscale: S.gray });
+      if (S.svgCache[k].coverFallback) toast("背景色を採れなかった " + S.svgCache[k].coverFallback + " 箇所は白で上書きしました");
+    }
     return S.svgCache[k];
   }
   function invalidate(fi, pi) { svgKeys(fi, pi).forEach(function (k) { delete S.svgCache[k]; }); }
@@ -488,10 +495,11 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
   function installCropDrag() {
     var host = document.getElementById("trim-stage");
     host.addEventListener("mousedown", function (e) {
-      if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border")) return;
+      if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
+      if (e.target.closest(".cover-box")) return; // 上書きのオーバーレイ上の操作は cover.js (Task 7) が扱う
       if (!host.querySelector("svg")) return;
       var rubber = document.createElement("div");
-      rubber.className = S.tool === "border" ? "border-rubber" : "crop-rubber";
+      rubber.className = S.tool === "border" ? "border-rubber" : S.tool === "cover" ? "cover-rubber" : "crop-rubber";
       host.appendChild(rubber);
       S.cropDrag = { origin: { x: e.clientX, y: e.clientY }, rubber: rubber, mode: S.tool };
       e.preventDefault();
@@ -516,6 +524,8 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
       var pg = S.PAGES[S.page]; var rect = { x: x, y: y, w: w, h: h };
       if (d.mode === "border") {
         await rpc("addBorder", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, color: S.borderColor, width: S.borderWidth });
+      } else if (d.mode === "cover") {
+        await rpc("addCover", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, text: S.coverText });
       } else {
         await rpc("deleteRegion", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect });
       }
@@ -804,8 +814,11 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
       ed3.classList.toggle("tool-crop", S.tool === "crop");
       ed3.classList.toggle("tool-select", S.tool === "select");
       ed3.classList.toggle("tool-border", S.tool === "border");
+      ed3.classList.toggle("tool-cover", S.tool === "cover");
       var bo = document.getElementById("border-opts");
       if (bo) bo.hidden = S.tool !== "border";
+      var co = document.getElementById("cover-opts");
+      if (co) co.hidden = S.tool !== "cover";
       mountPage(document.getElementById("trim-stage"), ed3, true, wireTrimStage);
       renderTrim();
       updateZoomLabel();
@@ -947,6 +960,8 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     document.getElementById("border-width").addEventListener("input", function () {
       var v = parseFloat(this.value); if (!isNaN(v) && v > 0) S.borderWidth = v;
     });
+    // 上書きツールの置換語。上書きを選んでいれば `change` でその語を変える (Task 7 の cover.js)。
+    document.getElementById("cover-text").addEventListener("input", function () { S.coverText = this.value; });
     document.getElementById("btn-deletesel").addEventListener("click", async function () {
       var pg = S.PAGES[S.page]; if (!pg) return;
       var ids = Object.keys(curElSel()); if (!ids.length) return;
@@ -1080,6 +1095,10 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     if (btn) btn.disabled = S.gray && num === 0;
   }
 
+  // 書き出し完了トーストへ連結する「背景色を採れなかった箇所」の追記。件数が 0 なら
+  // 空文字列 (既存の完了トーストの文言は変えないため、足さない)。
+  function coverSuffix(n) { return n ? " / 背景色を採れなかった " + n + " 箇所は白で上書きしました" : ""; }
+
   // ZIP 集約 1 リクエストの送信バイト予算。サーバの RPC 本文上限 (8 MiB) の 9 割を使い、
   // 残りは JSON の外枠 (メソッド名・引数キー) の余白に充てる。
   var ZIP_REQUEST_BUDGET = Math.floor(8 * 1024 * 1024 * 0.9);
@@ -1107,7 +1126,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
         var ok = await saveTextFile(one.name, one.svg, "SVG", "image/svg+xml", ".svg");
         if (!ok) return;
         setHint('<b style="color:var(--good-ink)">1個のSVGを書き出しました。</b>');
-        toast("1個のSVGを書き出しました");
+        toast("1個のSVGを書き出しました" + coverSuffix(one.coverFallback));
         return;
       }
       var list = exportPageList(expSpecValue(), parseSpec);
@@ -1131,6 +1150,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     if (btn) btn.disabled = true;
     if (prog) { prog.hidden = false; prog.max = list.length; prog.value = 0; }
     var entries = [];
+    var coverFallbackTotal = 0;
     for (var i = 0; i < list.length; i++) {
       setHint("書き出し中 " + (i + 1) + "/" + list.length);
       var item;
@@ -1145,6 +1165,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
       } else {
         item = await rpc("exportSvg", list[i]);
       }
+      coverFallbackTotal += item.coverFallback || 0;
       entries.push({ name: item.name, text: item.svg });
       if (prog) prog.value = i + 1;
     }
@@ -1153,7 +1174,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
       // 保存先を選ぶ FSA 経路 (上の `saveTextFile`) と違い、完了を断定しない文言にする。
       downloadBlob(entries[0].name, entries[0].text, "image/svg+xml");
       setHint('<b style="color:var(--good-ink)">1個のSVGのダウンロードを開始しました。</b>');
-      toast("1個のSVGのダウンロードを開始しました");
+      toast("1個のSVGのダウンロードを開始しました" + coverSuffix(coverFallbackTotal));
       return;
     }
     // 複数ページは ZIP へ集約する — N 個の個別ダウンロード (Edge の連続 DL 確認に
@@ -1172,7 +1193,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     }
     var suffix = chunks.length === 1 ? " ZIP でダウンロード開始しました。" : " ZIP " + chunks.length + " 本に分けてダウンロード開始しました。";
     setHint('<b style="color:var(--good-ink)">' + total + "個のSVGを" + suffix + "</b>");
-    toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "ダウンロード開始しました");
+    toast(total + "個のSVGを" + (chunks.length === 1 ? " ZIP 1 ファイルで" : " ZIP " + chunks.length + " ファイルに分けて") + "ダウンロード開始しました" + coverSuffix(coverFallbackTotal));
   }
 
   // ── 16. ライフサイクル (サーバ常駐管理) ──
