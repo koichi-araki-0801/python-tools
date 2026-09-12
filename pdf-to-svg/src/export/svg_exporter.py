@@ -9,10 +9,11 @@ import base64
 import hashlib
 import re
 import unicodedata
-from typing import Callable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
-from export import font_embed
+from export import cover, font_embed
 from export.grayscale import to_gray_color, to_gray_image
 from model import fonts
 from model.document import Page
@@ -33,6 +34,15 @@ from model.elements import (
 # 消える。余白は viewBox と `<clipPath>` にだけ効かせ、**要素の取捨には効かせない**
 # (効かせると、図のすぐ上にある本文の行が余白へ映り込む。実測で間隔は 1.5pt しかない)。
 CLIP_MARGIN = 6.0
+
+
+@dataclass
+class ExportReport:
+    """書き出し 1 回で起きた degrade の件数。呼び手が渡したときだけ exporter が加算する
+    (exporter 自体は状態を持たない)。``cover_fallback`` は上書き矩形の色を画像から採れず
+    白/黒へ倒した箇所の数。"""
+
+    cover_fallback: int = 0
 
 
 def _fmt(v: float) -> str:
@@ -107,6 +117,7 @@ def page_to_svg(
     annotate: bool = False,
     grayscale: bool = False,
     clip: Optional[Rect] = None,
+    report: Optional[ExportReport] = None,
 ) -> str:
     """Page を SVG 文字列へ。
 
@@ -120,6 +131,8 @@ def page_to_svg(
     新しい色属性を足したときに取りこぼすため。
 
     clip は書き出し領域 (ページ座標の矩形)。None ならページ全体 (``export_rect``)。
+
+    report を渡すと degrade 件数 (上書き矩形の採色失敗など) を書き込む。
     """
     color_fn: ColorFn = to_gray_color if grayscale else sanitize_color
     image_fn: ImageFn = to_gray_image if grayscale else _identity_image
@@ -197,15 +210,32 @@ def page_to_svg(
             lines.append(_image_tag(b.rect, data, ext))
 
     text_els: List[TextElement] = []
+    sampler = _cover_sampler(page)
     for el in page.live_elements():
         if not _intersects_export(el.bbox, select):
             continue
-        svg = _element_to_svg(el, color_fn, image_fn)
+        if isinstance(el, TextElement) and el.invisible:
+            if el.dict_match is None:
+                # 未置換の OCR 文字: 字面は画像にあるので書き出しでは描かない。編集画面では
+                # 透明で描き、クリック取り込みと確認一覧のマーカーの当たり判定を残す。
+                if not annotate:
+                    continue
+                svg = _text_to_svg(el, color_fn, transparent=True)
+                emits_text = True
+            else:
+                colors = sampler(el)
+                if colors.fallback and report is not None:
+                    report.cover_fallback += 1
+                svg = _cover_svg(el, colors, color_fn)
+                emits_text = bool(el.text)
+        else:
+            svg = _element_to_svg(el, color_fn, image_fn)
+            emits_text = isinstance(el, TextElement)
         if svg:
             if annotate:
                 svg = _with_data_el(svg, el.id)
             lines.append(svg)
-            if isinstance(el, TextElement):
+            if emits_text:  # 埋め込みフォントの収集は実際に <text> を出した要素だけ
                 text_els.append(el)
 
     # 同梱フォント (BIZ UD) を使う場合のみサブセット WOFF2 を埋め込む
@@ -221,12 +251,15 @@ def page_to_svg(
 
 
 def _with_data_el(svg: str, el_id: int) -> str:
-    """単一要素タグの開きタグ直後に data-el 属性を差し込む。"""
-    # 先頭は必ず "<tagname" なので、最初の空白の位置に属性を挿入する。
+    """要素の開きタグに data-el 属性を差し込む。"""
+    # 先頭は必ず "<tagname"。属性を持つタグは最初の空白、`<g>` のように属性の無い開きタグは
+    # 最初の ">" の位置へ差す (空白を探すだけだと内側の <rect> に付いてしまう)。
     sp = svg.find(" ")
-    if sp < 0:
+    gt = svg.find(">")
+    pos = sp if 0 <= sp < gt else gt
+    if pos < 0:
         return svg
-    return f"{svg[:sp]} {_attr('data-el', el_id)}{svg[sp:]}"
+    return f"{svg[:pos]} {_attr('data-el', el_id)}{svg[pos:]}"
 
 
 def _intersects_export(bbox: Rect, export: Rect) -> bool:
@@ -241,6 +274,54 @@ def _intersects_export(bbox: Rect, export: Rect) -> bool:
             and bbox.y <= export.y1
         )
     return bbox.intersects(export)
+
+
+def _cover_svg(el: TextElement, colors: cover.CoverColors, color_fn: ColorFn) -> str:
+    """不可視・置換済みの文字: 背景色の矩形で元の字面を隠し、その上に置換語を描く。
+    `<g>` で包むのは `_with_data_el` が 1 要素 1 開きタグを前提にするため。"""
+    rect = (
+        "<rect "
+        + _attr("x", _fmt(el.bbox.x))
+        + " "
+        + _attr("y", _fmt(el.bbox.y))
+        + " "
+        + _attr("width", _fmt(el.bbox.w))
+        + " "
+        + _attr("height", _fmt(el.bbox.h))
+        + " "
+        + _attr("fill", color_fn(colors.background))
+        + "/>"
+    )
+    text = _text_to_svg(el, color_fn, fill=colors.foreground, edited=True) if el.text else ""
+    return "<g>" + rect + text + "</g>"
+
+
+def _cover_sampler(page: Page) -> Callable[[TextElement], cover.CoverColors]:
+    """要素の bbox の下にある画像 (z 最大の `ImageElement` → スキャン背景の順) から採色する。
+    画像のデコードは 1 回の書き出しの中で画像ごと 1 度 (要素 id をキーにした辞書)。"""
+    images = sorted(
+        (e for e in page.live_elements() if isinstance(e, ImageElement)), key=lambda e: -e.z
+    )
+    decoded: Dict[int, Optional[object]] = {}  # 値は Pillow の Image (型は cover.py に閉じる)
+
+    def image_for(key: int, data: bytes, ext: str):
+        if key not in decoded:
+            decoded[key] = cover.decode_image(data, ext)
+        return decoded[key]
+
+    def sample(el: TextElement) -> cover.CoverColors:
+        cx = el.bbox.x + el.bbox.w / 2
+        cy = el.bbox.y + el.bbox.h / 2
+        for img in images:
+            r = img.rect
+            if r.x <= cx <= r.x1 and r.y <= cy <= r.y1:
+                return cover.sample_colors(image_for(img.id, img.img_bytes, img.ext), r, el.bbox)
+        bg = page.background
+        if bg is not None:
+            return cover.sample_colors(image_for(-1, bg.png_bytes, "png"), bg.rect, el.bbox)
+        return cover.sample_colors(None, el.bbox, el.bbox)
+
+    return sample
 
 
 def _element_to_svg(el, color_fn: ColorFn = sanitize_color, image_fn: ImageFn = _identity_image) -> str:
@@ -344,7 +425,14 @@ def _fullwidth_punct_anchor(text: str) -> Optional[str]:
     return "end" if category in ("Ps", "Pi") else "start"
 
 
-def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
+def _text_to_svg(
+    el: TextElement,
+    color_fn: ColorFn = sanitize_color,
+    *,
+    fill: Optional[str] = None,
+    transparent: bool = False,
+    edited: Optional[bool] = None,
+) -> str:
     # 代替フォントでも崩れないよう和文補完 + 汎用名のフォールバックチェーンを付与
     family = fonts.fallback_css(el.font_family, el.text)
     weight = f" {_attr('font-weight', el.weight)}" if el.weight != 400 else ""
@@ -358,7 +446,7 @@ def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
             f" {_attr('textLength', _fmt(el.bbox.w))}"
             f" {_attr('lengthAdjust', 'spacingAndGlyphs')}"
         )
-    if el.text == el.original_text:
+    if not (edited if edited is not None else el.text != el.original_text):
         # 未編集: 元 PDF のベースライン原点に置く (従来出力と完全一致)。
         x, y, base = el.origin_x, el.origin_y, ""
         punct = _fullwidth_punct_anchor(el.text) if el.bbox.w > 0 else None
@@ -399,6 +487,7 @@ def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
             stretch = ""
             x = el.bbox.x + el.bbox.w / 2
             base = ' dominant-baseline="central" text-anchor="middle"'
+    opacity = " " + _attr("fill-opacity", 0) if transparent else ""
     return (
         "<text "
         + _attr("x", _fmt(x))
@@ -409,8 +498,8 @@ def _text_to_svg(el: TextElement, color_fn: ColorFn = sanitize_color) -> str:
         + " "
         + _attr("font-size", _fmt(el.font_size))
         + " "
-        + _attr("fill", color_fn(el.color))
-        + f"{weight}{style}{stretch}>"
+        + _attr("fill", color_fn(fill if fill is not None else el.color))
+        + f"{opacity}{weight}{style}{stretch}>"
         + escape(sanitize_text(el.text))
         + "</text>"
     )
