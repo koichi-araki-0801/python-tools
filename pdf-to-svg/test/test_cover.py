@@ -156,3 +156,30 @@ def test_luma_matches_grayscale():
     上書き矩形の背景色から求める文字色の白黒判定がグレースケール書き出しと食い違う。"""
     for rgb in [(0, 0, 0), (255, 255, 255), (10, 20, 30), (200, 220, 240), (128, 64, 32), (1, 254, 77)]:
         assert cover._luma(*rgb) == grayscale._luma(*rgb)
+
+
+def _rgba(w: int, h: int, color, alpha_box=None) -> Image.Image:
+    """`alpha_box` (x0, y0, x1, y1) の内側だけ不透明、外は完全透明の RGBA 画像。"""
+    im = Image.new("RGBA", (w, h), color + (0,))
+    if alpha_box is not None:
+        x0, y0, x1, y1 = alpha_box
+        for x in range(x0, x1):
+            for y in range(y0, y1):
+                im.putpixel((x, y), color + (255,))
+    return im
+
+
+def test_transparent_pixels_composite_onto_white():
+    """透明画素は格納 RGB ではなく白として数える (合成せずに捨てると黒い当て板になる)。"""
+    im = cover.decode_image(_png(_rgba(8, 8, (0, 0, 0), alpha_box=(0, 0, 2, 2))), "png")
+    assert im is not None and im.mode == "RGB"
+    assert im.getpixel((7, 7)) == (255, 255, 255)   # 透明部分 → 白
+    assert im.getpixel((0, 0)) == (0, 0, 0)         # 不透明部分 → そのまま
+
+
+def test_mostly_transparent_image_samples_white_background():
+    """透明が多数派の画像では背景色が白になる (黒い矩形で隠さない)。"""
+    im = cover.decode_image(_png(_rgba(8, 8, (0, 0, 0), alpha_box=(0, 0, 2, 2))), "png")
+    c = cover.sample_colors(im, Rect(0, 0, 8, 8), Rect(0, 0, 8, 8))
+    assert c.background == "#ffffff"
+    assert c.fallback is False

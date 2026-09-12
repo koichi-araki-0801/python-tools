@@ -55,6 +55,15 @@ def decode_image(img_bytes: bytes, ext: str) -> Optional[Image.Image]:
         with Image.open(io.BytesIO(img_bytes)) as im:
             if im.width * im.height > MAX_COVER_IMAGE_PIXELS:
                 return None
+            if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
+                # alpha は捨てずに白へ合成する。`convert("RGB")` は合成せず捨てるので、完全に
+                # 透明な画素が格納 RGB (RGBA PNG では黒が多い) のまま最頻色を支配し、隠すはずの
+                # 矩形が黒い帯になる。白を敷くのは、採色経路が既に置いている「画像の下は紙」と
+                # 同じ前提である。
+                rgba = im.convert("RGBA")
+                canvas = Image.new("RGB", rgba.size, (255, 255, 255))
+                canvas.paste(rgba, mask=rgba.split()[3])
+                return canvas
             return im.convert("RGB")
     except Exception:  # noqa: BLE001 - 壊れた画像は採色を諦めるだけ
         return None

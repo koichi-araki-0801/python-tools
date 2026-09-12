@@ -112,10 +112,6 @@ def test_grayscale_cover_matches_the_grayscaled_image(ocr_layer_pdf, tmp_path):
     採色を元のカラー画像から行うと、矩形は輝度変換だけ・画像は `tone_curve` も掛かるため、
     矩形だけが暗い当て板になる。
     """
-    import io
-
-    from PIL import Image
-
     from export.grayscale import to_gray_image
 
     pg = load_document(str(ocr_layer_pdf)).pages[0]
