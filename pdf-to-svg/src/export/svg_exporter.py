@@ -210,7 +210,7 @@ def page_to_svg(
             lines.append(_image_tag(b.rect, data, ext))
 
     text_els: List[TextElement] = []
-    sampler = _cover_sampler(page)
+    sampler = _cover_sampler(page, image_fn)
     for el in page.live_elements():
         if not _intersects_export(el.bbox, select):
             continue
@@ -226,7 +226,7 @@ def page_to_svg(
                 colors = sampler(el)
                 if colors.fallback and report is not None:
                     report.cover_fallback += 1
-                svg = _cover_svg(el, colors, color_fn)
+                svg = _cover_svg(el, colors)
                 emits_text = bool(el.text)
         else:
             svg = _element_to_svg(el, color_fn, image_fn)
@@ -276,9 +276,13 @@ def _intersects_export(bbox: Rect, export: Rect) -> bool:
     return bbox.intersects(export)
 
 
-def _cover_svg(el: TextElement, colors: cover.CoverColors, color_fn: ColorFn) -> str:
+def _cover_svg(el: TextElement, colors: cover.CoverColors) -> str:
     """不可視・置換済みの文字: 背景色の矩形で元の字面を隠し、その上に置換語を描く。
-    `<g>` で包むのは `_with_data_el` が 1 要素 1 開きタグを前提にするため。"""
+
+    色は `_cover_sampler` が**書き出しに乗る画像**から採った値なので、ここで
+    `color_fn` を通さない (通すと灰色をもう一度灰色化することになり、周囲とずれる)。
+    `<g>` で包むのは `_with_data_el` が 1 要素 1 開きタグを前提にするためである。
+    """
     rect = (
         "<rect "
         + _attr("x", _fmt(el.bbox.x))
@@ -289,16 +293,22 @@ def _cover_svg(el: TextElement, colors: cover.CoverColors, color_fn: ColorFn) ->
         + " "
         + _attr("height", _fmt(el.bbox.h))
         + " "
-        + _attr("fill", color_fn(colors.background))
+        + _attr("fill", sanitize_color(colors.background))
         + "/>"
     )
-    text = _text_to_svg(el, color_fn, fill=colors.foreground, edited=True) if el.text else ""
+    text = (
+        _text_to_svg(el, sanitize_color, fill=colors.foreground, edited=True) if el.text else ""
+    )
     return "<g>" + rect + text + "</g>"
 
 
-def _cover_sampler(page: Page) -> Callable[[TextElement], cover.CoverColors]:
+def _cover_sampler(page: Page, image_fn: ImageFn) -> Callable[[TextElement], cover.CoverColors]:
     """要素の bbox の下にある画像 (z 最大の `ImageElement` → スキャン背景の順) から採色する。
-    画像のデコードは 1 回の書き出しの中で画像ごと 1 度 (要素 id をキーにした辞書)。"""
+
+    採る前に画像を `image_fn` へ通すのは、矩形の色を**書き出しに乗る画像**から採るためである
+    (グレー書き出しで元のカラー画像から採ると、矩形は輝度変換だけ・画像は `tone_curve` も
+    掛かるため、矩形だけが暗い当て板になる)。デコードは 1 回の書き出しの中で画像ごと 1 度。
+    """
     images = sorted(
         (e for e in page.live_elements() if isinstance(e, ImageElement)), key=lambda e: -e.z
     )
@@ -306,7 +316,7 @@ def _cover_sampler(page: Page) -> Callable[[TextElement], cover.CoverColors]:
 
     def image_for(key: int, data: bytes, ext: str):
         if key not in decoded:
-            decoded[key] = cover.decode_image(data, ext)
+            decoded[key] = cover.decode_image(*image_fn(data, ext))
         return decoded[key]
 
     def sample(el: TextElement) -> cover.CoverColors:

@@ -106,6 +106,40 @@ def test_grayscale_converts_cover_colors(ocr_layer_pdf, tmp_path):
     assert not re.search(r'="#(?!([0-9a-f]{2})\1\1")[0-9a-f]{6}"', line)  # 有彩色が残らない
 
 
+def test_grayscale_cover_matches_the_grayscaled_image(ocr_layer_pdf, tmp_path):
+    """グレー書き出しでは、矩形の灰色は「グレー化した画像」から採った色と一致する。
+
+    採色を元のカラー画像から行うと、矩形は輝度変換だけ・画像は `tone_curve` も掛かるため、
+    矩形だけが暗い当て板になる。
+    """
+    import io
+
+    from PIL import Image
+
+    from export.grayscale import to_gray_image
+
+    pg = load_document(str(ocr_layer_pdf)).pages[0]
+    _replace(pg, tmp_path, "Header Text", "見出し")
+    el = _texts(pg)["見出し"]
+    img = next(e for e in pg.live_elements() if e.kind == "image")
+
+    # 期待値: 書き出しに乗るのと同じ灰色画像から、同じ領域を採色した色
+    gray_bytes, gray_ext = to_gray_image(img.img_bytes, img.ext)
+    expected = cover.sample_colors(cover.decode_image(gray_bytes, gray_ext), img.rect, el.bbox)
+
+    line = _line_with(page_to_svg(pg, grayscale=True), "見出し")
+    assert f'fill="{expected.background}"' in line.split("<text")[0]
+    assert f'fill="{expected.foreground}"' in line.split("<text")[1]
+
+
+def test_color_cover_is_unchanged_by_the_grayscale_fix(ocr_layer_pdf, tmp_path):
+    """カラー書き出しの採色は従来どおり元画像から採る (帯色 `#c8dcf0`)。"""
+    pg = load_document(str(ocr_layer_pdf)).pages[0]
+    _replace(pg, tmp_path, "Header Text", "見出し")
+    line = _line_with(page_to_svg(pg), "見出し")
+    assert 'fill="#c8dcf0"' in line.split("<text")[0]
+
+
 def test_cover_fallback_is_counted(ocr_layer_pdf, tmp_path, monkeypatch):
     pg = load_document(str(ocr_layer_pdf)).pages[0]
     _replace(pg, tmp_path, "Header Text", "見出し")
