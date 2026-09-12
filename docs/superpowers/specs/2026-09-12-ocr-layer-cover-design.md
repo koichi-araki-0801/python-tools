@@ -66,17 +66,16 @@ OCR 結果の文字が不可視(PDF の文字描画モード 3)で重ねてあ�
 16. 手動の上書きはモデルに「不可視かつ置換済み扱いの `TextElement`」として持つ。矩形の
     採色・描画は自動置換と同じ exporter の経路を使い、追加・削除・Undo は枠線
     (`addBorder`)と同じ仕組みに乗せる。
-17. 置いた手動の上書きは、角ハンドルで大きさを、本体のドラッグで位置を後から変えられる
-    (Undo 可)。グレーモードの図矩形(`figure.js`)のハンドル操作を流用する。
+17. 置いた手動の上書きは、角ハンドルで大きさを、本体のドラッグで位置を、入力欄で置換語を
+    後から変えられる(いずれも Undo 可)。伸縮・移動はグレーモードの図矩形(`figure.js`)の
+    ハンドル操作を流用する。
 
 ## 非目標
 
 - アウトライン化された文字の自動復元、スキャンページ(`is_scanned`)への OCR。
-- 手動の上書きの文字の後からの編集(消して置き直す)。位置と大きさは後から変えられる
-  (6 節)。
 - 明朝/ゴシックの利用者選択、矩形色・文字色の利用者指定。
 - 画像の回転・傾き(`ImageElement.rect` への線形写像だけを扱う)と `clip_d` の考慮。
-- 矩形合成の ON/OFF オプション、RPC 引数の追加。
+- 自動の矩形合成を切る ON/OFF オプション(`pageSvg` / `exportSvg` への切替引数)。
 
 ## 設計
 
@@ -251,22 +250,29 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 `mode === "cover"` の分岐を足すだけにする。置換語は入力欄に残し、続けて複数箇所へ同じ語を
 置けるようにする。ブラウザの `prompt()` は使わない(モーダルは拡張のイベントを止める)。
 
-**移動と伸縮**: 置いた上書きは、手順 3 で「上書き」ツールが選ばれている間、
+**移動・伸縮・置換語の変更**: 置いた上書きは、手順 3 で「上書き」ツールが選ばれている間、
 `figure.js` の採用矩形(`.fig-cand.sel`)と同じ HTML オーバーレイ(角ハンドル 4 つ +
 本体)で表示する。角ハンドルのドラッグで伸縮(掴んだ角を動かし反対の角は固定、
 `MIN_SIZE_PT` 未満にしない、ページ内へクランプ)、本体のドラッグで移動(大きさを保ち
-ページ内へクランプ)。mouseup で RPC `moveCover {fileIndex, pageInFile, elId, rect}` を呼び、
+ページ内へクランプ)。mouseup で RPC `updateCover {fileIndex, pageInFile, elId, rect}` を呼び、
 `afterEdit` で描き直す。ドラッグ中はオーバーレイだけを動かし、サーバへは mouseup の
 1 回だけ送る。
+
+置換語の変更は、オーバーレイをクリックして選ぶと `cover-opts` の入力欄にその上書きの語が
+入り、Enter または欄からフォーカスが外れたとき(`change` イベント)に
+`updateCover {fileIndex, pageInFile, elId, text}` を呼ぶ。語が変わらなければ呼ばない。
+どの上書きも選んでいないときは、入力欄の語は次に置く上書きの語になる(既存の動作)。
 
 - オーバーレイの元データは RPC `coverList {fileIndex, pageInFile}` が返す
   `[{elId, rect, text}]`(そのページの `manual_cover` かつ未削除の要素)。表示 SVG から
   座標を拾わず、モデルを正にする。
-- `moveCover` は `rect` の検査を `addBorder` と同じにし、`elId` が `manual_cover` の
-  `TextElement` でなければ拒否する。`MoveCoverCommand`(新規)が `bbox` / `origin_x` /
-  `origin_y` / `font_size`(新しい高さ × 0.7 で計算し直す)の新旧を控え、`redo` / `undo` で
-  書き戻す。矩形色・文字色は書き出し時に新しい `bbox` から採り直されるので、コマンドは
-  色を持たない。
+- `updateCover` は `rect` と `text` のどちらか一方以上を取る。`rect` の検査は `addBorder` と
+  同じ、`text` の検査は `addCover` と同じ(`sanitize_text`、200 文字)。`elId` が
+  `manual_cover` の `TextElement` でなければ拒否する。`UpdateCoverCommand`(新規)が
+  `bbox` / `origin_x` / `origin_y` / `font_size`(`rect` を変えたときは新しい高さ × 0.7 で
+  計算し直す)/ `text` / `original_text` / `dict_match`(`target` を新しい語にする)の新旧を
+  控え、`redo` / `undo` で書き戻す。矩形色・文字色は書き出し時に新しい `bbox` から採り直され
+  るので、コマンドは色を持たない。
 - 「上書き」ツール以外(選択ツール等)のときはオーバーレイを出さず、要素は `<g data-el>`
   として通常のクリック選択・削除の対象になる。
 
@@ -274,10 +280,11 @@ def decode_image(img_bytes: bytes, ext: str) -> "DecodedImage | None"
 `pageSvg` に `<g data-el><rect><text>` が出ること、`text` 空なら `<rect>` だけ、`undo` で消える
 こと、スキャンページで背景 PNG から採色すること、ベクターページ(画像無し)で白になり
 `coverFallback` に数えられること、`planPage` に出ないこと、`removedList` のラベル。
-`moveCover` で `bbox` / `origin` / `font_size` が変わり `undo` で戻ること、`manual_cover`
-でない要素・ページ外の `rect` を拒否すること、`coverList` が削除済みを除くこと。
-E2E で「上書き」ツールのドラッグ → 入力 → 描画までを 1 本、角ハンドルの伸縮 → 描き直しを
-1 本。
+`updateCover` で `rect` を渡すと `bbox` / `origin` / `font_size` が、`text` を渡すと `text` /
+`dict_match.target` が変わり、`undo` でどちらも戻ること、`manual_cover` でない要素・ページ外の
+`rect`・`rect` も `text` も無い呼び出しを拒否すること、`coverList` が削除済みを除くこと。
+E2E で「上書き」ツールのドラッグ → 入力 → 描画までを 1 本、角ハンドルの伸縮と置換語の変更 →
+描き直しを 1 本。
 
 ### 7. 文書
 
@@ -285,8 +292,8 @@ E2E で「上書き」ツールのドラッグ → 入力 → 描画までを 1 
   セキュリティの資源上限に `MAX_COVER_IMAGE_PIXELS` を追記。
 - `docs/pdf-to-svg/src/設計書.md`: 3.1 節(`invisible` / `manual_cover`)、4.1 節
   (texttrace の `type`)、5.1 節(不可視文字の 3 分岐と `cover.py`)、7.2 節(`ocrPages` /
-  `coverFallback` / `addCover` / `coverList` / `moveCover`)、7.3 節(`AddElementCommand` と
-  `MoveCoverCommand`)、8 節(トースト・「上書き」ツール・ハンドル操作)。
+  `coverFallback` / `addCover` / `coverList` / `updateCover`)、7.3 節(`AddElementCommand` と
+  `UpdateCoverCommand`)、8 節(トースト・「上書き」ツール・ハンドル操作)。
 - `docs/pdf-to-svg/src/操作手順書.md`(利用者向け): 手順 3 の「上書き」ツールの使い方。
 - `docs/pdf-to-svg/src/PdfToSvg_仕様一覧.md`: 出力・テストの行を追加。
 - `docs/_build/build_all.py` で HTML を再生成し、リリースの配布物を差し替える。
