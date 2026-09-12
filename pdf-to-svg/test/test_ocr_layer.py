@@ -124,6 +124,8 @@ def test_grayscale_cover_matches_the_grayscaled_image(ocr_layer_pdf, tmp_path):
     expected = cover.sample_colors(cover.decode_image(gray_bytes, gray_ext), img.rect, el.bbox)
 
     line = _line_with(page_to_svg(pg, grayscale=True), "見出し")
+    # トーンカーブ定数の変更時は自動的に値が変わり、修正差分として diff に現れるようにする。
+    assert expected.background == "#dfdfdf"
     assert f'fill="{expected.background}"' in line.split("<text")[0]
     assert f'fill="{expected.foreground}"' in line.split("<text")[1]
 

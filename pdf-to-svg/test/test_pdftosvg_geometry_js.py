@@ -1,7 +1,7 @@
 # =============================================================================
 # test_pdftosvg_geometry_js.py — resources/web/geometry.js の単体移植
 # =============================================================================
-# 旧 geometry.test.js (vitest) の it 7 件と 1:1。期待値は旧テストから逐語で写す。
+# 旧 vitest ファイルからの移植テストと、geometry.js へ統合された矩形ヘルパの単体テスト。
 import pytest
 
 from .pdftosvg_js_harness import js
