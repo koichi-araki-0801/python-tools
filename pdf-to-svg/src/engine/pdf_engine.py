@@ -202,7 +202,6 @@ def _extract_page(
     # z = seqno * _Z_TIER + 連番 (連番は同一 seqno 内・全体の安定順序用)。
     traces = page.get_texttrace()
     text_seqnos = [(s["seqno"], Rect.from_xyxy(*s["bbox"])) for s in traces]
-    invisible_seqnos = _invisible_seqnos(traces)
     image_seqnos = [
         (i, Rect.from_xyxy(*r))
         for i, (kind, r) in enumerate(page.get_bboxlog())
@@ -215,6 +214,9 @@ def _extract_page(
     # 開けなくなる)。索引は結果を変えず、当たらない候補を見ないだけである。
     text_index = _SeqnoIndex(text_seqnos)
     image_index = _SeqnoIndex(image_seqnos)
+    # 索引が照合を諦めたときは `match` が常に既定値を返し、不可視の判定は一度も使われない。
+    # 集合を作る作業ごと省く (上限に当たったら諦める、という索引側の規律に揃える)。
+    invisible_seqnos = set() if text_index.degraded else _invisible_seqnos(traces)
 
     sink = _PageElements(p, elements)
     seq = 0
@@ -416,7 +418,10 @@ def _render_background(
 
 def _text_element(span: dict, z: int, invisible: bool = False) -> Optional[TextElement]:
     """get_text("dict") の span 1 個を TextElement へ変換する。空白のみは None。
-    フォントは同梱 2 書体へマッピングし、ウェイトは名前優先 + bold フラグで補正。"""
+    フォントは同梱 2 書体へマッピングし、ウェイトは名前優先 + bold フラグで補正。
+
+    ``invisible`` は文字を描かない描画モード (3 / 7) で出力された span か。
+    """
     text = sanitize_text(span.get("text", ""))
     if text == "" or text.isspace():
         return None

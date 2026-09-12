@@ -16,8 +16,9 @@ from xml.sax.saxutils import escape, quoteattr
 from export import cover, font_embed
 from export.grayscale import to_gray_color, to_gray_image
 from model import fonts
-from model.document import Page
+from model.document import Page, RasterBackground
 from model.elements import (
+    Element,
     ImageElement,
     LineElement,
     PathElement,
@@ -178,13 +179,16 @@ def page_to_svg(
         )
         lines.append("<g " + _attr("clip-path", "url(#" + clip_id + ")") + ">")
 
+    # 要素列はこの関数の中で変わらないので 1 度だけ確定させる (`live_elements` は呼ぶたびに
+    # 絞り込みと並べ替えをやり直す)。
+    live = page.live_elements()
     # 画像のクリップ形状はここで <defs> へまとめ、個々の <image> は url(#...) で参照する。
     # 要素タグを単一タグに保つための分離である (`_with_data_el` は開きタグの最初の空白へ
     # 属性を差し込むので、要素の直列化が <defs> で始まると data-el が <defs> に付いてしまう)。
     # 収集は描画と同じ交差判定で行う (書き出し領域の外にある画像の定義を残さない)。
     clip_defs: List[Tuple[str, str]] = []
     seen_clip_ids = set()
-    for el in page.live_elements():
+    for el in live:
         if not isinstance(el, ImageElement) or not el.clip_d:
             continue
         if not _intersects_export(el.bbox, select):
@@ -210,8 +214,8 @@ def page_to_svg(
             lines.append(_image_tag(b.rect, data, ext))
 
     text_els: List[TextElement] = []
-    sampler = _cover_sampler(page, image_fn)
-    for el in page.live_elements():
+    sampler = _cover_sampler(live, image_fn, page.background)
+    for el in live:
         if not _intersects_export(el.bbox, select):
             continue
         if isinstance(el, TextElement) and el.invisible:
@@ -302,16 +306,16 @@ def _cover_svg(el: TextElement, colors: cover.CoverColors) -> str:
     return "<g>" + rect + text + "</g>"
 
 
-def _cover_sampler(page: Page, image_fn: ImageFn) -> Callable[[TextElement], cover.CoverColors]:
+def _cover_sampler(
+    live: List[Element], image_fn: ImageFn, background: Optional[RasterBackground]
+) -> Callable[[TextElement], cover.CoverColors]:
     """要素の bbox の下にある画像 (z 最大の `ImageElement` → スキャン背景の順) から採色する。
 
     採る前に画像を `image_fn` へ通すのは、矩形の色を**書き出しに乗る画像**から採るためである
     (グレー書き出しで元のカラー画像から採ると、矩形は輝度変換だけ・画像は `tone_curve` も
     掛かるため、矩形だけが暗い当て板になる)。デコードは 1 回の書き出しの中で画像ごと 1 度。
     """
-    images = sorted(
-        (e for e in page.live_elements() if isinstance(e, ImageElement)), key=lambda e: -e.z
-    )
+    images = sorted((e for e in live if isinstance(e, ImageElement)), key=lambda e: -e.z)
     decoded: Dict[int, Optional[object]] = {}  # 値は Pillow の Image (型は cover.py に閉じる)
 
     def image_for(key: int, data: bytes, ext: str):
@@ -326,7 +330,7 @@ def _cover_sampler(page: Page, image_fn: ImageFn) -> Callable[[TextElement], cov
             r = img.rect
             if r.x <= cx <= r.x1 and r.y <= cy <= r.y1:
                 return cover.sample_colors(image_for(img.id, img.img_bytes, img.ext), r, el.bbox)
-        bg = page.background
+        bg = background
         if bg is not None:
             return cover.sample_colors(image_for(-1, bg.png_bytes, "png"), bg.rect, el.bbox)
         return cover.sample_colors(None, el.bbox, el.bbox)
