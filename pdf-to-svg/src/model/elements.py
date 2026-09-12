@@ -157,6 +157,13 @@ class TextElement(Element):
     wrap_align: Optional[str] = None
     # 置換が当たっている間だけ持つ復元情報 (箇所単位の「戻す」用)。None = 未置換。
     dict_revert: Optional[DictRevertInfo] = None
+    # PDF の文字描画モードが「描かない」(3) / 「クリップのみ」(7) の文字。スキャン画像の上に
+    # OCR 結果を透明で重ねた「検索可能 PDF」の文字層がこれで、字面は画像の画素として存在する。
+    # 書き出しは未置換なら描かず、置換済みなら背景色の矩形で隠してから描く (`svg_exporter`)。
+    invisible: bool = False
+    # 利用者が手順 3 の「上書き」ツールで置いた要素。`invisible=True` + `dict_match` 付きで
+    # 自動置換と同じ描画経路を通るが、辞書置換ではないので確認一覧と「戻す」の対象にしない。
+    manual_cover: bool = False
 
     def __post_init__(self) -> None:
         if not self.original_text:

@@ -70,6 +70,21 @@ _SEQNO_MAX_CANDIDATES = 50_000
 # 1 クエリで見る候補数の上限。同一バンドへ候補を敷き詰める細工に対する最後の歯止め。
 _SEQNO_MAX_SCAN = 1_024
 
+# 文字を描かない PDF 描画モード (3 = 不可視、7 = クリップへ足すだけ)。`get_text("dict")` の
+# span はモードを持たないので、`get_texttrace()` の `type` を seqno 経由で写す。
+_INVISIBLE_RENDER_MODES = frozenset({3, 7})
+
+
+def _invisible_seqnos(traces: List[dict]) -> "set[int]":
+    """すべてのエントリが不可視モードである seqno の集合。可視と混在する seqno は含めない
+    (誤って本物の文字を消さない側へ倒す)。"""
+    visible: "set[int]" = set()
+    invisible: "set[int]" = set()
+    for t in traces:
+        target = invisible if t.get("type") in _INVISIBLE_RENDER_MODES else visible
+        target.add(t["seqno"])
+    return invisible - visible
+
 
 def _fmt(v: float) -> str:
     return f"{v:.3f}".rstrip("0").rstrip(".")
@@ -185,9 +200,9 @@ def _extract_page(
     # get_text は読み順・get_drawings はパス順で返すため、抽出順のままだと
     # 「帯の塗り矩形が先・白文字が後」の前後関係が逆転し文字が矩形に隠れる。
     # z = seqno * _Z_TIER + 連番 (連番は同一 seqno 内・全体の安定順序用)。
-    text_seqnos = [
-        (s["seqno"], Rect.from_xyxy(*s["bbox"])) for s in page.get_texttrace()
-    ]
+    traces = page.get_texttrace()
+    text_seqnos = [(s["seqno"], Rect.from_xyxy(*s["bbox"])) for s in traces]
+    invisible_seqnos = _invisible_seqnos(traces)
     image_seqnos = [
         (i, Rect.from_xyxy(*r))
         for i, (kind, r) in enumerate(page.get_bboxlog())
@@ -226,8 +241,14 @@ def _extract_page(
                     break
                 for span in line.get("spans", []):
                     bbox = Rect.from_xyxy(*span["bbox"])
-                    seqno = text_index.match(bbox, prev_seqno)
-                    el = _text_element(span, seqno * _Z_TIER + seq)
+                    # 照合失敗は `None`。z は従来どおり直前の seqno へ倒すが、不可視の判定は
+                    # 照合できた span にだけ与える (失敗分を不可視にすると本物の文字が消える)。
+                    matched = text_index.match(bbox, None)
+                    seqno = matched if matched is not None else prev_seqno
+                    el = _text_element(
+                        span, seqno * _Z_TIER + seq,
+                        invisible=(matched is not None and matched in invisible_seqnos),
+                    )
                     if el is not None:
                         prev_seqno = seqno
                         if not sink.add(el):
@@ -259,8 +280,8 @@ def _overlap_area(a: Rect, b: Rect) -> float:
 
 
 def _best_seqno(
-    bbox: Rect, entries: "Iterator[Tuple[int, int, Rect]]", default: int, limit: int
-) -> int:
+    bbox: Rect, entries: "Iterator[Tuple[int, int, Rect]]", default: Optional[int], limit: int
+) -> Optional[int]:
     """`(元の並び順, seqno, Rect)` の列から IoU 最大の seqno を選ぶ (走査上限 `limit`)。
 
     重なり「面積」最大で照合すると、軸ラベル全体を 1 度の text-show で描いた
@@ -349,7 +370,7 @@ class _SeqnoIndex:
                 self.bands.setdefault(band, []).append(entry)
         self.degraded = len(self.tall) > _SEQNO_MAX_TALL
 
-    def match(self, bbox: Rect, default: int) -> int:
+    def match(self, bbox: Rect, default: Optional[int]) -> Optional[int]:
         if self.degraded:
             return default
         return _best_seqno(bbox, self._nearby(bbox), default, _SEQNO_MAX_SCAN)
@@ -393,7 +414,7 @@ def _render_background(
     return RasterBackground(png_bytes=png, rect=Rect(0, 0, r.width, r.height))
 
 
-def _text_element(span: dict, z: int) -> Optional[TextElement]:
+def _text_element(span: dict, z: int, invisible: bool = False) -> Optional[TextElement]:
     """get_text("dict") の span 1 個を TextElement へ変換する。空白のみは None。
     フォントは同梱 2 書体へマッピングし、ウェイトは名前優先 + bold フラグで補正。"""
     text = sanitize_text(span.get("text", ""))
@@ -420,6 +441,7 @@ def _text_element(span: dict, z: int) -> Optional[TextElement]:
         color=int_to_hex(span.get("color", 0)),
         origin_x=origin[0],
         origin_y=origin[1],
+        invisible=invisible,
     )
 
 

@@ -108,6 +108,32 @@ def clipped_image_pdf() -> Path:
     return path
 
 
+@pytest.fixture(scope="session")
+def ocr_layer_pdf() -> Path:
+    """全面画像 + 不可視 (render_mode=3) の OCR 文字層を持つ「検索可能 PDF」風の PDF。
+
+    画像は上 40pt が帯色 (200, 220, 240)・下が白。不可視文字は帯の上と白地の上に 1 行ずつ、
+    可視文字を 1 行置く (不可視判定が可視文字を巻き込まないことの対照)。
+    """
+    FIXTURES.mkdir(exist_ok=True)
+    path = FIXTURES / "ocr_layer_sample.pdf"
+    img = Image.new("RGB", (600, 400), (255, 255, 255))
+    for y in range(0, 80):
+        for x in range(600):
+            img.putpixel((x, y), (200, 220, 240))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=200)
+    page.insert_image(page.rect, stream=buf.getvalue())
+    page.insert_text((20, 30), "Header Text", fontsize=12, render_mode=3)
+    page.insert_text((20, 120), "Body line one", fontsize=12, render_mode=3)
+    page.insert_text((20, 150), "visible text", fontsize=12, render_mode=0)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 # ── JS 単体・E2E 移植用ハーネス（設計書 §4.2。graph-editor 側フェーズ 3 がコピーして流用）──
 
 WEB_ROOT = os.path.join(os.path.dirname(__file__), "..", "resources", "web")
