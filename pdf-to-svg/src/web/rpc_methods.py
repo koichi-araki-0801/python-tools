@@ -25,7 +25,7 @@ from export.svg_exporter import ExportReport, page_to_svg
 from model import fonts
 from model.document import Document, Page
 from model.figure_detect import detect_stewardship_figure
-from model.elements import DictMatch, Rect, RectElement, TextElement, sanitize_color
+from model.elements import DictMatch, Rect, RectElement, TextElement, sanitize_color, sanitize_text
 
 _log = logging.getLogger("pdftosvg")
 from web.commands import (
@@ -34,6 +34,7 @@ from web.commands import (
     ReplaceTextCommand,
     RestoreCommand,
     RevertDictMatchCommand,
+    UpdateCoverCommand,
 )
 
 
@@ -151,28 +152,33 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
     }
 
 
-def _parse_clip(args: dict, pg: Page) -> Optional[Rect]:
-    """``clip`` 引数 ``{x, y, w, h}`` をページ座標の矩形にする。無ければ None。
+def _parse_rect_arg(args: dict, key: str, pg: Page) -> Optional[Rect]:
+    """``args[key]`` の ``{x, y, w, h}`` をページ座標の矩形にする。無ければ None。
 
     クライアントが送る値なので信用しない: 数値 4 つ・有限・非負・正の寸法・ページ内を
     要求し、外れたら ``ValueError`` (ディスパッチャが ``{ok:false, error}`` にする)。
     """
-    c = args.get("clip")
+    c = args.get(key)
     if c is None:
         return None
     if not isinstance(c, dict):
-        raise ValueError("clip must be an object {x, y, w, h}")
+        raise ValueError(f"{key} must be an object {{x, y, w, h}}")
     try:
         x, y, w, h = (float(c[k]) for k in ("x", "y", "w", "h"))
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("clip must have numeric x, y, w, h") from exc
+        raise ValueError(f"{key} must have numeric x, y, w, h") from exc
     if any(not math.isfinite(v) for v in (x, y, w, h)):
-        raise ValueError("clip must be finite")
+        raise ValueError(f"{key} must be finite")
     if w <= 0 or h <= 0 or x < 0 or y < 0:
-        raise ValueError("clip must be inside the page with positive size")
+        raise ValueError(f"{key} must be inside the page with positive size")
     if x + w > pg.width_pt + 0.5 or y + h > pg.height_pt + 0.5:
-        raise ValueError("clip must be inside the page")
+        raise ValueError(f"{key} must be inside the page")
     return Rect(x, y, w, h)
+
+
+def _parse_clip(args: dict, pg: Page) -> Optional[Rect]:
+    """``clip`` 引数をページ座標の矩形にする (`_parse_rect_arg` の別名)。"""
+    return _parse_rect_arg(args, "clip", pg)
 
 
 def rpc_figureCandidates(s: WebSession, args: dict) -> dict:
@@ -213,7 +219,8 @@ def rpc_planPage(s: WebSession, args: dict) -> dict:
     pending = {rep.element.id: rep for rep in dict_apply.plan_replacements(pg, s.store)}
     changes = []
     for el in pg.elements:
-        if not isinstance(el, TextElement) or el.deleted:
+        # 手動の上書きは辞書置換ではなく、戻すの対象でもない。
+        if not isinstance(el, TextElement) or el.deleted or el.manual_cover:
             continue
         loc = "ヘッダ" if el.is_header else "本文"
         if el.dict_match is not None:
@@ -267,7 +274,8 @@ def rpc_removedList(s: WebSession, args: dict) -> dict:
         label = _KIND_LABEL.get(el.kind, "要素")
         if isinstance(el, TextElement):
             snippet = el.text.strip()[:16]
-            label = f"文字「{snippet}」" if snippet else "文字"
+            kind_label = "上書き" if el.manual_cover else "文字"
+            label = f"{kind_label}「{snippet}」" if snippet else kind_label
         removed.append({"elId": el.id, "kind": el.kind, "label": label})
     return {"removed": removed}
 
@@ -476,6 +484,81 @@ def rpc_addBorder(s: WebSession, args: dict) -> dict:
     return {}
 
 
+# 手動の上書きの置換語の上限文字数 (外部由来の入力なので上限を置く)。
+MAX_COVER_TEXT_CHARS = 200
+
+
+def cover_font_size(h: float) -> float:
+    """上書き矩形の高さから文字サイズを決める (矩形の縦に収まる 0.7 倍。4〜200pt に丸める)。"""
+    return min(200.0, max(4.0, h * 0.7))
+
+
+def _cover_text(args: dict) -> str:
+    return sanitize_text(str(args.get("text") or "")).strip()[:MAX_COVER_TEXT_CHARS]
+
+
+def _manual_cover(pg: Page, el_id) -> TextElement:
+    try:
+        eid = int(el_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"elId must be an integer: {el_id!r}") from None
+    for e in pg.elements:
+        if e.id == eid and isinstance(e, TextElement) and e.manual_cover and not e.deleted:
+            return e
+    raise ValueError(f"elId {el_id!r} is not a manual cover on this page")
+
+
+def rpc_addCover(s: WebSession, args: dict) -> dict:
+    """ドラッグした矩形へ手動の上書き (背景色の矩形 + 置換語) を 1 つ置く (Undo 可)。
+
+    要素は「不可視かつ置換済み扱いの `TextElement`」で、描画は自動置換と同じ経路
+    (`svg_exporter._cover_svg`) を通る。辞書置換ではないので `dict_revert` は持たない。
+    """
+    pg = s.page(args["fileIndex"], args["pageInFile"])
+    rect = _parse_rect_arg(args, "rect", pg)
+    if rect is None:
+        raise ValueError("rect is required")
+    text = _cover_text(args)
+    mapped = fonts.map_font("sans-serif", text)  # フォント名は無いので文字種の既定へ倒す
+    z = max((e.z for e in pg.elements), default=0) + 1
+    el = TextElement(
+        bbox=rect, z=z, text=text, font_family=mapped.family, font_size=cover_font_size(rect.h),
+        weight=mapped.weight, italic=mapped.italic, origin_x=rect.x, origin_y=rect.y1,
+        invisible=True, manual_cover=True, dict_match=DictMatch(source="", target=text),
+    )
+    s.undo.push(AddElementCommand(pg, el))
+    return {"elId": el.id}
+
+
+def rpc_coverList(s: WebSession, args: dict) -> dict:
+    """ページ上の手動の上書き (未削除) を要素の並び順で返す。UI のオーバーレイの元データ
+    (表示 SVG から座標を拾わず、モデルを正にする)。"""
+    pg = s.page(args["fileIndex"], args["pageInFile"])
+    covers = [
+        {
+            "elId": e.id,
+            "rect": {"x": e.bbox.x, "y": e.bbox.y, "w": e.bbox.w, "h": e.bbox.h},
+            "text": e.text,
+        }
+        for e in pg.elements
+        if isinstance(e, TextElement) and e.manual_cover and not e.deleted
+    ]
+    return {"covers": covers}
+
+
+def rpc_updateCover(s: WebSession, args: dict) -> dict:
+    """手動の上書きの矩形 (`rect`) と置換語 (`text`) のどちらか以上を変える (Undo 可)。"""
+    pg = s.page(args["fileIndex"], args["pageInFile"])
+    el = _manual_cover(pg, args.get("elId"))
+    rect = _parse_rect_arg(args, "rect", pg)
+    text = _cover_text(args) if "text" in args else None
+    if rect is None and text is None:
+        raise ValueError("rect or text is required")
+    font_size = cover_font_size(rect.h) if rect is not None else None
+    s.undo.push(UpdateCoverCommand(el, rect, text, font_size))
+    return {}
+
+
 def rpc_undo(s: WebSession, _args: dict) -> dict:
     if s.undo.canUndo():
         s.undo.undo()
@@ -617,6 +700,9 @@ HANDLERS: Dict[str, Callable[[WebSession, dict], dict]] = {
     "deleteRegion": rpc_deleteRegion,
     "removeFile": rpc_removeFile,
     "addBorder": rpc_addBorder,
+    "addCover": rpc_addCover,
+    "coverList": rpc_coverList,
+    "updateCover": rpc_updateCover,
     "undo": rpc_undo,
     "redo": rpc_redo,
 }

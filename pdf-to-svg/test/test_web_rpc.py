@@ -501,3 +501,125 @@ def test_export_svg_name_and_clip(session):
 def test_bad_clip_is_rejected(session, clip):
     with pytest.raises(ValueError):
         rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0, "clip": clip})
+
+
+def _cover_args(**extra):
+    base = {"fileIndex": 0, "pageInFile": 0}
+    base.update(extra)
+    return base
+
+
+def test_add_cover_creates_invisible_replaced_text(session):
+    res = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="置換語")
+    )
+    pg = session.docs[0].pages[0]
+    el = next(e for e in pg.elements if e.id == res["elId"])
+    assert isinstance(el, TextElement)
+    assert el.invisible and el.manual_cover and not el.deleted
+    assert el.text == "置換語" and el.dict_match == DictMatch(source="", target="置換語")
+    assert el.bbox == Rect(10, 100, 80, 20)
+    assert (el.origin_x, el.origin_y) == (10, 120)
+    assert el.font_size == pytest.approx(14.0)  # 高さ 20 × 0.7
+    assert el.z == max(e.z for e in pg.elements)
+    assert el.font_family == "BIZ UDPGothic"  # 和文 → 同梱ゴシック
+    shown = rpc_methods.dispatch(session, "pageSvg", _cover_args())
+    assert f'<g data-el="{el.id}"><rect ' in shown["svg"]
+    assert "置換語" in shown["svg"]
+
+
+def test_add_cover_with_empty_text_draws_rect_only(session):
+    res = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="")
+    )
+    shown = rpc_methods.dispatch(session, "pageSvg", _cover_args())
+    line = next(ln for ln in shown["svg"].splitlines() if f'data-el="{res["elId"]}"' in ln)
+    assert "<text" not in line and line.endswith("/></g>")
+
+
+def test_add_cover_sanitizes_and_caps_text(session):
+    res = rpc_methods.dispatch(
+        session, "addCover",
+        _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="a\x00b" + "x" * 300),
+    )
+    el = next(e for e in session.docs[0].pages[0].elements if e.id == res["elId"])
+    assert "\x00" not in el.text and len(el.text) == rpc_methods.MAX_COVER_TEXT_CHARS
+
+
+def test_add_cover_rejects_rect_outside_page(session):
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(
+            session, "addCover", _cover_args(rect={"x": 150, "y": 0, "w": 100, "h": 10}, text="x")
+        )
+
+
+def test_add_cover_is_undoable(session):
+    res = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="x")
+    )
+    rpc_methods.dispatch(session, "undo", {})
+    el = next(e for e in session.docs[0].pages[0].elements if e.id == res["elId"])
+    assert el.deleted
+    assert rpc_methods.dispatch(session, "coverList", _cover_args())["covers"] == []
+
+
+def test_cover_list_returns_live_manual_covers_only(session):
+    a = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    b = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 130, "w": 80, "h": 20}, text="B")
+    )["elId"]
+    rpc_methods.dispatch(session, "applyDelete", _cover_args(elIds=[b]))
+    covers = rpc_methods.dispatch(session, "coverList", _cover_args())["covers"]
+    assert covers == [{"elId": a, "rect": {"x": 10.0, "y": 100.0, "w": 80.0, "h": 20.0}, "text": "A"}]
+
+
+def test_update_cover_rect_and_text_are_undoable(session):
+    el_id = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    el = next(e for e in session.docs[0].pages[0].elements if e.id == el_id)
+    rpc_methods.dispatch(
+        session, "updateCover", _cover_args(elId=el_id, rect={"x": 20, "y": 110, "w": 60, "h": 30})
+    )
+    assert el.bbox == Rect(20, 110, 60, 30)
+    assert (el.origin_x, el.origin_y) == (20, 140)
+    assert el.font_size == pytest.approx(21.0)
+    assert el.text == "A"
+    rpc_methods.dispatch(session, "updateCover", _cover_args(elId=el_id, text="B"))
+    assert el.text == "B" and el.original_text == "B"
+    assert el.dict_match == DictMatch(source="", target="B")
+    assert el.bbox == Rect(20, 110, 60, 30)
+    rpc_methods.dispatch(session, "undo", {})
+    assert el.text == "A" and el.dict_match.target == "A"
+    rpc_methods.dispatch(session, "undo", {})
+    assert el.bbox == Rect(10, 100, 80, 20) and el.font_size == pytest.approx(14.0)
+    assert (el.origin_x, el.origin_y) == (10, 120)
+
+
+def test_update_cover_rejects_non_cover_and_empty_update(session):
+    pg = session.docs[0].pages[0]
+    body = next(e for e in pg.elements if isinstance(e, TextElement) and e.text == "A-1042")
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateCover", _cover_args(elId=body.id, text="x"))
+    el_id = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateCover", _cover_args(elId=el_id))
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(
+            session, "updateCover", _cover_args(elId=el_id, rect={"x": -1, "y": 0, "w": 10, "h": 10})
+        )
+
+
+def test_manual_cover_is_not_a_dictionary_change(session):
+    el_id = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    changes = rpc_methods.dispatch(session, "planPage", _cover_args())["changes"]
+    assert all(c["elId"] != el_id for c in changes)
+    rpc_methods.dispatch(session, "applyDelete", _cover_args(elIds=[el_id]))
+    removed = rpc_methods.dispatch(session, "removedList", _cover_args())["removed"]
+    assert {"elId": el_id, "kind": "text", "label": "上書き「A」"} in removed

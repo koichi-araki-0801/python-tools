@@ -163,3 +163,45 @@ class RevertDictMatchCommand:
         self.el.dict_revert = self.info
         for ex, was_deleted in zip(self.extras, self.extra_was_deleted):
             ex.deleted = was_deleted
+
+
+class UpdateCoverCommand:
+    """手動の上書き (`TextElement.manual_cover`) の位置・大きさ・置換語を変える。
+
+    ``rect`` を渡すと bbox とベースライン原点 (左下) を据え直し、文字サイズを新しい高さから
+    計算し直す。``text`` を渡すと置換語と `dict_match.target` を変える。矩形色・文字色は
+    書き出し時に新しい bbox から採り直されるので、ここでは持たない。
+    """
+
+    def __init__(self, el: TextElement, rect: Optional[Rect], text: Optional[str], font_size: Optional[float]):
+        self.label = "上書きの変更"
+        self.el = el
+        self.new_bbox = rect
+        self.new_font_size = font_size
+        self.new_text = text
+        self.old_bbox = el.bbox
+        self.old_origin = (el.origin_x, el.origin_y)
+        self.old_font_size = el.font_size
+        self.old_text = el.text
+        self.old_original_text = el.original_text
+        self.old_match = el.dict_match
+
+    def redo(self) -> None:
+        if self.new_bbox is not None:
+            self.el.bbox = self.new_bbox
+            self.el.origin_x = self.new_bbox.x
+            self.el.origin_y = self.new_bbox.y1
+            if self.new_font_size is not None:
+                self.el.font_size = self.new_font_size
+        if self.new_text is not None:
+            self.el.text = self.new_text
+            self.el.original_text = self.new_text
+            self.el.dict_match = DictMatch(source="", target=self.new_text)
+
+    def undo(self) -> None:
+        self.el.bbox = self.old_bbox
+        self.el.origin_x, self.el.origin_y = self.old_origin
+        self.el.font_size = self.old_font_size
+        self.el.text = self.old_text
+        self.el.original_text = self.old_original_text
+        self.el.dict_match = self.old_match
