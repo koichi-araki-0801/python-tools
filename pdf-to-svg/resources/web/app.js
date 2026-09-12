@@ -17,6 +17,7 @@ import {
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
 import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
+import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText } from "./cover.js";
 
 (function () {
   "use strict";
@@ -496,8 +497,9 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     var host = document.getElementById("trim-stage");
     host.addEventListener("mousedown", function (e) {
       if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
-      if (e.target.closest(".cover-box")) return; // 上書きのオーバーレイ上の操作は cover.js (Task 7) が扱う
+      if (e.target.closest(".cover-box")) return; // 上書きのオーバーレイ上の移動・伸縮・選択は `cover.js` が扱う
       if (!host.querySelector("svg")) return;
+      if (S.tool === "cover") S.coverSel = null; // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
       var rubber = document.createElement("div");
       rubber.className = S.tool === "border" ? "border-rubber" : S.tool === "cover" ? "cover-rubber" : "crop-rubber";
       host.appendChild(rubber);
@@ -819,7 +821,10 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
       if (bo) bo.hidden = S.tool !== "border";
       var co = document.getElementById("cover-opts");
       if (co) co.hidden = S.tool !== "cover";
-      mountPage(document.getElementById("trim-stage"), ed3, true, wireTrimStage);
+      mountPage(document.getElementById("trim-stage"), ed3, true, function () {
+        wireTrimStage();
+        drawCoverOverlay(document.getElementById("trim-stage"));
+      });
       renderTrim();
       updateZoomLabel();
     }
@@ -862,6 +867,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
 
   function wireStatic() {
     installCropDrag();
+    installCoverDrag(document.getElementById("trim-stage"));
     installFigDrag(document.getElementById("fig-stage"));
     wireLoadUi();
     wireZoom();
@@ -951,6 +957,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     app.querySelectorAll(".float-tools [data-tool]").forEach(function (b) {
       b.addEventListener("click", function () {
         S.tool = b.dataset.tool;
+        S.coverSel = null; // ツールを離れたら上書きの選択を解く
         app.querySelectorAll(".float-tools [data-tool]").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
         render();
       });
@@ -960,8 +967,13 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     document.getElementById("border-width").addEventListener("input", function () {
       var v = parseFloat(this.value); if (!isNaN(v) && v > 0) S.borderWidth = v;
     });
-    // 上書きツールの置換語。上書きを選んでいれば `change` でその語を変える (Task 7 の cover.js)。
-    document.getElementById("cover-text").addEventListener("input", function () { S.coverText = this.value; });
+    // 上書きツールの置換語。`input` は次に置く語 (`S.coverText`) を直接更新し、確定
+    // (`change`/Enter) は `cover.js` の `commitCoverText` へ渡す。上書きを選んでいれば
+    // 選択中の要素の語を変え、未選択ならここで更新した次に置く語がそのまま使われる。
+    var coverInput = document.getElementById("cover-text");
+    coverInput.addEventListener("input", function () { S.coverText = this.value; });
+    coverInput.addEventListener("change", function () { commitCoverText(this.value); });
+    coverInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
     document.getElementById("btn-deletesel").addEventListener("click", async function () {
       var pg = S.PAGES[S.page]; if (!pg) return;
       var ids = Object.keys(curElSel()); if (!ids.length) return;
@@ -1221,6 +1233,7 @@ import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDra
     window.__state = S; // E2E/デバッグ用の読み取り窓
     initRail({ render: render, tryNext: tryNext });
     initFigure({ render: render });
+    initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; } });
     wireStatic();
     render();
     startLifecycle();

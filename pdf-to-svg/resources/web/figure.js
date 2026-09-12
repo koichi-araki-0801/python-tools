@@ -185,4 +185,7 @@ function installFigDrag(host) {
   });
 }
 
-export { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag };
+export {
+  initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag,
+  copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT,
+};

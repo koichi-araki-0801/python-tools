@@ -492,3 +492,40 @@ def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):
         return (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers;
     }""")
     assert len(covers) == 1 and covers[0]["text"] == "手動語"
+
+
+def test_manual_cover_resize_and_retext(e2e_page, ocr_layer_pdf):
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", "初期")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    overlay = page.locator("#trim-stage .cover-box")
+    expect(overlay).to_have_count(1)
+
+    # 右下ハンドルで伸縮 → updateCover(rect)
+    h = overlay.locator(".h.se").bounding_box()
+    page.mouse.move(h["x"] + h["width"] / 2, h["y"] + h["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(h["x"] + 40 * sx, h["y"] + 20 * sy, steps=5)
+    page.mouse.up()
+    rect = page.evaluate("""async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers[0].rect""")
+    assert rect["w"] > 100 and rect["h"] > 25
+
+    # オーバーレイをクリックして選び、入力欄で語を変える → updateCover(text)
+    page.locator("#trim-stage .cover-box").click()
+    expect(page.locator("#cover-text")).to_have_value("初期")
+    page.fill("#cover-text", "変更後")
+    page.press("#cover-text", "Enter")
+    expect(page.locator('#trim-stage svg g[data-el] text', has_text="変更後")).to_have_count(1)
+    text = page.evaluate("""async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers[0].text""")
+    assert text == "変更後"
+
+    # Undo で語が戻る
+    page.keyboard.press("Control+z")
+    expect(page.locator('#trim-stage svg g[data-el] text', has_text="初期")).to_have_count(1)
