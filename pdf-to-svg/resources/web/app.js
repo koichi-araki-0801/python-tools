@@ -17,7 +17,7 @@ import {
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
 import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
-import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText } from "./cover.js";
+import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel } from "./cover.js";
 
 (function () {
   "use strict";
@@ -499,7 +499,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText } from "
       if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
       if (e.target.closest(".cover-box")) return; // 上書きのオーバーレイ上の移動・伸縮・選択は `cover.js` が扱う
       if (!host.querySelector("svg")) return;
-      if (S.tool === "cover") S.coverSel = null; // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
+      if (S.tool === "cover") clearCoverSel(); // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
       var rubber = document.createElement("div");
       rubber.className = S.tool === "border" ? "border-rubber" : S.tool === "cover" ? "cover-rubber" : "crop-rubber";
       host.appendChild(rubber);
@@ -957,7 +957,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText } from "
     app.querySelectorAll(".float-tools [data-tool]").forEach(function (b) {
       b.addEventListener("click", function () {
         S.tool = b.dataset.tool;
-        S.coverSel = null; // ツールを離れたら上書きの選択を解く
+        clearCoverSel(); // ツールを離れたら上書きの選択を解く
         app.querySelectorAll(".float-tools [data-tool]").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
         render();
       });
@@ -967,11 +967,13 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText } from "
     document.getElementById("border-width").addEventListener("input", function () {
       var v = parseFloat(this.value); if (!isNaN(v) && v > 0) S.borderWidth = v;
     });
-    // 上書きツールの置換語。`input` は次に置く語 (`S.coverText`) を直接更新し、確定
-    // (`change`/Enter) は `cover.js` の `commitCoverText` へ渡す。上書きを選んでいれば
-    // 選択中の要素の語を変え、未選択ならここで更新した次に置く語がそのまま使われる。
+    // 上書きツールの置換語。上書きを選んでいる間、入力欄は選択中の要素の語の編集に使う。
+    // `input` は未選択のときだけ次に置く語 (`S.coverText`) を直接更新する (選択中は
+    // `S.coverText` に触れない — 触れると、選択を解いたあとに置く上書きへ編集中の語が
+    // 紛れ込む)。確定 (`change`/Enter) は `cover.js` の `commitCoverText` へ渡し、
+    // 選択の有無での書き分けもそちら 1 箇所に持たせる。
     var coverInput = document.getElementById("cover-text");
-    coverInput.addEventListener("input", function () { S.coverText = this.value; });
+    coverInput.addEventListener("input", function () { if (S.coverSel === null) S.coverText = this.value; });
     coverInput.addEventListener("change", function () { commitCoverText(this.value); });
     coverInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
     document.getElementById("btn-deletesel").addEventListener("click", async function () {

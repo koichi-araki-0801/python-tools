@@ -529,3 +529,39 @@ def test_manual_cover_resize_and_retext(e2e_page, ocr_layer_pdf):
     # Undo で語が戻る
     page.keyboard.press("Control+z")
     expect(page.locator('#trim-stage svg g[data-el] text', has_text="初期")).to_have_count(1)
+
+
+def test_manual_cover_selected_edit_does_not_leak_into_next_word(e2e_page, ocr_layer_pdf):
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", "次語")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+
+    # 1 個目の上書きを「次語」で置く
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(1)
+
+    # クリックで選び、選択中の語だけを別の語へ編集して確定する
+    page.locator("#trim-stage .cover-box").click()
+    expect(page.locator("#cover-text")).to_have_value("次語")
+    page.fill("#cover-text", "選択中に編集した語")
+    page.press("#cover-text", "Enter")
+    expect(page.locator('#trim-stage svg g[data-el] text', has_text="選択中に編集した語")).to_have_count(1)
+
+    # 空白をクリックして選択解除 → 入力欄は「次に置く語」(選択中の編集に汚されていない) へ戻る
+    page.mouse.click(box["x"] + 250 * sx, box["y"] + 20 * sy)
+    expect(page.locator("#cover-text")).to_have_value("次語")
+
+    # 2 個目の上書きをドラッグで置く → 選択中に編集した語ではなく最初の「次語」が使われる
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 150 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 170 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(2)
+    texts = page.evaluate("""async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers.map(c => c.text)""")
+    assert sorted(texts) == sorted(["選択中に編集した語", "次語"])

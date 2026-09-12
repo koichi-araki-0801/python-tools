@@ -5,6 +5,9 @@
 // `initFigure` で注入された `render` (app.js) へ委譲する。
 // オーバーレイは SVG の外 (host 直下の div) に置くので、`bakeSvg` 相当の書き出しには
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
+// 矩形操作の純粋ヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`)
+// は手順 3 の上書きオーバーレイ (`cover.js`) も採用矩形と同じ流儀で使うため、ここで
+// エクスポートして共有する (複製しない)。
 import { esc } from "./dom.js";
 import { clientToPage, rectIoU } from "./geometry.js";
 import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";

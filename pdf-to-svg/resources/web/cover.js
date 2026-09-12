@@ -13,16 +13,25 @@ let ui = null; // { rpc, afterEdit, pageOf } を app.js が注入する
 
 function initCover(deps) { ui = deps; }
 
+/** 上書きの選択を解く。入力欄を「次に置く語」(`S.coverText`) へ戻す。選択解除の経路
+ *  (ツール切替・空白クリック・ページ移動・選択中の要素が消えた等) をここへ一元化し、
+ *  選択中に編集した語が `S.coverText` へ紛れ込んだまま入力欄に残らないようにする。 */
+function clearCoverSel() {
+  S.coverSel = null;
+  var input = document.getElementById("cover-text");
+  if (input) input.value = S.coverText;
+}
+
 /** 手順 3 で上書きツールが選ばれている間だけ、ページ上の上書きを箱で重ねる。呼ぶたびに描き直す */
 async function drawCoverOverlay(host) {
   host.querySelectorAll(".cover-box").forEach(function (b) { b.remove(); });
-  if (S.phase !== 3 || S.tool !== "cover") { S.coverSel = null; return; }
+  if (S.phase !== 3 || S.tool !== "cover") { clearCoverSel(); return; }
   var svgEl = host.querySelector("svg"); if (!svgEl) return;
   var pg = ui.pageOf();
   var res = await ui.rpc("coverList", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
   if (host.querySelector("svg") !== svgEl) return; // 取得中にページが変わった
   var covers = res.covers || [];
-  if (S.coverSel !== null && !covers.some(function (c) { return c.elId === S.coverSel; })) S.coverSel = null;
+  if (S.coverSel !== null && !covers.some(function (c) { return c.elId === S.coverSel; })) clearCoverSel();
   covers.forEach(function (c) {
     var box = document.createElement("div");
     box.className = "cover-box" + (c.elId === S.coverSel ? " sel" : "");
@@ -54,10 +63,12 @@ function syncTextInput(covers) {
   if (sel) { input.value = sel.text; }
 }
 
-/** 入力欄の確定 (Enter / change)。上書きを選んでいれば語を変え、未選択なら次に置く語にする */
+/** 入力欄の確定 (Enter / change)。上書きを選んでいれば選択中の要素の語だけを変え、
+ *  `S.coverText` (次に置く語) には触れない。未選択なら次に置く語を確定する。
+ *  (選択中の編集で `S.coverText` を書き換えると、選択を解いたあとに置く上書きへ
+ *  編集中の語が紛れ込む — `input` リスナーの選択有無ガードと対で守る) */
 async function commitCoverText(text) {
-  S.coverText = text;
-  if (S.coverSel === null) return;
+  if (S.coverSel === null) { S.coverText = text; return; }
   var pg = ui.pageOf();
   var res = await ui.rpc("coverList", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
   var cur = (res.covers || []).find(function (c) { return c.elId === S.coverSel; });
@@ -96,8 +107,8 @@ function installCoverDrag(host) {
     S.coverDrag = null;
     S.coverSel = d.elId;
     if (!d.moved) {
-      // クリック = 選択だけ。coverList の再取得 (RPC 往復) を待って反映すると、その間に
-      // 利用者が入力欄へ打ち始めた語を syncTextInput が巻き戻してしまう (往復の完了が
+      // クリック = 選択だけ。`coverList` の再取得 (RPC 往復) を待って反映すると、その間に
+      // 利用者が入力欄へ打ち始めた語を `syncTextInput` が巻き戻してしまう (往復の完了が
       // 入力より遅れて着く競合)。選ぶだけなら mousedown 時点で拾った値で足りるので、
       // 待たずに即時反映する (矩形・見た目は据え置きのままなので再取得も不要)。
       host.querySelectorAll(".cover-box").forEach(function (b) { b.classList.toggle("sel", b.dataset.elId === String(d.elId)); });
@@ -115,4 +126,4 @@ function installCoverDrag(host) {
   });
 }
 
-export { initCover, drawCoverOverlay, installCoverDrag, commitCoverText };
+export { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel };
