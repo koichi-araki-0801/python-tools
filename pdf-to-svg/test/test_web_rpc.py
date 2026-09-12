@@ -109,6 +109,41 @@ def test_state_counts_scanned_pages_that_lost_their_background(session):
     assert st["truncated"] == 0
 
 
+def test_state_counts_pages_with_invisible_ocr_text(session):
+    """不可視の OCR 文字を持つページ数を `ocrPages` で返す。手動の上書きは数えない。"""
+    doc = session.docs[0]
+    ocr = Page(index=1, width_pt=200.0, height_pt=300.0)
+    ocr.elements = [TextElement(bbox=Rect(10, 10, 40, 12), text="OCR", invisible=True)]
+    manual = Page(index=2, width_pt=200.0, height_pt=300.0)
+    manual.elements = [
+        TextElement(bbox=Rect(10, 10, 40, 12), text="手動", invisible=True, manual_cover=True,
+                    dict_match=DictMatch(source="", target="手動"))
+    ]
+    doc.pages.extend([ocr, manual])
+    st = rpc_methods.dispatch(session, "state", {})
+    assert st["ocrPages"] == 1
+
+
+def test_page_svg_and_export_svg_report_cover_fallback(session):
+    """下に画像が無い不可視・置換済み文字は白で隠し、その件数を応答に載せる。"""
+    pg = session.docs[0].pages[0]
+    pg.elements.append(
+        TextElement(bbox=Rect(10, 60, 40, 12), text="置換後", original_text="before",
+                    invisible=True, dict_match=DictMatch(source="before", target="置換後"))
+    )
+    shown = rpc_methods.dispatch(session, "pageSvg", {"fileIndex": 0, "pageInFile": 0})
+    assert shown["coverFallback"] == 1
+    assert "<g data-el=" in shown["svg"]
+    out = rpc_methods.dispatch(session, "exportSvg", {"fileIndex": 0, "pageInFile": 0})
+    assert out["coverFallback"] == 1
+    assert "<g><rect " in out["svg"]
+
+
+def test_page_svg_reports_zero_without_invisible(session):
+    shown = rpc_methods.dispatch(session, "pageSvg", {"fileIndex": 0, "pageInFile": 0})
+    assert shown["coverFallback"] == 0
+
+
 def test_page_svg_has_data_el(session):
     data = rpc_methods.dispatch(session, "pageSvg", {"fileIndex": 0, "pageInFile": 0})
     assert "data-el=" in data["svg"]

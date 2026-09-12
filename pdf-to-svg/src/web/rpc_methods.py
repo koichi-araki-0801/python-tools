@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional
 
 from dictionary import apply as dict_apply
 from dictionary.store import DictionaryStore
-from export.svg_exporter import page_to_svg
+from export.svg_exporter import ExportReport, page_to_svg
 from model import fonts
 from model.document import Document, Page
 from model.figure_detect import detect_stewardship_figure
@@ -136,6 +136,18 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
         "noBackground": sum(
             1 for d in s.docs for pg in d.pages if pg.is_scanned and pg.background is None
         ),
+        # 不可視の OCR 文字層 (画像 + 透明な文字) を持つページ数。置換箇所が画像の上に矩形で
+        # 上書きされることを利用者へ伝えるための通知経路 (`truncated` と同じ)。手動の上書き
+        # (`manual_cover`) も `invisible` だが利用者が置いたものなので数えない。
+        "ocrPages": sum(
+            1
+            for d in s.docs
+            for pg in d.pages
+            if any(
+                isinstance(e, TextElement) and e.invisible and not e.manual_cover
+                for e in pg.elements
+            )
+        ),
     }
 
 
@@ -179,12 +191,17 @@ def rpc_figureCandidates(s: WebSession, args: dict) -> dict:
 
 def rpc_pageSvg(s: WebSession, args: dict) -> dict:
     pg = s.page(args["fileIndex"], args["pageInFile"])
+    report = ExportReport()
+    svg = page_to_svg(
+        pg, annotate=True, grayscale=bool(args.get("grayscale")), clip=_parse_clip(args, pg),
+        report=report,
+    )
     return {
-        "svg": page_to_svg(
-            pg, annotate=True, grayscale=bool(args.get("grayscale")), clip=_parse_clip(args, pg)
-        ),
+        "svg": svg,
         "width": pg.width_pt,
         "height": pg.height_pt,
+        # 上書き矩形の色を画像から採れず白へ倒した件数 (黙って白抜きにしない)。
+        "coverFallback": report.cover_fallback,
     }
 
 
@@ -491,7 +508,9 @@ def rpc_exportSvg(s: WebSession, args: dict) -> dict:
         name += f"_fig{int(args.get('figIndex', 1))}"
     if grayscale:
         name += "_gray"
-    return {"svg": page_to_svg(pg, grayscale=grayscale, clip=clip), "name": name + ".svg"}
+    report = ExportReport()
+    svg = page_to_svg(pg, grayscale=grayscale, clip=clip, report=report)
+    return {"svg": svg, "name": name + ".svg", "coverFallback": report.cover_fallback}
 
 
 # ---- ZIP 集約 (複数 SVG の一括保存) ----
