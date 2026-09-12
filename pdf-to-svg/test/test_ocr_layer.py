@@ -74,7 +74,6 @@ def test_unreplaced_invisible_text_is_transparent_in_annotate(ocr_layer_pdf):
 def test_replaced_invisible_text_is_covered_with_sampled_colors(ocr_layer_pdf, tmp_path):
     pg = load_document(str(ocr_layer_pdf)).pages[0]
     _replace(pg, tmp_path, "Header Text", "見出し")
-    el = _texts(pg)["見出し"]
     svg = page_to_svg(pg)
     line = _line_with(svg, "見出し")
     assert line.startswith("<g><rect ")

@@ -91,7 +91,13 @@ def _overflow_warning(target: str, font_size: float, box_w: float) -> Optional[s
 
 
 def _text_elements(page: Page) -> List[TextElement]:
-    return [e for e in page.elements if isinstance(e, TextElement) and not e.deleted]
+    # 手動の上書き (`manual_cover`) は利用者が手順 3 で置いたもので辞書由来ではないため、
+    # 折返し連結・置換候補のどちらの対象からも外す (`rpc_methods._page_has_replacements`
+    # の除外と対で保つ)。
+    return [
+        e for e in page.elements
+        if isinstance(e, TextElement) and not e.deleted and not e.manual_cover
+    ]
 
 
 def _x_overlap_ratio(a: TextElement, b: TextElement) -> float:

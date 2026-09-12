@@ -69,8 +69,20 @@ def _hex(rgb: Tuple[int, int, int]) -> str:
     return "#%02x%02x%02x" % rgb
 
 
-def _pixel_box(img_rect: Rect, bbox: Rect, width: int, height: int) -> Optional[Tuple[int, int, int, int]]:
-    """pt の bbox を画像画素の (x0, y0, x1, y1) へ線形写像し、画像の範囲でクランプする。空なら None。"""
+def _pixel_box(
+    img_rect: Rect, bbox: Rect, width: int, height: int
+) -> Optional[Tuple[int, int, int, int]]:
+    """pt の bbox を画像画素の (x0, y0, x1, y1) へ線形写像し、画像の範囲でクランプする。空なら None。
+
+    `img_rect` / `bbox` は PDF 由来 (攻撃者が細工できる) の座標なので、非有限値
+    (inf/nan) を先に弾く。素通しすると `sx`/`sy` が inf・nan になり、後段の
+    `math.floor`/`math.ceil` から `int()` への変換が `OverflowError`/`ValueError` を
+    投げて `page_to_svg` 全体を止める (`pdf_engine._band_range` と同じ判断)。
+    """
+    if not all(math.isfinite(v) for v in (img_rect.x, img_rect.y, img_rect.w, img_rect.h)):
+        return None
+    if not all(math.isfinite(v) for v in (bbox.x, bbox.y, bbox.w, bbox.h)):
+        return None
     if img_rect.w <= 0 or img_rect.h <= 0:
         return None
     sx = width / img_rect.w
@@ -86,10 +98,13 @@ def _pixel_box(img_rect: Rect, bbox: Rect, width: int, height: int) -> Optional[
     return x0, y0, x1, y1
 
 
-def _box_mean(region: Image.Image, quantized: Image.Image, box: Tuple[int, int, int]) -> Tuple[int, int, int]:
+def _box_mean(
+    region: Image.Image, quantized: Image.Image, box: Tuple[int, int, int]
+) -> Tuple[int, int, int]:
     """量子化値が ``box`` に一致する画素の平均色 (整数へ丸め)。マスクは Pillow の C 実装で作る。"""
     solid = Image.new("RGB", quantized.size, box)
-    bands = [b.point(lambda v: 255 if v == 0 else 0) for b in ImageChops.difference(quantized, solid).split()]
+    diff_bands = ImageChops.difference(quantized, solid).split()
+    bands = [b.point(lambda v: 255 if v == 0 else 0) for b in diff_bands]
     mask = ImageChops.multiply(ImageChops.multiply(bands[0], bands[1]), bands[2])
     mean = ImageStat.Stat(region, mask).mean
     return tuple(int(round(m)) for m in mean)  # type: ignore[return-value]
@@ -108,7 +123,8 @@ def sample_colors(img: Optional[Image.Image], img_rect: Rect, bbox: Rect) -> Cov
         return _FALLBACK
     region = img.crop(px)
     quantized = region.point(_QUANT_TABLE)
-    colors: List[Tuple[int, Tuple[int, int, int]]] = quantized.getcolors(1 << (3 * (8 - QUANT_SHIFT))) or []
+    max_colors = 1 << (3 * (8 - QUANT_SHIFT))
+    colors: List[Tuple[int, Tuple[int, int, int]]] = quantized.getcolors(max_colors) or []
     if not colors:
         return _FALLBACK
     # 同数は量子化値の小さい方を先にする (走査順に依存せず決定的)。

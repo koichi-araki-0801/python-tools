@@ -473,6 +473,78 @@ def test_ocr_layer_upload_notifies(e2e_page, ocr_layer_pdf):
     expect(page.locator("#toast")).to_contain_text("OCR 文字のページを 1 ページ検出", timeout=30_000)
 
 
+def test_click_transparent_ocr_text_collects_into_dictionary(e2e_page, ocr_layer_pdf):
+    """手順 2 の透明 (未置換の不可視 OCR) 文字をクリックすると `dictSuggest` が発火し、
+    「元の語」欄へ取り込まれる (`wireConfirmPick`)。当たり判定は `fill-opacity="0"` でも
+    `fill` を残しているため効く (`fill="none"` だと SVG 既定の `pointer-events` が外れる)。
+    """
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(ocr_layer_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+
+    target = page.locator('#doc-master svg [data-el]', has_text="Header Text")
+    expect(target).to_have_count(1)
+    target.click()
+    expect(page.locator("#dict-src")).to_have_value("Header Text")
+
+
+def test_confirm_marker_is_drawn_over_replaced_invisible_text_group(e2e_page, ocr_layer_pdf):
+    """辞書置換後の確認マーカーは、不可視 OCR 文字の置換結果 `<g><rect/><text/></g>` の
+    上に描かれる (`drawChangeMarkers` は対象要素の `getBBox()` を使い、`<g>` は子要素の
+    bbox を合併するので `<text>` 単体のときと同じ位置に置ける)。マーカーの中心 (`cx`/`cy`)
+    が置換矩形 (`<rect>`) の左上と一致することで、`<g>` へのラップ後も位置がずれて
+    いないと確かめる。
+    """
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(ocr_layer_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    page.click('[data-tab="dict"]')
+    page.fill("#dict-src", "Header Text")
+    page.fill("#dict-tgt", "見出し")
+    page.click("#dict-add")
+    page.click("#btn-reapply")
+    expect(page.locator("#doc-master")).to_contain_text("見出し", timeout=15_000)
+
+    page.click('[data-tab="confirm"]')
+    expect(page.locator("#confirm-dyn .change-row")).to_have_count(1)
+    expect(page.locator("#doc-master svg [data-editor-marks] > g")).to_have_count(1)
+
+    pos = page.evaluate("""() => {
+        var svgEl = document.querySelector("#doc-master svg");
+        var textEl = svgEl.querySelector('g[data-el] text');
+        var groupEl = textEl.closest('[data-el]');
+        var rectEl = groupEl.querySelector('rect');
+        var circleEl = svgEl.querySelector('[data-editor-marks] circle');
+        return {
+            markCx: +circleEl.getAttribute('cx'), markCy: +circleEl.getAttribute('cy'),
+            rectX: +rectEl.getAttribute('x'), rectY: +rectEl.getAttribute('y'),
+        };
+    }""")
+    assert abs(pos["markCx"] - pos["rectX"]) < 1
+    assert abs(pos["markCy"] - pos["rectY"]) < 1
+
+    # 辞書はセッション間で共有され `reset_session` の対象外なので、後続テスト (例えば
+    # `_goto_step3` は「辞書が空」を前提にする) を汚さないよう自分で片付ける。
+    page.evaluate("""async () => {
+        const list = await window.rpc("dictList");
+        for (const e of list.entries) {
+            if (e.source === "Header Text") await window.rpc("dictDelete", { id: e.id });
+        }
+    }""")
+
+
 def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):
     page = e2e_page
     _goto_step3(page, ocr_layer_pdf)
@@ -487,11 +559,43 @@ def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):
     page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
     page.mouse.up()
     expect(page.locator('#trim-stage svg g[data-el] text', has_text="手動語")).to_have_count(1)
-    covers = page.evaluate("""async () => {
-        const st = await window.rpc("state");
-        return (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers;
-    }""")
+    covers = page.evaluate(
+        """async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers"""
+    )
     assert len(covers) == 1 and covers[0]["text"] == "手動語"
+
+
+def test_manual_cover_jitter_click_does_not_push_noop_undo(e2e_page, ocr_layer_pdf):
+    """1px 程度のジッター付きクリックは `updateCover` の no-op を送らない。
+
+    送ると矩形が変わらない 1 段が Undo スタックへ積まれ、次の Ctrl+Z が「何も起きない」
+    ように見える (`cover.js` の `rectsNearlyEqual`)。Undo 1 回で「置いた」こと自体が
+    取り消されることを確かめれば、ジッターの `updateCover` が積まれていないと分かる。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", "上書き語")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    overlay = page.locator("#trim-stage .cover-box")
+    expect(overlay).to_have_count(1)
+
+    # 本体をクリック。ページ座標で 0.5pt (しきい値 1pt 未満) だけずらし、実クリックの
+    # 手ブレを再現する。
+    ob = overlay.bounding_box()
+    cx, cy = ob["x"] + ob["width"] / 2, ob["y"] + ob["height"] / 2
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + sx * 0.5, cy, steps=1)
+    page.mouse.up()
+
+    page.keyboard.press("Control+z")
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(0)
 
 
 def test_manual_cover_resize_and_retext(e2e_page, ocr_layer_pdf):

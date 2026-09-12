@@ -70,7 +70,8 @@ def _page_has_replacements(page: Page, store: DictionaryStore) -> bool:
     まだ当てていない箇所) が残るページ。候補も数えるのは、箇所単位で戻したページが一覧から
     消えて再び置換できなくなるのを避けるため。"""
     if any(
-        isinstance(e, TextElement) and not e.deleted and e.dict_match is not None
+        isinstance(e, TextElement) and not e.deleted and not e.manual_cover
+        and e.dict_match is not None
         for e in page.elements
     ):
         return True
@@ -494,7 +495,19 @@ def cover_font_size(h: float) -> float:
 
 
 def _cover_text(args: dict) -> str:
-    return sanitize_text(str(args.get("text") or "")).strip()[:MAX_COVER_TEXT_CHARS]
+    """``args["text"]`` を上書きの語へ整形する。無い・``None`` なら空 (矩形だけの上書き)。
+
+    クライアントが送る値なので信用しない: `_parse_rect_arg` と同じ方針で、文字列以外が
+    明示的に渡されたら ``str()`` で黙って文字列化せず ``ValueError`` にする (数値・配列・
+    オブジェクトの上書き語を許すと保存後の `text` が意図と食い違う。falsy な `0` が
+    "or" 判定で空文字へ化けるのも同じ理由で避ける)。
+    """
+    text = args.get("text")
+    if text is None:
+        text = ""
+    elif not isinstance(text, str):
+        raise ValueError(f"text must be a string: {text!r}")
+    return sanitize_text(text).strip()[:MAX_COVER_TEXT_CHARS]
 
 
 def _manual_cover(pg: Page, el_id) -> TextElement:

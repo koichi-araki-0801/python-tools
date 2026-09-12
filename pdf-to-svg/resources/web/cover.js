@@ -120,10 +120,29 @@ function installCoverDrag(host) {
     var sz = pageSizeOf(svgEl);
     var r = clampToPage(d.rect, sz.w, sz.h);
     if (r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT) { await drawCoverOverlay(host); return; }
+    if (rectsNearlyEqual(r, d.orig)) {
+      // `mousemove` は 1px のジッターでも `d.moved` を立てるため、結果の矩形が元と
+      // 実質同じならクリック扱いにして `updateCover` を送らない。送ると変化の無い
+      // 1 段が Undo スタックへ積まれ、次の Ctrl+Z が「何も起きない」ように見える。
+      await drawCoverOverlay(host);
+      return;
+    }
     var pg = ui.pageOf();
     await ui.rpc("updateCover", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elId: d.elId, rect: r });
     await ui.afterEdit();
   });
+}
+
+// ジッター判定のしきい値 (ページ座標 pt)。通常の表示倍率ではおおむね画面 1px 相当で、
+// 意図した伸縮・移動 (数 pt 以上動く) までは無視しない。
+var JITTER_EPS_PT = 1;
+
+/** 2 矩形が `JITTER_EPS_PT` 未満の差しか無いか (クリックの手ブレとみなせるか) */
+function rectsNearlyEqual(a, b) {
+  return (
+    Math.abs(a.x - b.x) < JITTER_EPS_PT && Math.abs(a.y - b.y) < JITTER_EPS_PT &&
+    Math.abs(a.w - b.w) < JITTER_EPS_PT && Math.abs(a.h - b.h) < JITTER_EPS_PT
+  );
 }
 
 export { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel };

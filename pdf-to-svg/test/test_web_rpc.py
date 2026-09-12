@@ -127,6 +127,8 @@ def test_state_counts_pages_with_invisible_ocr_text(session):
 def test_page_svg_and_export_svg_report_cover_fallback(session):
     """下に画像が無い不可視・置換済み文字は白で隠し、その件数を応答に載せる。"""
     pg = session.docs[0].pages[0]
+    # `_make_doc` のページ 0 は `ImageElement` も `background` も持たないベクターページなので、
+    # 採色元が無く必ず fallback になる (採れて偶然白になる場合との取り違えを防ぐ前提)。
     pg.elements.append(
         TextElement(bbox=Rect(10, 60, 40, 12), text="置換後", original_text="before",
                     invisible=True, dict_match=DictMatch(source="before", target="置換後"))
@@ -546,6 +548,17 @@ def test_add_cover_sanitizes_and_caps_text(session):
     assert "\x00" not in el.text and len(el.text) == rpc_methods.MAX_COVER_TEXT_CHARS
 
 
+@pytest.mark.parametrize("bad_text", [0, False, ["a"], {"a": "b"}, 3.5])
+def test_add_cover_rejects_non_string_text(session, bad_text):
+    """``text`` は `_parse_rect_arg` と同じ「信用しない」方針: 文字列以外は ``str()`` で
+    黙って文字列化せず拒否する (`0` を "or" 判定で空文字へ落とさないのも含む)。"""
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(
+            session, "addCover",
+            _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text=bad_text),
+        )
+
+
 def test_add_cover_rejects_rect_outside_page(session):
     with pytest.raises(ValueError):
         rpc_methods.dispatch(
@@ -623,3 +636,26 @@ def test_manual_cover_is_not_a_dictionary_change(session):
     rpc_methods.dispatch(session, "applyDelete", _cover_args(elIds=[el_id]))
     removed = rpc_methods.dispatch(session, "removedList", _cover_args())["removed"]
     assert {"elId": el_id, "kind": "text", "label": "上書き「A」"} in removed
+
+
+def test_placing_cover_does_not_flag_page_as_changed2(session):
+    """上書きを置いただけでは手順 2 の「要確認」が立たない (`_page_has_replacements`
+    は `manual_cover` を辞書置換として数えない)。"""
+    hdr = session.page(0, 0).elements[0]
+    hdr.dict_match = None  # 既存の辞書置換を消し、上書きだけが残る状態にする
+    rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )
+    assert rpc_methods.dispatch(session, "state", {})["changed2"] == [False]
+
+
+def test_dict_reapply_does_not_rewrite_a_matching_manual_cover(session):
+    """辞書の source が上書きの語と同じでも、再適用は上書きを書き換えない
+    (`plan_replacements` が `manual_cover` を候補から除外する)。"""
+    el_id = rpc_methods.dispatch(
+        session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
+    )["elId"]
+    rpc_methods.dispatch(session, "dictAdd", {"source": "A", "target": "B"})
+    rpc_methods.dispatch(session, "reapplyDictPage", _cover_args())
+    el = next(e for e in session.docs[0].pages[0].elements if e.id == el_id)
+    assert el.text == "A" and el.dict_match == DictMatch(source="", target="A")

@@ -7,7 +7,7 @@ from dictionary import apply as dict_apply
 from dictionary.store import DictionaryStore
 from export.svg_exporter import _fmt, page_to_svg
 from model.document import Page
-from model.elements import Rect, TextElement
+from model.elements import DictMatch, Rect, TextElement
 
 
 def _text(s, x, oy, size=12.0, w=20.0):
@@ -284,4 +284,26 @@ def test_has_replacement_candidate_false_for_no_hits(tmp_path):
     store = DictionaryStore(tmp_path / "d.json")
     store.add("Amount", "金額")
     assert dict_apply.has_replacement_candidate(pg, store) is False
+    store.close()
+
+
+def test_manual_cover_adjacent_to_text_is_not_folded_into_wrap_group(tmp_path):
+    """手動の上書き (`manual_cover`) は直下・同列・同サイズの通常テキストへ隣接しても
+    折返し連結の対象にならない (畳み込まれると 2 行目扱いで `deleted` になり、
+    利用者が置いた上書きが盤面から消えたように見える)。"""
+    top = _text("商品", x=50, oy=40)
+    cover = TextElement(
+        bbox=Rect(50, 40, 20, 12), text="上書き", origin_x=50, origin_y=52,
+        font_size=12.0, invisible=True, manual_cover=True,
+        dict_match=DictMatch(source="", target="上書き"),
+    )
+    pg = _page([top, cover])
+    store = DictionaryStore(tmp_path / "d.json")
+    store.add("商品上書き", "Product", joined=True)  # 畳み込まれれば一致してしまう語
+
+    n = dict_apply.auto_apply(pg, store)
+
+    assert n == 0  # 連結照合は成立しない (cover は候補集合から除外される)
+    assert cover.deleted is False and cover.text == "上書き"
+    assert top.text == "商品" and top.deleted is False
     store.close()

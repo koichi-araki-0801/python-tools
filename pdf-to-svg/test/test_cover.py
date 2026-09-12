@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import io
+import math
 
-import pytest
 from PIL import Image
 
-from export import cover
+from export import cover, grayscale
 from model.elements import Rect
 
 
@@ -98,3 +98,61 @@ def test_deterministic_tie_break_prefers_smaller_color():
     c = cover.sample_colors(im, Rect(0, 0, 8, 8), Rect(0, 0, 8, 8))
     assert c.background == "#000000"
     assert c.foreground == "#ffffff"
+
+
+def test_non_finite_img_rect_is_fallback_not_exception():
+    """`img_rect` が非有限 (inf/nan) でも例外を投げず fallback へ倒す。
+
+    非有限は `sx`/`sy` を inf・nan にし、`math.floor`/`math.ceil` の結果を
+    `int()` へ渡す段で `OverflowError`/`ValueError` になる (対策前は `page_to_svg`
+    全体を止めていた)。
+    """
+    im = _image(8, 8, (10, 10, 10))
+    for bad_rect in (
+        Rect(0, 0, math.inf, 8),
+        Rect(0, 0, 8, math.inf),
+        Rect(0, 0, math.nan, 8),
+        Rect(math.nan, 0, 8, 8),
+    ):
+        c = cover.sample_colors(im, bad_rect, Rect(0, 0, 8, 8))
+        assert c == cover.CoverColors("#ffffff", "#000000", True)
+
+
+def test_non_finite_bbox_is_fallback_not_exception():
+    """`bbox` (置換箇所の矩形) が非有限でも fallback へ倒す。"""
+    im = _image(8, 8, (10, 10, 10))
+    for bad_bbox in (
+        Rect(0, 0, math.inf, 4),
+        Rect(0, 0, 4, math.nan),
+        Rect(math.inf, math.inf, 4, 4),
+    ):
+        c = cover.sample_colors(im, Rect(0, 0, 8, 8), bad_bbox)
+        assert c == cover.CoverColors("#ffffff", "#000000", True)
+
+
+def test_bbox_partially_overlapping_image_is_clamped():
+    """bbox が画像の右端を越えるとき、画像内側だけへクランプして採色する。"""
+    im = _image(8, 8, (10, 20, 30))
+    c = cover.sample_colors(im, Rect(0, 0, 8, 8), Rect(4, 0, 8, 8))  # 右半分は画像の外
+    assert c == cover.CoverColors("#0a141e", "#ffffff", False)  # 輝度 18 → 暗色: 白
+
+
+def test_one_pixel_crop_still_samples():
+    """1px × 1px までクランプされても採色できる (空クロップにならない)。"""
+    im = _image(8, 8, (10, 20, 30))
+    c = cover.sample_colors(im, Rect(0, 0, 8, 8), Rect(7, 7, 8, 8))  # クランプで 1x1 になる
+    assert c == cover.CoverColors("#0a141e", "#ffffff", False)
+
+
+def test_max_image_pixels_matches_grayscale():
+    """`MAX_COVER_IMAGE_PIXELS` は `grayscale.MAX_GRAY_IMAGE_PIXELS` のコメント同期コピー
+    (設計正典に「片方を変えたら両方」とある)。値がずれたら片側の編集漏れなので、
+    黙って別の画素数上限になる前にここで落とす。"""
+    assert cover.MAX_COVER_IMAGE_PIXELS == grayscale.MAX_GRAY_IMAGE_PIXELS
+
+
+def test_luma_matches_grayscale():
+    """`cover._luma` は `grayscale._luma` のコメント同期コピー。実装がずれると
+    上書き矩形の背景色から求める文字色の白黒判定がグレースケール書き出しと食い違う。"""
+    for rgb in [(0, 0, 0), (255, 255, 255), (10, 20, 30), (200, 220, 240), (128, 64, 32), (1, 254, 77)]:
+        assert cover._luma(*rgb) == grayscale._luma(*rgb)
