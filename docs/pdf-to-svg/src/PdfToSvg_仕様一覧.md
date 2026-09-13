@@ -65,7 +65,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 5 | HTTP | `POST /ping` | ハートビート |
 | 6 | RPC | `state` | ファイル/ページ/置換当たり等の状態取得 |
 | 6.1 | RPC | `figureCandidates` | スチュワードシップ図の候補矩形を取得。引数 `fileIndex`, `pageInFile`。返り値 `{rects: [{x, y, w, h}]}`（0 または 1 件）。検出の想定外例外はページ単位で握って候補なしにする |
-| 7 | RPC | `pageSvg` | ページSVG取得（annotate 付き）。引数に `grayscale: bool = false`, `clip: {x,y,w,h}`（省略時 null）を追加 |
+| 7 | RPC | `pageSvg` | ページSVG取得（annotate 付き）。引数に `grayscale: bool = false`, `clip: {x,y,w,h}`（省略時 null）を追加。`clip` の検査は `_parse_rect_arg`（ページ内を要求） |
 | 8 | RPC | `planPage` | 置換予定の算出。確認一覧の行を出現順に返し、各行に `state`（applied/pending）を含める |
 | 9 | RPC | `removedList` | 削除要素一覧 |
 | 10 | RPC | `dictList / dictAdd / dictDelete` | 辞書 参照 / 追加 / 削除 |
@@ -75,10 +75,10 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 14 | RPC | `applyDictMatch` | 指定要素 1 件だけ辞書を当てる（1 マクロ） |
 | 15 | RPC | `dictJson / dictImportJson` | 辞書JSONの文字列受け渡し（ファイル保存/読込はブラウザ側） |
 | 16 | RPC | `setSuggestJoin` | クリック取り込み連結フラグ更新 |
-| 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線（Undoへpush） |
-| 17.1 | RPC | `addCover` | 手動の上書きを 1 つ追加（引数 `fileIndex, pageInFile, rect, text`。不可視かつ置換済み扱いの `TextElement` を作り Undo へ push） |
+| 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線（Undoへpush）。矩形を取る `deleteRegion`/`addBorder` は `_parse_rect_arg` の 1 本で検査し（数値 4 つの有限性・正の寸法は常に要求）、範囲削除だけはページ外の矩形も許す（`inside_page=False`。矩形自体は成果物に残らず、重なる要素を選ぶだけのため）。枠線はページ内を要求する |
+| 17.1 | RPC | `addCover` | 手動の上書きを 1 つ追加（引数 `fileIndex, pageInFile, rect, text`。不可視かつ置換済み扱いの `TextElement` を作り Undo へ push）。`rect` の検査は `_parse_rect_arg`（ページ内を要求） |
 | 17.2 | RPC | `coverList` | 指定ページの手動の上書き一覧を取得（引数 `fileIndex, pageInFile`。返り値 `{covers: [{elId, rect, text}]}`） |
-| 17.3 | RPC | `updateCover` | 手動の上書きの矩形/置換語を変更（引数 `fileIndex, pageInFile, elId` + 任意で `rect, text`。`UpdateCoverCommand` で Undo へ push） |
+| 17.3 | RPC | `updateCover` | 手動の上書きの矩形/置換語を変更（引数 `fileIndex, pageInFile, elId` + 任意で `rect, text`。`UpdateCoverCommand` で Undo へ push）。`rect` の検査は `addCover` と同じ `_parse_rect_arg` |
 | 18 | RPC | `undo / redo` | 操作の取消 / やり直し |
 | 19 | RPC | `exportSvg` | 範囲指定で SVG 書き出し。引数に `grayscale`, `clip`, `figIndex: int = 1` を追加。`clip` があれば `_fig<k>`、`grayscale` が真なら `_gray` を独立して付け加える（`<stem>_p<N>[_fig<k>][_gray].svg`）。UI のグレーモードは常に両方を送るため成果物は `<stem>_p<N>_fig<k>_gray.svg` |
 | 20 | RPC | `zipEntries` | 複数 SVG を ZIP 1 本にまとめて base64 で返す |
@@ -115,3 +115,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 25 | `test_cover.py::test_grayscale_output_is_la_and_composites_to_white` ほか | グレー化後の`LA`画像・透過付きパレット画像（`P`+`transparency`）も白へ合成すること（透明を持つかの判定は`grayscale.has_alpha_channel`を`cover.decode_image`と共有し、二重実装を持たない） | 他形式の透明も白へ合成される | 未 |
 | 26 | `test_ocr_layer.py::test_degraded_seqno_index_leaves_text_visible` | seqno索引が候補数上限で照合を諦めた（`degraded`）ページで、文字に不可視判定を与えないこと | 索引degrade時も文字が可視のまま抽出される | 未 |
 | 27 | `test_pdftosvg_geometry_js.py::test_resizebycorner_*` ほか、`test_pdftosvg_app_flow_e2e.py::test_gray_figure_flow` | 角ハンドルの伸縮計算`resizeByCorner`（掴んだ角の移動・反対角の固定・反対辺を越えた入替・`MIN_SIZE_PT`未満へのクランプ）とハンドルのマークアップ`CORNER_HANDLES_HTML`の単体、手順4での伸縮操作が実際に矩形の幅・高さへ反映されること（E2E） | 伸縮計算が正しく、画面上の伸縮にも反映される | 未 |
+| 28 | `test_pdftosvg_geometry_js.py::test_rectfromdrag_*` | ドラッグの2点からページ内の矩形を作る`rectFromDrag`（ページ外へのはみ出しをページ内へ収める・引く向きの正規化・`MIN_SIZE_PT`未満の誤クリック拒否・収めた結果が`MIN_SIZE_PT`未満になる場合も拒否） | 手順3・4が共有する矩形確定ロジックが正しい | 未 |
+| 29 | `test_web_rpc.py::test_rect_arg_rejects_non_finite_values` ほか | 矩形検査の一本化`_parse_rect_arg`（非有限値は`deleteRegion`/`addBorder`のどちらからでも拒否、範囲削除はページ外の矩形も許容、枠線は同じ矩形をページ外として拒否） | 矩形検査がRPC全体で揃っている | 未 |
+| 30 | `test_resource_limits.py::test_raster_and_gray_pixel_caps_stay_equal` | `pdf_engine`（`fitz` import隔離のため複製）と`grayscale`が持つラスタ化の画素上限`MAX_RASTER_PIXELS`/`MAX_GRAY_IMAGE_PIXELS`の等値 | 対で保守する定数がずれていない | 未 |
+| 31 | `test_pdftosvg_app_flow_e2e.py::test_manual_cover_drag_past_the_page_edge_still_places_a_cover` | ページの端をまたいでドラッグしても上書きが置かれること（`rectFromDrag`のページ内クランプが効く）（E2E） | ページ外へ引いても上書きが成立する | 未 |
