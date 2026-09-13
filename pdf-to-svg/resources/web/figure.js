@@ -98,6 +98,7 @@ function drawFigOverlay(host) {
     box.querySelectorAll(".h").forEach(function (h) {
       h.addEventListener("mousedown", function (e) {
         e.stopPropagation(); e.preventDefault();
+        // 採用矩形配列は同時ドラッグ中も順序不変のため、`i` はドラッグ終了まで有効
         S.figDrag = { mode: "resize", index: i, corner: h.dataset.corner, orig: copyRect(r) };
       });
     });
