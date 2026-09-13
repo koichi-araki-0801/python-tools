@@ -207,20 +207,3 @@ def test_palette_transparency_composites_to_white():
     decoded = cover.decode_image(_png(im), "png")
     assert decoded is not None
     assert decoded.getpixel((0, 0)) == (255, 255, 255)
-
-
-def test_alpha_predicate_matches_grayscale():
-    """採色側とグレー化側の「透明を持つか」の判定は同じでなければならない。
-
-    `cover.decode_image` と `grayscale.to_gray_image` は同じ条件式を別々に持つ。片方だけ形式を
-    足すと、グレー化が `LA` を返すのに採色が合成しない (またはその逆) の食い違いが起きる。
-    """
-    import inspect
-
-    from export import grayscale
-
-    modes = ("RGBA", "LA", "PA")
-    for src in (inspect.getsource(cover.decode_image), inspect.getsource(grayscale.to_gray_image)):
-        for mode in modes:
-            assert f'"{mode}"' in src
-        assert '"transparency" in im.info' in src

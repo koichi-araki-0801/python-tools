@@ -79,6 +79,17 @@ def _luma(r: int, g: int, b: int) -> int:
     return (r * 19595 + g * 38470 + b * 7471 + 0x8000) >> 16
 
 
+def has_alpha_channel(im: "Image.Image") -> bool:
+    """``im`` が透明度チャンネルを持つか。
+
+    ``to_gray_image`` (透明画素を残したまま灰色化するかの分岐) と ``cover.decode_image``
+    (透明画素を白へ合成するかの分岐) の両方がこの判定に依存する。定義を 1 つにしておかないと、
+    どちらかだけが形式を足したときに「グレー化は `LA` を返すのに採色は合成しない」
+    (またはその逆) の食い違いが起き、透明画像の書き出しで背景色が黒く抜ける形で表面化する。
+    """
+    return im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info)
+
+
 def to_gray_color(value: Optional[str]) -> Optional[str]:
     """``sanitize_color`` が許す色を灰色 hex にする。``none`` / ``currentColor`` / ``None`` は素通し。
 
@@ -127,10 +138,7 @@ def to_gray_image(img_bytes: bytes, ext: str) -> Tuple[bytes, str]:
         with Image.open(io.BytesIO(img_bytes)) as im:
             if im.width * im.height > MAX_GRAY_IMAGE_PIXELS:
                 return img_bytes, ext
-            has_alpha = im.mode in ("RGBA", "LA", "PA") or (
-                im.mode == "P" and "transparency" in im.info
-            )
-            gray = im.convert("LA" if has_alpha else "L")
+            gray = im.convert("LA" if has_alpha_channel(im) else "L")
             if _is_chromatic(im):
                 lut = [tone_curve(i) for i in range(256)]
                 if gray.mode == "LA":

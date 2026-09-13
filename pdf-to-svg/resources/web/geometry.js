@@ -5,6 +5,8 @@
 // `pageSizeOf` が `viewBox` と要素の実寸を見る) し、`placeRect` は箱の `style` を書くが、
 // どれも「渡された引数だけで決まる」ので手順 3 のオーバーレイ (`cover.js`) と手順 4 の
 // 採用矩形 (`figure.js`) が同じ実装を共有できる。
+// `CORNER_HANDLES_HTML` (引数を取らない角ハンドルのマークアップ定数) もここに置く。
+// `data-corner` の綴りが `resizeByCorner` の契約そのものなので、両者を離さない。
 
 // クライアント座標 → SVG `viewBox` 座標 (ページ pt)。
 export function clientToPage(svgEl, clientX, clientY) {

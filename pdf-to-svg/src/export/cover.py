@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 
 from PIL import Image, ImageChops, ImageStat
 
+from export.grayscale import has_alpha_channel
 from model.elements import Rect
 
 # 画像 1 枚あたりのデコード上限画素数。`grayscale.MAX_GRAY_IMAGE_PIXELS` と同値 (片方を変えたら両方)。
@@ -55,7 +56,7 @@ def decode_image(img_bytes: bytes, ext: str) -> Optional[Image.Image]:
         with Image.open(io.BytesIO(img_bytes)) as im:
             if im.width * im.height > MAX_COVER_IMAGE_PIXELS:
                 return None
-            if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
+            if has_alpha_channel(im):
                 # alpha は捨てずに白へ合成する。`convert("RGB")` は合成せず捨てるので、完全に
                 # 透明な画素が格納 RGB (RGBA PNG では黒が多い) のまま最頻色を支配し、隠すはずの
                 # 矩形が黒い帯になる。部分的に透明な画素は白と混色する (透明度を二値扱いしない)。
