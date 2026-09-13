@@ -156,5 +156,13 @@ def test_corner_handles_html_has_four_corners(geo):
     assert js(geo, """(() => {
         const d = document.createElement("div");
         d.innerHTML = window.__geo.CORNER_HANDLES_HTML;
-        return Array.from(d.querySelectorAll(".h")).map(e => e.dataset.corner);
-    })()""") == ["nw", "ne", "sw", "se"]
+        return Array.from(d.querySelectorAll(".h")).map(e => ({
+            corner: e.dataset.corner,
+            classes: Array.from(e.classList).sort().join(" ")
+        }));
+    })()""") == [
+        {"corner": "nw", "classes": "h nw"},
+        {"corner": "ne", "classes": "h ne"},
+        {"corner": "sw", "classes": "h sw"},
+        {"corner": "se", "classes": "h se"},
+    ]
