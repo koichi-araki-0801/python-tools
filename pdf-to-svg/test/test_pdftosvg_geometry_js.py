@@ -118,3 +118,43 @@ def test_pagesizeof_reads_the_viewbox(geo):
         svg.remove();
         return r;
     })()""") == {"w": 300, "h": 200}
+
+
+def test_resizebycorner_moves_the_grabbed_corner(geo):
+    """南東を掴んで動かすと、北西は固定されたまま幅と高さが変わる。"""
+    assert js(geo, """window.__geo.resizeByCorner(
+        {x: 10, y: 10, w: 20, h: 20}, "se", {x: 40, y: 50})""") == {
+        "x": 10, "y": 10, "w": 30, "h": 40,
+    }
+
+
+def test_resizebycorner_moves_the_opposite_corner(geo):
+    """北西を掴んで動かすと、南東が固定される。"""
+    assert js(geo, """window.__geo.resizeByCorner(
+        {x: 10, y: 10, w: 20, h: 20}, "nw", {x: 5, y: 5})""") == {
+        "x": 5, "y": 5, "w": 25, "h": 25,
+    }
+
+
+def test_resizebycorner_handles_dragging_past_the_opposite_edge(geo):
+    """反対の辺を越えて引いても矩形は正の寸法で返る (左右・上下が入れ替わる)。"""
+    assert js(geo, """window.__geo.resizeByCorner(
+        {x: 10, y: 10, w: 20, h: 20}, "se", {x: 0, y: 0})""") == {
+        "x": 0, "y": 0, "w": 10, "h": 10,
+    }
+
+
+def test_resizebycorner_clamps_to_the_minimum_size(geo):
+    """掴んだ角を反対の角へ寄せきっても `MIN_SIZE_PT` より小さくしない。"""
+    assert js(geo, """window.__geo.resizeByCorner(
+        {x: 10, y: 10, w: 20, h: 20}, "se", {x: 10, y: 10})""") == {
+        "x": 10, "y": 10, "w": 4, "h": 4,
+    }
+
+
+def test_corner_handles_html_has_four_corners(geo):
+    assert js(geo, """(() => {
+        const d = document.createElement("div");
+        d.innerHTML = window.__geo.CORNER_HANDLES_HTML;
+        return Array.from(d.querySelectorAll(".h")).map(e => e.dataset.corner);
+    })()""") == ["nw", "ne", "sw", "se"]

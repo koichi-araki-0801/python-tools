@@ -43,6 +43,27 @@ export function pageSizeOf(svgEl) {
   return { w: vb.width, h: vb.height };
 }
 
+/** 掴んだ角 `corner` を点 `p` へ動かしたときの矩形。反対の角は固定し、`MIN_SIZE_PT` より小さくしない。
+ *  新しい矩形を返す純粋関数にしてあるのは、呼び出し側で同一性を保ちたい場合 (`figure.js` は
+ *  採用矩形の箱を配列の同一性で引く) に `Object.assign` で受けられるようにするため。 */
+export function resizeByCorner(orig, corner, p) {
+  var left = corner.indexOf("w") >= 0 ? p.x : orig.x;
+  var right = corner.indexOf("e") >= 0 ? p.x : orig.x + orig.w;
+  var top = corner.indexOf("n") >= 0 ? p.y : orig.y;
+  var bottom = corner.indexOf("s") >= 0 ? p.y : orig.y + orig.h;
+  return {
+    x: Math.min(left, right),
+    y: Math.min(top, bottom),
+    w: Math.max(MIN_SIZE_PT, Math.abs(right - left)),
+    h: Math.max(MIN_SIZE_PT, Math.abs(bottom - top)),
+  };
+}
+
+// 角ハンドル 4 つのマークアップ。伸縮の当たり判定は `.h` の `data-corner` で拾う。
+export var CORNER_HANDLES_HTML =
+  '<span class="h nw" data-corner="nw"></span><span class="h ne" data-corner="ne"></span>' +
+  '<span class="h sw" data-corner="sw"></span><span class="h se" data-corner="se"></span>';
+
 /** 2 つの矩形 {x,y,w,h} の IoU (重なり面積 / 合併面積)。重ならなければ 0 */
 export function rectIoU(a, b) {
   var ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));

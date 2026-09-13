@@ -5,7 +5,7 @@
 // 箱だけを動かし、mouseup の 1 回だけ `updateCover` を送る (`figure.js` の採用矩形と同じ流儀)。
 // 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`) は
 // 手順 4 の採用矩形と同じ流儀なので `geometry.js` から共有して読む。
-import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT } from "./geometry.js";
+import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
 import { S } from "./state.js";
 
 let ui = null; // { rpc, afterEdit, pageOf } を app.js が注入する
@@ -35,9 +35,7 @@ async function drawCoverOverlay(host) {
     var box = document.createElement("div");
     box.className = "cover-box" + (c.elId === S.coverSel ? " sel" : "");
     box.dataset.elId = c.elId;
-    box.innerHTML =
-      '<span class="h nw" data-corner="nw"></span><span class="h ne" data-corner="ne"></span>' +
-      '<span class="h sw" data-corner="sw"></span><span class="h se" data-corner="se"></span>';
+    box.innerHTML = CORNER_HANDLES_HTML;
     placeRect(box, c.rect, svgEl, host);
     box.querySelectorAll(".h").forEach(function (h) {
       h.addEventListener("mousedown", function (e) {
@@ -94,10 +92,7 @@ function installCoverDrag(host) {
     } else {
       var p = clientToPage(svgEl, e.clientX, e.clientY);
       p.x = Math.max(0, Math.min(p.x, sz.w)); p.y = Math.max(0, Math.min(p.y, sz.h));
-      var o = d.orig, c = d.corner;
-      var left = c.indexOf("w") >= 0 ? p.x : o.x, right = c.indexOf("e") >= 0 ? p.x : o.x + o.w;
-      var top = c.indexOf("n") >= 0 ? p.y : o.y, bottom = c.indexOf("s") >= 0 ? p.y : o.y + o.h;
-      d.rect = { x: Math.min(left, right), y: Math.min(top, bottom), w: Math.max(MIN_SIZE_PT, Math.abs(right - left)), h: Math.max(MIN_SIZE_PT, Math.abs(bottom - top)) };
+      d.rect = resizeByCorner(d.orig, d.corner, p);
     }
     placeRect(d.box, d.rect, svgEl, host);
   });

@@ -8,7 +8,7 @@
 // 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT`) は
 // 手順 3 の上書きオーバーレイ (`cover.js`) と共有するため `geometry.js` にある。
 import { esc } from "./dom.js";
-import { clientToPage, rectIoU, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT } from "./geometry.js";
+import { clientToPage, rectIoU, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
 import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";
 
 var ui = { render: function () {} };
@@ -91,9 +91,7 @@ function drawFigOverlay(host) {
     var box = document.createElement("div");
     box.className = "fig-cand sel"; box.dataset.sel = i;
     box.innerHTML = '<span class="tag">採用 ' + (i + 1) + " ・ " + Math.round(r.w) + " × " + Math.round(r.h) + " pt</span>" +
-      '<button type="button" class="del" title="採用を外す">×</button>' +
-      '<span class="h nw" data-corner="nw"></span><span class="h ne" data-corner="ne"></span>' +
-      '<span class="h sw" data-corner="sw"></span><span class="h se" data-corner="se"></span>';
+      '<button type="button" class="del" title="採用を外す">×</button>' + CORNER_HANDLES_HTML;
     placeRect(box, r, svgEl, host);
     box.querySelector(".del").addEventListener("click", function (e) { e.stopPropagation(); sel.splice(i, 1); ui.render(); });
     box.querySelectorAll(".h").forEach(function (h) {
@@ -136,11 +134,8 @@ function installFigDrag(host) {
     var sz = pageSizeOf(svgEl);
     p.x = Math.max(0, Math.min(p.x, sz.w));
     p.y = Math.max(0, Math.min(p.y, sz.h));
-    var o = d.orig, c = d.corner;
-    var left = c.indexOf("w") >= 0 ? p.x : o.x, right = c.indexOf("e") >= 0 ? p.x : o.x + o.w;
-    var top = c.indexOf("n") >= 0 ? p.y : o.y, bottom = c.indexOf("s") >= 0 ? p.y : o.y + o.h;
-    d.rect.x = Math.min(left, right); d.rect.y = Math.min(top, bottom);
-    d.rect.w = Math.max(MIN_SIZE_PT, Math.abs(right - left)); d.rect.h = Math.max(MIN_SIZE_PT, Math.abs(bottom - top));
+    // `d.rect` は採用矩形そのもの (`figSelPeek` が同一性で箱を引く) なので、置き換えず中身を書く。
+    Object.assign(d.rect, resizeByCorner(d.orig, d.corner, p));
     var box = host.querySelector('.fig-cand.sel[data-sel="' + figSelPeek(S.page).indexOf(d.rect) + '"]');
     if (box) placeRect(box, d.rect, svgEl, host);
   });
