@@ -5,11 +5,11 @@
 // `initFigure` で注入された `render` (app.js) へ委譲する。
 // オーバーレイは SVG の外 (host 直下の div) に置くので、`bakeSvg` 相当の書き出しには
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
-// 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT` /
+// 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `placeRect` / `rectFromDrag` /
 // `resizeByCorner` / `CORNER_HANDLES_HTML`) は手順 3 の上書きオーバーレイ (`cover.js`) と
 // 共有するため `geometry.js` にある。
 import { esc } from "./dom.js";
-import { clientToPage, rectIoU, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
+import { clientToPage, rectIoU, copyRect, pageSizeOf, placeRect, rectFromDrag, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
 import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";
 
 var ui = { render: function () {} };
@@ -148,10 +148,8 @@ function installFigDrag(host) {
     var svgEl = host.querySelector("svg"); if (!svgEl) return;
     var a = clientToPage(svgEl, d.origin.x, d.origin.y);
     var b = clientToPage(svgEl, e.clientX, e.clientY);
-    var raw = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
-    var sz = pageSizeOf(svgEl);
-    var r = clampToPage(raw, sz.w, sz.h); // ページ外までドラッグしても採用矩形はページ内に収める
-    if (r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT) return;
+    var r = rectFromDrag(a, b, pageSizeOf(svgEl)); // ページ外までドラッグしても採用矩形はページ内に収める
+    if (!r) return;
     figSelOf(S.page).push(r);
     ui.render();
   });

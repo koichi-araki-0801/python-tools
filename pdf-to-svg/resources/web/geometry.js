@@ -45,6 +45,21 @@ export function pageSizeOf(svgEl) {
   return { w: vb.width, h: vb.height };
 }
 
+/** ドラッグの 2 点からページ内の矩形を作る。引いた向きを正規化し、ページ内へ収め、
+ *  収めた結果が `MIN_SIZE_PT` 未満なら `null`（誤クリックとして捨てる）。
+ *  ページ外まで引いた矩形をそのままサーバへ送ると、矩形をページ内で検査する RPC
+ *  (`addCover`) が拒否し、呼び出し側に受け止めが無いと利用者には何も起きないように見える。 */
+export function rectFromDrag(a, b, size) {
+  var raw = {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    w: Math.abs(a.x - b.x),
+    h: Math.abs(a.y - b.y),
+  };
+  var r = clampToPage(raw, size.w, size.h);
+  return r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT ? null : r;
+}
+
 /** 掴んだ角 `corner` を点 `p` へ動かしたときの矩形。反対の角は固定し、`MIN_SIZE_PT` より小さくしない。
  *  新しい矩形を返す純粋関数にしてあるのは、呼び出し側で同一性を保ちたい場合 (`figure.js` は
  *  採用矩形の箱を配列の同一性で引く) に `Object.assign` で受けられるようにするため。 */

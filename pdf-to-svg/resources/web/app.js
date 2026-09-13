@@ -5,7 +5,7 @@
 // Python バックエンド (`window.rpc`) に接続する。状態に依存しない純粋ヘルパは
 // `dom.js` / `geometry.js` が持つ (type="module" で読込)。
 import { esc, svg } from "./dom.js";
-import { clientToPage, parseSpec } from "./geometry.js";
+import { clientToPage, parseSpec, rectFromDrag, pageSizeOf } from "./geometry.js";
 import {
   S, counts, pass, initStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
@@ -520,10 +520,9 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       var svgEl = host.querySelector("svg"); if (!svgEl) return;
       var a = clientToPage(svgEl, d.origin.x, d.origin.y);
       var b = clientToPage(svgEl, e.clientX, e.clientY);
-      var x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-      var w = Math.abs(a.x - b.x), h = Math.abs(a.y - b.y);
-      if (w < 4 || h < 4) return;
-      var pg = S.PAGES[S.page]; var rect = { x: x, y: y, w: w, h: h };
+      var rect = rectFromDrag(a, b, pageSizeOf(svgEl));
+      if (!rect) return;
+      var pg = S.PAGES[S.page];
       if (d.mode === "border") {
         await rpc("addBorder", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, color: S.borderColor, width: S.borderWidth });
       } else if (d.mode === "cover") {

@@ -580,6 +580,31 @@ def test_manual_cover_tool_places_cover(e2e_page, ocr_layer_pdf):
     assert len(covers) == 1 and covers[0]["text"] == "手動語"
 
 
+def test_manual_cover_drag_past_the_page_edge_still_places_a_cover(e2e_page, ocr_layer_pdf):
+    """ページの端をまたいでドラッグしても上書きが置かれる (ページ内へ収める)。
+
+    収めずにサーバへ送ると `addCover` がページ外として拒否し、受け止めが無いため利用者には
+    成功も失敗も見えないまま何も起きない。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", "端")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    # ページ右下の外までドラッグする
+    page.mouse.move(box["x"] + 250 * sx, box["y"] + 150 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] + 120, box["y"] + box["height"] + 120, steps=5)
+    page.mouse.up()
+    covers = page.evaluate(
+        """async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers"""
+    )
+    assert len(covers) == 1
+    r = covers[0]["rect"]
+    assert r["x"] + r["w"] <= 300.5 and r["y"] + r["h"] <= 200.5
+
+
 def test_manual_cover_jitter_click_does_not_push_noop_undo(e2e_page, ocr_layer_pdf):
     """1px 程度のジッター付きクリックは `updateCover` の no-op を送らない。
 

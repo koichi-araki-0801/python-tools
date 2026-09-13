@@ -152,6 +152,31 @@ def test_resizebycorner_clamps_to_the_minimum_size(geo):
     }
 
 
+def test_rectfromdrag_clamps_to_the_page(geo):
+    """ページの外まで引いた矩形はページ内へ収まる。"""
+    assert js(geo, """window.__geo.rectFromDrag(
+        {x: 250, y: 150}, {x: 400, y: 300}, {w: 300, h: 200})""") == {
+        "x": 250, "y": 150, "w": 50, "h": 50,
+    }
+
+
+def test_rectfromdrag_normalizes_the_direction(geo):
+    """右下から左上へ引いても同じ矩形になる。"""
+    a = js(geo, "window.__geo.rectFromDrag({x: 10, y: 10}, {x: 60, y: 40}, {w: 300, h: 200})")
+    b = js(geo, "window.__geo.rectFromDrag({x: 60, y: 40}, {x: 10, y: 10}, {w: 300, h: 200})")
+    assert a == b == {"x": 10, "y": 10, "w": 50, "h": 30}
+
+
+def test_rectfromdrag_rejects_a_rect_below_the_minimum(geo):
+    """`MIN_SIZE_PT` 未満は誤クリックとみなして `null` を返す。"""
+    assert js(geo, "window.__geo.rectFromDrag({x: 10, y: 10}, {x: 12, y: 12}, {w: 300, h: 200})") is None
+
+
+def test_rectfromdrag_rejects_a_rect_clamped_below_the_minimum(geo):
+    """ページ外だけを引いた結果、収めると潰れる矩形も `null`。"""
+    assert js(geo, "window.__geo.rectFromDrag({x: 310, y: 10}, {x: 400, y: 40}, {w: 300, h: 200})") is None
+
+
 def test_corner_handles_html_has_four_corners(geo):
     assert js(geo, """(() => {
         const d = document.createElement("div");
