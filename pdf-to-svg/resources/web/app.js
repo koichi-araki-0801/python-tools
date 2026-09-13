@@ -523,12 +523,21 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       var rect = rectFromDrag(a, b, pageSizeOf(svgEl));
       if (!rect) return;
       var pg = S.PAGES[S.page];
-      if (d.mode === "border") {
-        await rpc("addBorder", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, color: S.borderColor, width: S.borderWidth });
-      } else if (d.mode === "cover") {
-        await rpc("addCover", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, text: S.coverText });
-      } else {
-        await rpc("deleteRegion", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect });
+      // `rectFromDrag` は 3 ツールとも同じ「ページ内へクランプした矩形」を渡す。crop
+      // (範囲削除) はページ外の矩形でも要素との交差判定にしか使わないので無害、border は
+      // 矩形自体が SVG に残るのでページ内へ収まっている方が正しい (cover は元々ページ内が
+      // サーバ検証の前提)。
+      try {
+        if (d.mode === "border") {
+          await rpc("addBorder", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, color: S.borderColor, width: S.borderWidth });
+        } else if (d.mode === "cover") {
+          await rpc("addCover", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect, text: S.coverText });
+        } else {
+          await rpc("deleteRegion", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, rect: rect });
+        }
+      } catch (err) {
+        toast(String((err && err.message) || "操作に失敗しました"));
+        return;
       }
       await afterEdit();
     });

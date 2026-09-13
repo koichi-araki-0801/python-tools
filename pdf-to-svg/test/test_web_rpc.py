@@ -276,6 +276,30 @@ def test_add_border(session):
     assert el.deleted is False and len(page.live_elements()) == before + 1
 
 
+@pytest.mark.parametrize("method", ["deleteRegion", "addBorder"])
+def test_rect_arg_rejects_non_finite_values(session, method):
+    """非有限の矩形はどの入口でも拒否する (`_fmt` が SVG へ書き込む値になる)。"""
+    args = {"fileIndex": 0, "pageInFile": 0, "rect": {"x": 0, "y": 0, "w": float("inf"), "h": 10}}
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, method, args)
+
+
+def test_delete_region_still_accepts_a_rect_past_the_page_edge(session):
+    """範囲削除はページの外まで引いた選択でも成立する (矩形は成果物に残らない)。"""
+    args = {"fileIndex": 0, "pageInFile": 0, "rect": {"x": 150, "y": 250, "w": 200, "h": 200}}
+    rpc_methods.dispatch(session, "deleteRegion", args)  # 例外が出ないこと
+
+
+def test_add_border_rejects_a_rect_past_the_page_edge(session):
+    """枠線は成果物に残るのでページ内を要求する。"""
+    args = {
+        "fileIndex": 0, "pageInFile": 0,
+        "rect": {"x": 150, "y": 250, "w": 200, "h": 200}, "color": "#000000", "width": 1,
+    }
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "addBorder", args)
+
+
 def test_dict_add_and_list(session):
     rpc_methods.dispatch(session, "dictAdd", {"source": "Q'ty", "target": "数量"})
     lst = rpc_methods.dispatch(session, "dictList", {})

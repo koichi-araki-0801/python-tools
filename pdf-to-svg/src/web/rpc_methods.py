@@ -153,11 +153,15 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
     }
 
 
-def _parse_rect_arg(args: dict, key: str, pg: Page) -> Optional[Rect]:
+def _parse_rect_arg(
+    args: dict, key: str, pg: Page, *, inside_page: bool = True
+) -> Optional[Rect]:
     """``args[key]`` の ``{x, y, w, h}`` をページ座標の矩形にする。無ければ None。
 
-    クライアントが送る値なので信用しない: 数値 4 つ・有限・非負・正の寸法・ページ内を
-    要求し、外れたら ``ValueError`` (ディスパッチャが ``{ok:false, error}`` にする)。
+    クライアントが送る値なので信用しない: 数値 4 つ・有限・正の寸法を常に要求し、
+    外れたら ``ValueError`` (ディスパッチャが ``{ok:false, error}`` にする)。
+    ``inside_page=False`` は矩形自体が成果物に残らない用途 (範囲削除の選択) のためで、
+    ページの外まで引いた選択も許す。
     """
     c = args.get(key)
     if c is None:
@@ -170,10 +174,13 @@ def _parse_rect_arg(args: dict, key: str, pg: Page) -> Optional[Rect]:
         raise ValueError(f"{key} must have numeric x, y, w, h") from exc
     if any(not math.isfinite(v) for v in (x, y, w, h)):
         raise ValueError(f"{key} must be finite")
-    if w <= 0 or h <= 0 or x < 0 or y < 0:
-        raise ValueError(f"{key} must be inside the page with positive size")
-    if x + w > pg.width_pt + 0.5 or y + h > pg.height_pt + 0.5:
-        raise ValueError(f"{key} must be inside the page")
+    if w <= 0 or h <= 0:
+        raise ValueError(f"{key} must have positive size")
+    if inside_page:
+        if x < 0 or y < 0:
+            raise ValueError(f"{key} must be inside the page with positive size")
+        if x + w > pg.width_pt + 0.5 or y + h > pg.height_pt + 0.5:
+            raise ValueError(f"{key} must be inside the page")
     return Rect(x, y, w, h)
 
 
@@ -447,8 +454,9 @@ def _bbox_hits(bbox: Rect, rect: Rect) -> bool:
 def rpc_deleteRegion(s: WebSession, args: dict) -> dict:
     """ドラッグした矩形に重なる live 要素をまとめて削除する (範囲削除)。"""
     pg = s.page(args["fileIndex"], args["pageInFile"])
-    r = args["rect"]
-    rect = Rect(float(r["x"]), float(r["y"]), float(r["w"]), float(r["h"]))
+    rect = _parse_rect_arg(args, "rect", pg, inside_page=False)
+    if rect is None:
+        raise ValueError("rect is required")
     els = [e for e in pg.live_elements() if _bbox_hits(e.bbox, rect)]
     if els:
         s.undo.push(DeleteCommand(els))
@@ -468,8 +476,9 @@ def rpc_removeFile(s: WebSession, args: dict) -> dict:
 def rpc_addBorder(s: WebSession, args: dict) -> dict:
     """ドラッグした矩形に塗りなしの枠線 (RectElement) を 1 つ追加する (Undo 可)。"""
     pg = s.page(args["fileIndex"], args["pageInFile"])
-    r = args["rect"]
-    rect = Rect(float(r["x"]), float(r["y"]), float(r["w"]), float(r["h"]))
+    rect = _parse_rect_arg(args, "rect", pg)
+    if rect is None:
+        raise ValueError("rect is required")
     # 外部由来の色は必ず ``sanitize_color`` を通す (入口)。出口の ``_paint`` にも同じ検証が
     # あるのは、入口だけだと別の入口が生えたときに漏れるため。``width`` も範囲を見る —
     # ``float()`` は ``inf`` / ``nan`` を通し、``_fmt`` がそれを書いて SVG が壊れる。
