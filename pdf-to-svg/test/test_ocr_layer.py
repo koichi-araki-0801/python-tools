@@ -190,3 +190,18 @@ def test_scanned_background_is_used_for_sampling(tmp_path):
     line = _line_with(svg, "見出し")
     assert 'fill="#0a141e"' in line.split("<text")[0]
     assert 'fill="#ffffff"' in line.split("<text")[1]
+
+
+def test_degraded_seqno_index_leaves_text_visible(ocr_layer_pdf, monkeypatch):
+    """索引が照合を諦めたら不可視の判定を与えない (可視側へ倒す)。
+
+    このとき OCR 文字は画像の字と二重に描かれる。望ましい状態ではないが、逆へ倒すと degraded
+    ページの文字がすべて不可視扱いになり白紙同然で書き出される。どちらへ倒れているかを固定する。
+    """
+    from engine import pdf_engine
+
+    monkeypatch.setattr(pdf_engine, "_SEQNO_MAX_CANDIDATES", 1)
+    pg = load_document(str(ocr_layer_pdf)).pages[0]
+    texts = _texts(pg)
+    assert set(texts) == {"Header Text", "Body line one", "visible text"}
+    assert all(not e.invisible for e in texts.values())

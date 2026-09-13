@@ -335,6 +335,8 @@ def _cover_sampler(
                 return cover.sample_colors(image_for(img.id, img.img_bytes, img.ext), r, el.bbox)
         bg = background
         if bg is not None:
+            # ラスタ背景は要素ではないので負のキーを使う (要素 id は `model/elements.py` の
+            # `itertools.count(1)` で必ず 1 以上になり、負の値と衝突しない)。
             return cover.sample_colors(image_for(-1, bg.png_bytes, "png"), bg.rect, el.bbox)
         return cover.sample_colors(None, el.bbox, el.bbox)
 

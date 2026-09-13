@@ -183,3 +183,44 @@ def test_mostly_transparent_image_samples_white_background():
     c = cover.sample_colors(im, Rect(0, 0, 8, 8), Rect(0, 0, 8, 8))
     assert c.background == "#ffffff"
     assert c.fallback is False
+
+
+def test_grayscale_output_is_la_and_composites_to_white():
+    """`to_gray_image` は透明を持つ画像を `LA` で返す。グレー書き出しの採色はこの分岐を通る。"""
+    from export.grayscale import to_gray_image
+
+    src = _png(_rgba(8, 8, (200, 30, 30), alpha_box=(0, 0, 3, 3)))
+    gray_bytes, gray_ext = to_gray_image(src, "png")
+    with Image.open(io.BytesIO(gray_bytes)) as g:
+        assert g.mode == "LA"
+    im = cover.decode_image(gray_bytes, gray_ext)
+    assert im is not None and im.mode == "RGB"
+    assert im.getpixel((7, 7)) == (255, 255, 255)   # 透明部分 → 白
+    assert im.getpixel((0, 0)) != (255, 255, 255)   # 不透明部分 → 灰色が残る
+
+
+def test_palette_transparency_composites_to_white():
+    """透過色を持つパレット画像も白へ合成する (`P` + `transparency`)。"""
+    im = Image.new("P", (8, 8), 0)
+    im.putpalette([255, 0, 0] + [0, 0, 0] * 255)
+    im.info["transparency"] = 0
+    decoded = cover.decode_image(_png(im), "png")
+    assert decoded is not None
+    assert decoded.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_alpha_predicate_matches_grayscale():
+    """採色側とグレー化側の「透明を持つか」の判定は同じでなければならない。
+
+    `cover.decode_image` と `grayscale.to_gray_image` は同じ条件式を別々に持つ。片方だけ形式を
+    足すと、グレー化が `LA` を返すのに採色が合成しない (またはその逆) の食い違いが起きる。
+    """
+    import inspect
+
+    from export import grayscale
+
+    modes = ("RGBA", "LA", "PA")
+    for src in (inspect.getsource(cover.decode_image), inspect.getsource(grayscale.to_gray_image)):
+        for mode in modes:
+            assert f'"{mode}"' in src
+        assert '"transparency" in im.info' in src
