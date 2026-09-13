@@ -47,6 +47,17 @@ def _page_of(width_pt: float, height_pt: float):
 
 # ── ラスタ化のピクセル予算 ────────────────────────────────────────────
 
+def test_raster_and_gray_pixel_caps_stay_equal():
+    """`pdf_engine` と `grayscale` の画素上限は対で保守する。
+
+    `pdf_engine` は `fitz` を import するため `grayscale` から読めず、値を複製している。
+    複製が正しい形なので、ずれていないことを検査で守る。
+    """
+    from export.grayscale import MAX_GRAY_IMAGE_PIXELS
+
+    assert MAX_RASTER_PIXELS == MAX_GRAY_IMAGE_PIXELS
+
+
 def test_huge_mediabox_is_rendered_within_the_pixel_budget():
     """20000x20000 pt の PDF は実体 3.6KB で 4.8 GB を確保し 36〜42 秒かかっていた。
 

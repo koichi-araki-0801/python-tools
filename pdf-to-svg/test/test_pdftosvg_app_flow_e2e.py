@@ -78,6 +78,19 @@ def reset_session(page):
     }""")
 
 
+def _adopted_rect(page, index=0):
+    """手順 4 で採用している矩形をモデル側から読む (表示の箱ではなく `S.figSel` が正)。"""
+    return page.evaluate(
+        """(i) => {
+            const S = window.__state; const pg = S.PAGES[S.page]; if (!pg) return null;
+            const sel = S.figSel[pg.fileIndex + ":" + pg.pageInFile];
+            const r = sel && sel[i];
+            return r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+        }""",
+        index,
+    )
+
+
 def test_four_step_flow(e2e_page):
     page = e2e_page
     page.goto(f"/?token={TOKEN}")
@@ -400,28 +413,14 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
 
     # 採用済みを角ハンドルで伸縮しても元候補は再出現しない (二重書き出しの防止)
     # 伸縮が実際に効いていることを確かめるため、矩形の寸法が変わったか検証する
-    rect_before = page.evaluate("""() => {
-        const S = window.__state;
-        const pg = S.PAGES[S.page];
-        if (!pg) return null;
-        const key = pg.fileIndex + ":" + pg.pageInFile;
-        const sel = S.figSel[key];
-        return sel && sel[0] ? { w: sel[0].w, h: sel[0].h } : null;
-    }""")
+    rect_before = _adopted_rect(page)
     handle = page.locator("#fig-stage .fig-cand.sel .h.se")
     box = handle.bounding_box()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
     page.mouse.down()
     page.mouse.move(box["x"] + 30, box["y"] + 30, steps=5)
     page.mouse.up()
-    rect_after = page.evaluate("""() => {
-        const S = window.__state;
-        const pg = S.PAGES[S.page];
-        if (!pg) return null;
-        const key = pg.fileIndex + ":" + pg.pageInFile;
-        const sel = S.figSel[key];
-        return sel && sel[0] ? { w: sel[0].w, h: sel[0].h } : null;
-    }""")
+    rect_after = _adopted_rect(page)
     # 南東を 30px ずつ移動したら、幅と高さが増えているはず
     assert rect_before is not None and rect_after is not None
     assert rect_after["w"] > rect_before["w"], f"幅が増えていない: {rect_before['w']} → {rect_after['w']}"
