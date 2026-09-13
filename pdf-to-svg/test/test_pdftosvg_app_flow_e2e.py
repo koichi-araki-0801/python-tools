@@ -596,6 +596,9 @@ def test_manual_cover_drag_past_the_page_edge_still_places_a_cover(e2e_page, ocr
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] + 120, box["y"] + box["height"] + 120, steps=5)
     page.mouse.up()
+    # オーバーレイの描画を待ってから RPC を読む。addCover → 再描画の連鎖が終わる前に
+    # 評価すると、次のテストの遷移がこの連鎖を途中で断ち切ってしまう。
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(1)
     covers = page.evaluate(
         """async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers"""
     )
