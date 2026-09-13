@@ -6,10 +6,10 @@
 // オーバーレイは SVG の外 (host 直下の div) に置くので、`bakeSvg` 相当の書き出しには
 // 混ざらない (書き出しはサーバの `exportSvg` が clip を受けて別生成する)。
 // 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `placeRect` / `rectFromDrag` /
-// `resizeByCorner` / `CORNER_HANDLES_HTML`) は手順 3 の上書きオーバーレイ (`cover.js`) と
+// `resizeFromPointer` / `CORNER_HANDLES_HTML`) は手順 3 の上書きオーバーレイ (`cover.js`) と
 // 共有するため `geometry.js` にある。
 import { esc } from "./dom.js";
-import { clientToPage, rectIoU, copyRect, pageSizeOf, placeRect, rectFromDrag, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
+import { clientToPage, rectIoU, copyRect, pageSizeOf, placeRect, rectFromDrag, resizeFromPointer, CORNER_HANDLES_HTML } from "./geometry.js";
 import { S, figKey, figSelOf, figSelPeek, figCount, adoptedFigures } from "./state.js";
 
 var ui = { render: function () {} };
@@ -98,7 +98,7 @@ function drawFigOverlay(host) {
     box.querySelectorAll(".h").forEach(function (h) {
       h.addEventListener("mousedown", function (e) {
         e.stopPropagation(); e.preventDefault();
-        S.figDrag = { mode: "resize", rect: r, corner: h.dataset.corner, orig: copyRect(r) };
+        S.figDrag = { mode: "resize", index: i, corner: h.dataset.corner, orig: copyRect(r) };
       });
     });
     box.addEventListener("click", function (e) { e.stopPropagation(); });
@@ -129,16 +129,11 @@ function installFigDrag(host) {
       d.rubber.style.width = (x2 - x1) + "px"; d.rubber.style.height = (y2 - y1) + "px";
       return;
     }
-    // resize: 掴んだ角を動かし、反対の角は固定する。動かす側の点はページ内へクランプする
-    // (clientToPage はページの外へも線形に外挿するため、そのままだとサーバの clip 検証に落ちる)。
-    var p = clientToPage(svgEl, e.clientX, e.clientY);
-    var sz = pageSizeOf(svgEl);
-    p.x = Math.max(0, Math.min(p.x, sz.w));
-    p.y = Math.max(0, Math.min(p.y, sz.h));
-    // `d.rect` は採用矩形そのもの (`figSelPeek` が同一性で箱を引く) なので、置き換えず中身を書く。
-    Object.assign(d.rect, resizeByCorner(d.orig, d.corner, p));
-    var box = host.querySelector('.fig-cand.sel[data-sel="' + figSelPeek(S.page).indexOf(d.rect) + '"]');
-    if (box) placeRect(box, d.rect, svgEl, host);
+    // resize: 掴んだ角を動かし、反対の角は固定する
+    var rect = resizeFromPointer(svgEl, d, e.clientX, e.clientY);
+    figSelOf(S.page)[d.index] = rect;
+    var box = host.querySelector('.fig-cand.sel[data-sel="' + d.index + '"]');
+    if (box) placeRect(box, rect, svgEl, host);
   });
   window.addEventListener("mouseup", function (e) {
     var d = S.figDrag; if (!d) return;

@@ -60,9 +60,7 @@ export function rectFromDrag(a, b, size) {
   return r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT ? null : r;
 }
 
-/** 掴んだ角 `corner` を点 `p` へ動かしたときの矩形。反対の角は固定し、`MIN_SIZE_PT` より小さくしない。
- *  新しい矩形を返す純粋関数にしてあるのは、呼び出し側で同一性を保ちたい場合 (`figure.js` は
- *  採用矩形の箱を配列の同一性で引く) に `Object.assign` で受けられるようにするため。 */
+/** 掴んだ角 `corner` を点 `p` へ動かしたときの矩形。反対の角は固定し、`MIN_SIZE_PT` より小さくしない。 */
 export function resizeByCorner(orig, corner, p) {
   var left = corner.indexOf("w") >= 0 ? p.x : orig.x;
   var right = corner.indexOf("e") >= 0 ? p.x : orig.x + orig.w;
@@ -74,6 +72,16 @@ export function resizeByCorner(orig, corner, p) {
     w: Math.max(MIN_SIZE_PT, Math.abs(right - left)),
     h: Math.max(MIN_SIZE_PT, Math.abs(bottom - top)),
   };
+}
+
+/** 角ハンドルのドラッグ中に、掴んだ点から新しい矩形を出す。点はページ内へ収める
+ *  (`clientToPage` はページの外へも線形に外挿するため、そのまま使うと枠外の矩形になる)。 */
+export function resizeFromPointer(svgEl, drag, clientX, clientY) {
+  var p = clientToPage(svgEl, clientX, clientY);
+  var sz = pageSizeOf(svgEl);
+  p.x = Math.max(0, Math.min(p.x, sz.w));
+  p.y = Math.max(0, Math.min(p.y, sz.h));
+  return resizeByCorner(drag.orig, drag.corner, p);
 }
 
 // 角ハンドル 4 つのマークアップ。伸縮の当たり判定は `.h` の `data-corner` で拾う。

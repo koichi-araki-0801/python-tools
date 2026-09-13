@@ -4,9 +4,9 @@
 // 置いた上書きは `coverList` RPC が返す矩形をモデルの正として HTML の箱で重ね、ドラッグ中は
 // 箱だけを動かし、mouseup の 1 回だけ `updateCover` を送る (`figure.js` の採用矩形と同じ流儀)。
 // 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT` /
-// `resizeByCorner` / `CORNER_HANDLES_HTML`) は手順 4 の採用矩形と同じ流儀なので `geometry.js`
+// `resizeFromPointer` / `CORNER_HANDLES_HTML`) は手順 4 の採用矩形と同じ流儀なので `geometry.js`
 // から共有して読む。
-import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeByCorner, CORNER_HANDLES_HTML } from "./geometry.js";
+import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeFromPointer, CORNER_HANDLES_HTML } from "./geometry.js";
 import { S } from "./state.js";
 
 let ui = null; // { rpc, afterEdit, pageOf } を app.js が注入する
@@ -91,9 +91,7 @@ function installCoverDrag(host) {
       moved.y = Math.max(0, Math.min(moved.y, sz.h - moved.h));
       d.rect = moved;
     } else {
-      var p = clientToPage(svgEl, e.clientX, e.clientY);
-      p.x = Math.max(0, Math.min(p.x, sz.w)); p.y = Math.max(0, Math.min(p.y, sz.h));
-      d.rect = resizeByCorner(d.orig, d.corner, p);
+      d.rect = resizeFromPointer(svgEl, d, e.clientX, e.clientY);
     }
     placeRect(d.box, d.rect, svgEl, host);
   });
