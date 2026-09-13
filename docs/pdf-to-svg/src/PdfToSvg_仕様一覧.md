@@ -108,7 +108,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 18 | `test_cover.py` | 量子化16階調での最頻色/次点色の決定性、代表色は箱の平均値、`MIN_CONTRAST`未満での黒/白への倒し、bboxの画像範囲へのクランプ、`MAX_COVER_IMAGE_PIXELS`超過・壊れた画像の`None`化 | `cover.py`の採色ロジックが正しい | 未 |
 | 19 | `test_pdftosvg_app_flow_e2e.py::test_ocr_layer_upload_notifies` | 画像+不可視OCR文字層のPDFアップロード時のトースト通知（E2E） | 検出ページ数が通知される | 未 |
 | 20 | `test_pdftosvg_app_flow_e2e.py::test_manual_cover_tool_places_cover` ほか | 「上書き」ツールでのドラッグ配置、角ハンドルでの伸縮、置換語の変更（選択中の編集が次の上書きへ漏れないこと含む）、Undoでの巻き戻し（E2E） | 手動の上書きの配置・編集が正しく反映される | 未 |
-| 21 | `test_ocr_layer.py::test_grayscale_cover_matches_the_grayscaled_image` | グレー書き出しの上書き矩形の色が、書き出しに乗るグレー化後の画像から採った色と一致する（元のカラー画像から採らない） | 採色元と書き出し画像の色が一致 | 未 |
+| 21 | `test_ocr_layer.py::test_grayscale_cover_matches_the_grayscaled_image` ほか | グレー書き出しの上書き矩形の色が、書き出しに乗るグレー化後の画像から採った色と一致する（元のカラー画像から採らない）、カラー書き出しの採色は従来どおり元画像から採ったまま変わらない（`test_color_cover_is_unchanged_by_the_grayscale_fix`） | 採色元と書き出し画像の色が一致 | 未 |
 | 22 | `test_cover.py::test_transparent_pixels_composite_onto_white` ほか | 透過を持つ画像（RGBA等）はRGB化の前に白へ合成してから採色する（透明画素が黒い当て板にならない） | 透明部分は白として採る | 未 |
 | 23 | `test_web_rpc.py::test_update_cover_rejects_a_deleted_cover` | 削除済みの上書き要素に対する`updateCover`が例外で拒否される | 削除済み要素を書き換えない | 未 |
 | 24 | `test_pdftosvg_geometry_js.py` | `figure.js`から`geometry.js`へ移した矩形ヘルパ（`copyRect`/`clampToPage`/`MIN_SIZE_PT`/`pageSizeOf`）の単体 | 移動後も挙動が変わらない | 未 |
