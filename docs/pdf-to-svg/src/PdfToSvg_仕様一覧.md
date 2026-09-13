@@ -112,3 +112,6 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 22 | `test_cover.py::test_transparent_pixels_composite_onto_white` ほか | 透過を持つ画像（RGBA等）はRGB化の前に白へ合成してから採色する（透明画素が黒い当て板にならない） | 透明部分は白として採る | 未 |
 | 23 | `test_web_rpc.py::test_update_cover_rejects_a_deleted_cover` | 削除済みの上書き要素に対する`updateCover`が例外で拒否される | 削除済み要素を書き換えない | 未 |
 | 24 | `test_pdftosvg_geometry_js.py` | `figure.js`から`geometry.js`へ移した矩形ヘルパ（`copyRect`/`clampToPage`/`MIN_SIZE_PT`/`pageSizeOf`）の単体 | 移動後も挙動が変わらない | 未 |
+| 25 | `test_cover.py::test_grayscale_output_is_la_and_composites_to_white` ほか | グレー化後の`LA`画像・透過付きパレット画像（`P`+`transparency`）も白へ合成すること、`cover.decode_image`と`grayscale.to_gray_image`の透明判定条件式が一致すること（片方だけ形式を足す食い違いの検出） | 他形式の透明も白へ合成され、両者の判定が食い違わない | 未 |
+| 26 | `test_ocr_layer.py::test_degraded_seqno_index_leaves_text_visible` | seqno索引が候補数上限で照合を諦めた（`degraded`）ページで、文字に不可視判定を与えないこと | 索引degrade時も文字が可視のまま抽出される | 未 |
+| 27 | `test_pdftosvg_geometry_js.py::test_resizebycorner_*` ほか、`test_pdftosvg_app_flow_e2e.py::test_gray_figure_flow` | 角ハンドルの伸縮計算`resizeByCorner`（掴んだ角の移動・反対角の固定・反対辺を越えた入替・`MIN_SIZE_PT`未満へのクランプ）とハンドルのマークアップ`CORNER_HANDLES_HTML`の単体、手順4での伸縮操作が実際に矩形の幅・高さへ反映されること（E2E） | 伸縮計算が正しく、画面上の伸縮にも反映される | 未 |
