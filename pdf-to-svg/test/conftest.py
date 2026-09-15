@@ -108,15 +108,9 @@ def clipped_image_pdf() -> Path:
     return path
 
 
-@pytest.fixture(scope="session")
-def ocr_layer_pdf() -> Path:
-    """全面画像 + 不可視 (render_mode=3) の OCR 文字層を持つ「検索可能 PDF」風の PDF。
-
-    画像は上 40pt が帯色 (200, 220, 240)・下が白。不可視文字は帯の上と白地の上に 1 行ずつ、
-    可視文字を 1 行置く (不可視判定が可視文字を巻き込まないことの対照)。
-    """
+def _build_ocr_layer_pdf(path: Path, page_count: int) -> Path:
+    """`ocr_layer_pdf` と同じ内容のページを `page_count` 枚並べた PDF を書き出す。"""
     FIXTURES.mkdir(exist_ok=True)
-    path = FIXTURES / "ocr_layer_sample.pdf"
     img = Image.new("RGB", (600, 400), (255, 255, 255))
     for y in range(0, 80):
         for x in range(600):
@@ -124,14 +118,34 @@ def ocr_layer_pdf() -> Path:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     doc = fitz.open()
-    page = doc.new_page(width=300, height=200)
-    page.insert_image(page.rect, stream=buf.getvalue())
-    page.insert_text((20, 30), "Header Text", fontsize=12, render_mode=3)
-    page.insert_text((20, 120), "Body line one", fontsize=12, render_mode=3)
-    page.insert_text((20, 150), "visible text", fontsize=12, render_mode=0)
+    for _ in range(page_count):
+        page = doc.new_page(width=300, height=200)
+        page.insert_image(page.rect, stream=buf.getvalue())
+        page.insert_text((20, 30), "Header Text", fontsize=12, render_mode=3)
+        page.insert_text((20, 120), "Body line one", fontsize=12, render_mode=3)
+        page.insert_text((20, 150), "visible text", fontsize=12, render_mode=0)
     doc.save(str(path))
     doc.close()
     return path
+
+
+@pytest.fixture(scope="session")
+def ocr_layer_pdf() -> Path:
+    """全面画像 + 不可視 (render_mode=3) の OCR 文字層を持つ「検索可能 PDF」風の PDF。
+
+    画像は上 40pt が帯色 (200, 220, 240)・下が白。不可視文字は帯の上と白地の上に 1 行ずつ、
+    可視文字を 1 行置く (不可視判定が可視文字を巻き込まないことの対照)。
+    """
+    return _build_ocr_layer_pdf(FIXTURES / "ocr_layer_sample.pdf", 1)
+
+
+@pytest.fixture(scope="session")
+def ocr_layer_two_page_pdf() -> Path:
+    """`ocr_layer_pdf` と同じページを 2 枚並べた PDF。
+
+    手順を行き来したあとも表示中のページが保たれることを確かめるには、先頭以外のページが要る。
+    """
+    return _build_ocr_layer_pdf(FIXTURES / "ocr_layer_two_page_sample.pdf", 2)
 
 
 # ── JS 単体・E2E 移植用ハーネス（設計書 §4.2。graph-editor 側フェーズ 3 がコピーして流用）──

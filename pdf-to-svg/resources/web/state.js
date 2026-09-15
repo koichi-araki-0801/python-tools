@@ -178,9 +178,23 @@ function phaseBeforeExport() { return S.gray ? 1 : 3; }
 /** ステップバーのクリックで移ってよい手順か */
 function stepAllowed(n) { return !S.gray || n === 1 || n === 4; }
 
+/** 手順を移るときに、手順 3 の編集で使う一時状態を既定へ戻す。再描画は呼び出し側。
+ *
+ * 対象は要素の選択 (青枠)・上書きの選択 (緑枠)・ツールの 3 つ。手順をまたいで残すと、戻った直後の
+ * クリックが残っていた選択を外して「削除」が効かなくなり、ツールも「上書き」や「範囲削除」のまま
+ * 始まってしまう。手順を移る経路 (「次へ」・「戻る」・ステップバー・未確認ガード) はすべてここを通す。
+ * 表示中のページ (`S.page`) はここでは触らない (戻ったときに見ていたページを保つため)。
+ */
+function resetPhaseUi() {
+  S.elSel = {};
+  S.coverSel = null;
+  S.tool = "select";
+}
+
 /** 手順を 1 つ進める (2→3 / 3→4)。ガード解除・選択クリアも行う。再描画は呼び出し側 */
 function advancePhase() {
   S.guarding = false;
+  resetPhaseUi();
   if (S.phase === 2) { S.phase = 3; S.page = 0; } else if (S.phase === 3) S.phase = 4;
   clearSel();
 }
@@ -272,6 +286,6 @@ export {
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
-  applyState, invalidateAll, nextPending, firstPending, advancePhase,
+  applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };

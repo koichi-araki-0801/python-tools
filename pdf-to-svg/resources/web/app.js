@@ -9,7 +9,7 @@ import { clientToPage, parseSpec, rectFromDrag, pageSizeOf } from "./geometry.js
 import {
   S, counts, pass, initStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
-  applyState, invalidateAll, nextPending, firstPending, advancePhase,
+  applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   phaseAfterLoad, phaseBeforeExport, stepAllowed,
@@ -825,6 +825,8 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       ed3.classList.toggle("tool-select", S.tool === "select");
       ed3.classList.toggle("tool-border", S.tool === "border");
       ed3.classList.toggle("tool-cover", S.tool === "cover");
+      // 押下表示は `S.tool` から毎回付け直す (手順の移動で `resetPhaseUi` がツールを戻す経路もあるため)
+      app.querySelectorAll(".float-tools [data-tool]").forEach(function (x) { x.setAttribute("aria-pressed", x.dataset.tool === S.tool ? "true" : "false"); });
       var bo = document.getElementById("border-opts");
       if (bo) bo.hidden = S.tool !== "border";
       var co = document.getElementById("cover-opts");
@@ -857,7 +859,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
   function tryNext() {
     if (S.phase === 1) {
       if (!S.TOTAL) return;
-      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; render();
+      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi(); render();
       if (S.gray) prefetchFigCand();
       return;
     }
@@ -867,9 +869,12 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       advancePhase(); render();
     }
   }
+  // 戻るときは表示中のページ (`S.page`) を保つ。手順 4 で気付いた直しへそのページのまま戻れるようにするため
+  // (ページ番号は全手順で共通の通し index なので、そのまま引き継げる)。
   function back() {
     S.guarding = false;
-    if (S.phase === 2) S.phase = 1; else if (S.phase === 3) { S.phase = 2; S.page = 0; } else if (S.phase === 4) { S.phase = phaseBeforeExport(); S.page = 0; }
+    resetPhaseUi();
+    if (S.phase === 2) S.phase = 1; else if (S.phase === 3) S.phase = 2; else if (S.phase === 4) S.phase = phaseBeforeExport();
     render();
   }
 
@@ -951,7 +956,9 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {
         var n = +st.dataset.step; if (n > S.phase || !S.TOTAL || !stepAllowed(n)) return;
-        S.guarding = false; S.phase = n; if (n === 2 || n === 3) S.page = 0; clearSel(); render();
+        // `back` と同じく表示中のページを保つ。今いる手順を押しただけなら編集中の選択・ツールは残す
+        if (n !== S.phase) resetPhaseUi();
+        S.guarding = false; S.phase = n; clearSel(); render();
       });
     });
   }
@@ -965,8 +972,10 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
     app.querySelectorAll(".float-tools [data-tool]").forEach(function (b) {
       b.addEventListener("click", function () {
         S.tool = b.dataset.tool;
-        clearCoverSel(); // ツールを離れたら上書きの選択を解く
-        app.querySelectorAll(".float-tools [data-tool]").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+        // ツールを離れたら要素の選択 (青枠) と上書きの選択 (緑枠) を両方解く。残すと 2 つの枠が同時に出て、
+        // 「削除」が画面で選んだつもりの無い側まで消す
+        S.elSel = {};
+        clearCoverSel();
         render();
       });
     });
@@ -986,7 +995,11 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
     coverInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
     document.getElementById("btn-deletesel").addEventListener("click", async function () {
       var pg = S.PAGES[S.page]; if (!pg) return;
-      var ids = Object.keys(curElSel()); if (!ids.length) return;
+      var ids = Object.keys(curElSel());
+      // 上書きツールで選んだ上書き (緑枠) も同じ削除経路へ載せる。ツールを切り替えると要素の選択は解けるため、
+      // 実際に入るのはどちらか片方だけ
+      if (S.coverSel !== null && ids.indexOf(String(S.coverSel)) < 0) ids.push(String(S.coverSel));
+      if (!ids.length) return;
       await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: ids }); await afterEdit();
     });
   }

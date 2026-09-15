@@ -711,3 +711,99 @@ def test_manual_cover_selected_edit_does_not_leak_into_next_word(e2e_page, ocr_l
     expect(page.locator("#trim-stage .cover-box")).to_have_count(2)
     texts = page.evaluate("""async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers.map(c => c.text)""")
     assert sorted(texts) == sorted(["選択中に編集した語", "次語"])
+
+
+def _place_cover(page, word):
+    """上書きツールでページ座標 (20,110)-(120,135) へ上書きを 1 つ置く。"""
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", word)
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(1)
+
+
+def _select_visible_text(page):
+    """選択ツールで可視文字を 1 つ選び、青枠 (`.sel-box`) が付くまで待つ。"""
+    page.click('[data-tool="select"]')
+    page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
+
+
+def _open_second_page_in_step3(page, pdf_path):
+    """手順 3 で 2 ページ目を開く。変更の無いページは既定の絞り込み「要確認」に出ないため「すべて」へ切り替える。"""
+    _goto_step3(page, pdf_path)
+    page.select_option("#pagenav-3 .pl-filter", "all")
+    page.click('#pagenav-3 .pg-row2[data-g="1"]')
+    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+
+
+def _advance_step3_to_step4(page):
+    """手順 3 から 4 へ進む。OCR 文字層のページは手順 3 で要確認になるため、未確認ガードをスキップで抜ける。"""
+    page.click("#btn-next")
+    expect(page.locator("#guard")).to_be_visible()
+    page.click("#guard-skip")
+    expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
+
+
+def test_manual_cover_delete_button_removes_cover_selected_with_cover_tool(e2e_page, ocr_layer_pdf):
+    """上書きツールのままクリックで選んだ上書きを、「削除」ボタンで消せる。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_cover(page, "消す語")
+    page.locator("#trim-stage .cover-box").click()
+    expect(page.locator("#trim-stage .cover-box.sel")).to_have_count(1)
+    page.click("#btn-deletesel")
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(0)
+    covers = page.evaluate("""async () => (await window.rpc("coverList", { fileIndex: 0, pageInFile: 0 })).covers""")
+    assert covers == []
+
+
+def test_switching_tool_clears_element_selection(e2e_page, ocr_layer_pdf):
+    """ツールを切り替えると青枠の選択が解け、上書きの緑枠と同時に残らない。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _select_visible_text(page)
+    page.click('[data-tool="cover"]')
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(0)
+    assert page.evaluate("() => Object.keys(window.__state.elSel['0:0'] || {}).length") == 0
+
+
+def test_back_from_step4_keeps_page_and_clears_selection(e2e_page, ocr_layer_two_page_pdf):
+    """「戻る」で手順 4 から 3 へ戻ると、見ていたページのまま選択が解けている。"""
+    page = e2e_page
+    _open_second_page_in_step3(page, ocr_layer_two_page_pdf)
+    _select_visible_text(page)
+    _advance_step3_to_step4(page)
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+    expect(page.locator("#trim-stage svg")).to_be_visible()
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(0)
+
+
+def test_stepbar_back_to_step3_keeps_page_and_resets_tool(e2e_page, ocr_layer_two_page_pdf):
+    """ステップバーで手順 4 から 3 へ戻ると、見ていたページのままツールが「選択」へ戻る。"""
+    page = e2e_page
+    _open_second_page_in_step3(page, ocr_layer_two_page_pdf)
+    page.click('[data-tool="cover"]')
+    expect(page.locator("#cover-opts")).to_be_visible()
+    _advance_step3_to_step4(page)
+    page.click('#stepbar .step[data-step="3"]')
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+    expect(page.locator('[data-tool="select"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('[data-tool="cover"]')).to_have_attribute("aria-pressed", "false")
+    expect(page.locator("#cover-opts")).to_be_hidden()
+
+
+def test_back_from_step3_to_step2_keeps_page(e2e_page, ocr_layer_two_page_pdf):
+    """「戻る」で手順 3 から 2 へ戻っても、見ていたページのまま。"""
+    page = e2e_page
+    _open_second_page_in_step3(page, ocr_layer_two_page_pdf)
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#pgnav-2")).to_contain_text("2 ページ")

@@ -27,6 +27,7 @@ window.__reset = () => {
   m.S.selFor = { 2: {}, 3: {} };
   m.S.expMode = "all"; m.S.expFile = 0;
   m.S.gray = false; m.S.figCand = {}; m.S.figSel = {};
+  m.S.tool = "select"; m.S.coverSel = null; m.S.elSel = {};
 };
 """
 
@@ -250,6 +251,27 @@ def test_transition_advancephase_moves_2_to_3_to_4_and_clears_guard_and_target_s
     js(st, "window.__st.advancePhase()")
     assert js(st, "window.__st.S.phase") == 4
 
+
+def test_transition_resetphaseui_clears_element_and_cover_selection_and_tool(st):
+    js(st, "window.__st.S.elSel = { '0:0': { e1: true } }")
+    js(st, "window.__st.S.coverSel = 'c1'")
+    js(st, "window.__st.S.tool = 'cover'")
+    js(st, "window.__st.resetPhaseUi()")
+    assert js(st, "window.__st.S.elSel") == {}
+    assert js(st, "window.__st.S.coverSel") is None
+    assert js(st, "window.__st.S.tool") == "select"
+
+
+def test_transition_advancephase_resets_selection_and_tool(st):
+    js(st, "window.__st.S.phase = 3")
+    js(st, "window.__st.S.elSel = { '0:0': { e1: true } }")
+    js(st, "window.__st.S.coverSel = 'c1'")
+    js(st, "window.__st.S.tool = 'crop'")
+    js(st, "window.__st.advancePhase()")
+    assert js(st, "window.__st.S.phase") == 4
+    assert js(st, "window.__st.S.elSel") == {}
+    assert js(st, "window.__st.S.coverSel") is None
+    assert js(st, "window.__st.S.tool") == "select"
 
 # ── 書き出し範囲 ──
 
