@@ -488,7 +488,8 @@ def rpc_addBorder(s: WebSession, args: dict) -> dict:
         raise ValueError(f"width must be a finite number in (0, 100]: {width!r}")
     z = max((e.z for e in pg.elements), default=0) + 1
     el = RectElement(
-        bbox=rect, z=z, rect=rect, stroke=color, fill=None, stroke_width=width
+        bbox=rect, z=z, rect=rect, stroke=color, fill=None, stroke_width=width,
+        manual_border=True,
     )
     s.undo.push(AddElementCommand(pg, el))
     return {}

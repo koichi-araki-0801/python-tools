@@ -193,6 +193,10 @@ class RectElement(Element):
     stroke: Optional[str] = "#000000"
     fill: Optional[str] = None
     stroke_width: float = 1.0
+    # 利用者が手順 3 の「枠線」ツールで置いた要素。後から選んで動かす・太さを変える
+    # 対象をこれで特定する (PDF 由来の矩形は False のまま = 後編集の対象にしない)。
+    # 手動の上書き (`TextElement.manual_cover`) と同じ流儀。
+    manual_border: bool = False
 
 
 @dataclass

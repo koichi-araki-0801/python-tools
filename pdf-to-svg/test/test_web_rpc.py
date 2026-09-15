@@ -276,6 +276,18 @@ def test_add_border(session):
     assert el.deleted is False and len(page.live_elements()) == before + 1
 
 
+def test_add_border_marks_the_element_as_a_manual_border(session):
+    """枠線ツールで置いた矩形だけに「利用者が置いた」印が付く (PDF 由来の矩形には付かない)。"""
+    page = session.page(0, 0)
+    pdf_rects = [e for e in page.elements if e.kind == "rect"]
+    assert all(getattr(e, "manual_border", False) is False for e in pdf_rects)
+    rpc_methods.dispatch(session, "addBorder",
+                         {"fileIndex": 0, "pageInFile": 0,
+                          "rect": {"x": 5, "y": 5, "w": 100, "h": 80},
+                          "color": "#ff0000", "width": 2})
+    assert page.elements[-1].manual_border is True
+
+
 @pytest.mark.parametrize("method", ["deleteRegion", "addBorder"])
 def test_rect_arg_rejects_non_finite_values(session, method):
     """非有限の矩形はどの入口でも拒否する (`_fmt` が SVG へ書き込む値になる)。"""
