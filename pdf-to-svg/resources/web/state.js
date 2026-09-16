@@ -30,8 +30,10 @@ var S = {
   elSel: {},            // "fi:pi" -> {elId:true} (要素選択)
   svgCache: {},         // "fi:pi" -> {svg,width,height}
   zoomFor: { 2: 1, 3: 1, 4: 1 },        // 手順2/3/4 のキャンバス内ズーム倍率
-  borderColor: "#000000",       // 枠線ツールの色
-  borderWidth: 1,       // 枠線ツールの太さ (pt)
+  borderColor: "#000000",       // 枠線ツールの色 (未選択のとき = 次に置く枠線の色)
+  borderWidth: 1,       // 枠線ツールの太さ (pt。未選択のとき = 次に置く枠線の太さ)
+  borderSel: null,      // 枠線ツールで選んでいる要素 id (null = 未選択。入力欄は次に置く値)
+  borderDrag: null,     // 枠線の移動・伸縮中の状態 (`border.js` が使う)
   expMode: "all",       // 書き出しモード: page/all/noskip/spec
   expFile: 0,           // spec モードの対象ファイル
   lastChanges: [],       // 直近の `planPage` 結果 (`renderConfirm` と SVG 差替え後の再描画で共有)
@@ -180,7 +182,7 @@ function stepAllowed(n) { return !S.gray || n === 1 || n === 4; }
 
 /** 手順を移るときに、手順 3 の編集で使う一時状態を既定へ戻す。再描画は呼び出し側。
  *
- * 対象は要素の選択 (青枠)・上書きの選択 (緑枠)・ツールの 3 つ。手順をまたいで残すと、戻った直後の
+ * 対象は要素の選択 (青枠)・上書きの選択 (緑枠)・枠線の選択・ツールの 4 つ。手順をまたいで残すと、戻った直後の
  * クリックが残っていた選択を外して「削除」が効かなくなり、ツールも「上書き」や「範囲削除」のまま
  * 始まってしまう。手順を移る経路 (「次へ」・「戻る」・ステップバー・未確認ガード) はすべてここを通す。
  * 表示中のページ (`S.page`) はここでは触らない (戻ったときに見ていたページを保つため)。
@@ -188,6 +190,7 @@ function stepAllowed(n) { return !S.gray || n === 1 || n === 4; }
 function resetPhaseUi() {
   S.elSel = {};
   S.coverSel = null;
+  S.borderSel = null;
   S.tool = "select";
 }
 

@@ -749,6 +749,114 @@ def _advance_step3_to_step4(page):
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
 
 
+def _place_border(page, width="2"):
+    """枠線ツールでページ座標 (20,110)-(120,135) へ枠線を 1 つ置く。"""
+    page.click('[data-tool="border"]')
+    expect(page.locator("#border-opts")).to_be_visible()
+    page.fill("#border-width", width)
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .border-box")).to_have_count(1)
+
+
+def _poll_borders(page, predicate_js, timeout_ms=3000):
+    """`borderList` RPC の結果が `predicate_js` (borders 配列 -> 真偽の JS 関数式) を
+    満たすまで待って返す。枠線の編集確定 (`updateBorder`) は `afterEdit` の再取得を挟む
+    ため、確定を起こした側 (`press("Enter")` 等) と読む側 (直接の `borderList` 呼び出し)
+    が別々の RPC 往復になり、待たずに読むと往復の完了より先に走って古い値を拾う競合が
+    ある。ここへ一元化し、条件を満たすまでブラウザ側でポーリングしてから 1 回で返す。"""
+    return page.evaluate("""async (predicateSrc) => {
+        var predicate = eval("(" + predicateSrc + ")");
+        var deadline = Date.now() + %d;
+        var borders;
+        while (Date.now() < deadline) {
+            borders = (await window.rpc("borderList", { fileIndex: 0, pageInFile: 0 })).borders;
+            if (predicate(borders)) return borders;
+            await new Promise(function (r) { setTimeout(r, 50); });
+        }
+        return borders;
+    }""" % timeout_ms, predicate_js)
+
+
+def test_border_overlay_resize_and_width_change(e2e_page, ocr_layer_pdf):
+    """置いた枠線を角ハンドルで伸縮でき、選んでから太さを変えられる (どちらも Undo 可)。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page, width="2")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+
+    # 右下ハンドルで伸縮 → updateBorder(rect)
+    overlay = page.locator("#trim-stage .border-box")
+    h = overlay.locator(".h.se").bounding_box()
+    page.mouse.move(h["x"] + h["width"] / 2, h["y"] + h["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(h["x"] + 40 * sx, h["y"] + 20 * sy, steps=5)
+    page.mouse.up()
+    borders = _poll_borders(page, "function (bs) { return bs[0] && bs[0].rect.w > 100 && bs[0].rect.h > 25; }")
+    rect = borders[0]["rect"]
+    assert rect["w"] > 100 and rect["h"] > 25
+
+    # オーバーレイをクリックして選び、太さを変える → updateBorder(width)
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#border-width")).to_have_value("2")
+    page.fill("#border-width", "5")
+    page.press("#border-width", "Enter")
+    borders = _poll_borders(page, "function (bs) { return bs[0] && bs[0].width === 5; }")
+    assert borders[0]["width"] == 5
+
+    # Undo で太さが戻る
+    page.keyboard.press("Control+z")
+    borders = _poll_borders(page, "function (bs) { return bs[0] && bs[0].width === 2; }")
+    assert borders[0]["width"] == 2
+
+
+def test_border_selected_edit_does_not_leak_into_the_next_border(e2e_page, ocr_layer_pdf):
+    """選択中に変えた太さが、選択を解いたあとに置く枠線へ紛れ込まない。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page, width="2")
+    page.locator("#trim-stage .border-box").click()
+    page.fill("#border-width", "7")
+    page.press("#border-width", "Enter")
+    # 太さの確定 (`commitBorderStyle`) は `updateBorder` → `afterEdit` の RPC 往復を挟み、
+    # ページ SVG の再取得・再マウントを伴う (枠線の太さそのものが SVG の `stroke-width`
+    # なので、変更を反映するには描き直しが要る)。この再マウントが終わる前に 2 本目を
+    # 置き始めると、2 本目の追加 (`addBorder` → `afterEdit`) の再描画と競合し、
+    # `rect-overlay.js` の `draw` が古い一覧の結果で新しい描画を上書きしてしまう
+    # (どちらの HTTP 応答が先に返るかは保証されない)。反映後の SVG (`stroke-width="7"`)
+    # を待ってから次へ進み、2 つの再描画が重ならないようにする。
+    expect(page.locator("#trim-stage svg rect[data-el]")).to_have_attribute("stroke-width", "7")
+
+    # 空白をドラッグすると選択が解け、2 本目は「次に置く枠線」の太さ 2 で置かれる
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 150 * sx, box["y"] + 40 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 250 * sx, box["y"] + 80 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .border-box")).to_have_count(2)
+    widths = page.evaluate("""async () => (await window.rpc("borderList", { fileIndex: 0, pageInFile: 0 })).borders.map(b => b.width)""")
+    assert sorted(widths) == [2, 7]
+
+
+def test_border_delete_button_removes_border_selected_with_border_tool(e2e_page, ocr_layer_pdf):
+    """枠線ツールのままクリックで選んだ枠線を、「削除」ボタンで消せる。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page)
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#trim-stage .border-box.sel")).to_have_count(1)
+    page.click("#btn-deletesel")
+    expect(page.locator("#trim-stage .border-box")).to_have_count(0)
+    borders = page.evaluate("""async () => (await window.rpc("borderList", { fileIndex: 0, pageInFile: 0 })).borders""")
+    assert borders == []
+
+
 def test_manual_cover_delete_button_removes_cover_selected_with_cover_tool(e2e_page, ocr_layer_pdf):
     """上書きツールのままクリックで選んだ上書きを、「削除」ボタンで消せる。"""
     page = e2e_page

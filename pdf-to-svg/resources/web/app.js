@@ -18,6 +18,7 @@ import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
 import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
 import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel } from "./cover.js";
+import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, clearBorderSel } from "./border.js";
 
 (function () {
   "use strict";
@@ -497,9 +498,10 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
     var host = document.getElementById("trim-stage");
     host.addEventListener("mousedown", function (e) {
       if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
-      if (e.target.closest(".cover-box")) return; // 上書きのオーバーレイ上の移動・伸縮・選択は `cover.js` が扱う
+      if (e.target.closest(".cover-box") || e.target.closest(".border-box")) return; // オーバーレイ上の移動・伸縮・選択は cover.js / border.js が扱う
       if (!host.querySelector("svg")) return;
       if (S.tool === "cover") clearCoverSel(); // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
+      if (S.tool === "border") clearBorderSel(); // 枠線も同様
       var rubber = document.createElement("div");
       rubber.className = S.tool === "border" ? "border-rubber" : S.tool === "cover" ? "cover-rubber" : "crop-rubber";
       host.appendChild(rubber);
@@ -834,6 +836,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       mountPage(document.getElementById("trim-stage"), ed3, true, function () {
         wireTrimStage();
         drawCoverOverlay(document.getElementById("trim-stage"));
+        drawBorderOverlay(document.getElementById("trim-stage"));
       });
       renderTrim();
       updateZoomLabel();
@@ -881,6 +884,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
   function wireStatic() {
     installCropDrag();
     installCoverDrag(document.getElementById("trim-stage"));
+    installBorderDrag(document.getElementById("trim-stage"));
     installFigDrag(document.getElementById("fig-stage"));
     wireLoadUi();
     wireZoom();
@@ -976,14 +980,27 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
         // 「削除」が画面で選んだつもりの無い側まで消す
         S.elSel = {};
         clearCoverSel();
+        clearBorderSel();
         render();
       });
     });
-    // 枠線ツールの色・太さ
-    document.getElementById("border-color").addEventListener("input", function () { S.borderColor = this.value; });
-    document.getElementById("border-width").addEventListener("input", function () {
-      var v = parseFloat(this.value); if (!isNaN(v) && v > 0) S.borderWidth = v;
+    // 枠線ツールの色・太さ。枠線を選んでいる間、入力欄は選択中の枠線の編集に使う。
+    // `input` は未選択のときだけ「次に置く枠線」の値を直接更新する (選択中は触れない —
+    // 触れると、選択を解いたあとに置く枠線へ編集中の値が紛れ込む)。確定 (`change`/Enter) は
+    // `border.js` の `commitBorderStyle` へ渡し、選択の有無での書き分けもそちら 1 箇所に持たせる。
+    var colorInput = document.getElementById("border-color");
+    colorInput.addEventListener("input", function () { if (S.borderSel === null) S.borderColor = this.value; });
+    colorInput.addEventListener("change", function () { commitBorderStyle({ color: this.value }); });
+    var widthInput = document.getElementById("border-width");
+    widthInput.addEventListener("input", function () {
+      var v = parseFloat(this.value);
+      if (!isNaN(v) && v > 0 && S.borderSel === null) S.borderWidth = v;
     });
+    widthInput.addEventListener("change", function () {
+      var v = parseFloat(this.value);
+      if (!isNaN(v) && v > 0) commitBorderStyle({ width: v });
+    });
+    widthInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
     // 上書きツールの置換語。上書きを選んでいる間、入力欄は選択中の要素の語の編集に使う。
     // `input` は未選択のときだけ次に置く語 (`S.coverText`) を直接更新する (選択中は
     // `S.coverText` に触れない — 触れると、選択を解いたあとに置く上書きへ編集中の語が
@@ -999,6 +1016,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
       // 上書きツールで選んだ上書き (緑枠) も同じ削除経路へ載せる。ツールを切り替えると要素の選択は解けるため、
       // 実際に入るのはどちらか片方だけ
       if (S.coverSel !== null && ids.indexOf(String(S.coverSel)) < 0) ids.push(String(S.coverSel));
+      if (S.borderSel !== null && ids.indexOf(String(S.borderSel)) < 0) ids.push(String(S.borderSel));
       if (!ids.length) return;
       await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: ids }); await afterEdit();
     });
@@ -1257,6 +1275,7 @@ import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCo
     initRail({ render: render, tryNext: tryNext });
     initFigure({ render: render });
     initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; } });
+    initBorder({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; } });
     wireStatic();
     render();
     startLifecycle();
