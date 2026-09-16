@@ -869,6 +869,27 @@ def test_manual_cover_delete_button_removes_cover_selected_with_cover_tool(e2e_p
     assert covers == []
 
 
+def test_delete_button_is_disabled_until_something_is_selected(e2e_page, ocr_layer_pdf):
+    """何も選んでいない間は「削除」ボタンを押せない (押しても何も起きない状態を見た目で示す)。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    expect(page.locator("#btn-deletesel")).to_be_disabled()
+    _select_visible_text(page)
+    expect(page.locator("#btn-deletesel")).to_be_enabled()
+    page.click("#btn-deletesel")
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(0)
+    expect(page.locator("#btn-deletesel")).to_be_disabled()
+
+
+def test_delete_button_is_enabled_by_a_border_selection(e2e_page, ocr_layer_pdf):
+    """枠線を選んだときも「削除」ボタンが有効になる。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page)
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#btn-deletesel")).to_be_enabled()
+
+
 def test_switching_tool_clears_element_selection(e2e_page, ocr_layer_pdf):
     """ツールを切り替えると青枠の選択が解け、上書きの緑枠と同時に残らない。"""
     page = e2e_page

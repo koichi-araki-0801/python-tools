@@ -464,6 +464,15 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   }
 
   // ── 11. 手順3 エディタ操作 ──
+  /** 「削除」ボタンの押下可否を今の選択から決める。要素 (青枠)・上書き (緑枠)・枠線のどれかを
+   *  選んでいれば押せる。何も選んでいない間は押しても何も起きないので無効にする (押下可否で
+   *  「いま何を選んでいるか」が分かる)。位置は動かさない — 出し入れすると隣のボタンの位置が
+   *  ずれて目が迷う。選択が変わる 3 経路 (`render()`・クリック選択・オーバーレイの選択) から呼ぶ。 */
+  function syncDeleteButton() {
+    var del = document.getElementById("btn-deletesel");
+    if (del) del.disabled = !Object.keys(curElSel()).length && S.coverSel === null && S.borderSel === null;
+  }
+
   function drawSelBoxes(host) {
     host.querySelectorAll(".sel-box").forEach(function (b) { b.remove(); });
     var svgEl = host.querySelector("svg"); if (!svgEl) return;
@@ -492,6 +501,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       var id = t.getAttribute("data-el"); var sel = curElSel();
       if (sel[id]) delete sel[id]; else sel[id] = true;
       drawSelBoxes(host);
+      syncDeleteButton();
     });
   }
 
@@ -837,6 +847,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       if (bo) bo.hidden = S.tool !== "border";
       var co = document.getElementById("cover-opts");
       if (co) co.hidden = S.tool !== "cover";
+      syncDeleteButton();
       mountPage(document.getElementById("trim-stage"), ed3, true, function () {
         wireTrimStage();
         drawCoverOverlay(document.getElementById("trim-stage"));
@@ -1283,8 +1294,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     window.__state = S; // E2E/デバッグ用の読み取り窓
     initRail({ render: render, tryNext: tryNext });
     initFigure({ render: render });
-    initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; } });
-    initBorder({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; } });
+    initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
+    initBorder({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
     wireStatic();
     render();
     startLifecycle();

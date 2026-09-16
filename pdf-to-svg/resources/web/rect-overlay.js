@@ -33,6 +33,7 @@ function createRectOverlay(opts) {
   function clearSel() {
     opts.setSel(null);
     opts.onSelect(null);
+    if (ui.syncDeleteButton) ui.syncDeleteButton();
   }
 
   /** 手順 3 で対象のツールが選ばれている間だけ、ページ上の矩形を箱で重ねる。呼ぶたびに描き直す */
@@ -67,6 +68,7 @@ function createRectOverlay(opts) {
     });
     var cur = items.find(function (c) { return c.elId === opts.getSel(); });
     if (cur) opts.onSelect(cur);
+    if (ui.syncDeleteButton) ui.syncDeleteButton();
   }
 
   /** 移動・伸縮のドラッグ。起動時に一度だけ張る (多重登録防止) */
@@ -100,6 +102,7 @@ function createRectOverlay(opts) {
         // (矩形・見た目は据え置きのままなので再取得も不要)。
         host.querySelectorAll("." + opts.boxClass).forEach(function (b) { b.classList.toggle("sel", b.dataset.elId === String(d.elId)); });
         opts.onSelect(d.item);
+        if (ui.syncDeleteButton) ui.syncDeleteButton();
         return;
       }
       var svgEl = host.querySelector("svg"); if (!svgEl) return;
