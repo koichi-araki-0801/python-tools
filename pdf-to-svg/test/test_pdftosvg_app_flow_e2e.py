@@ -9,14 +9,13 @@ import os
 import re
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
+
+from .e2e_server import ensure_port_is_free, wait_until_serving
 
 pytestmark = [pytest.mark.browser, pytest.mark.e2e]
 
@@ -28,23 +27,16 @@ FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.pdf")
 
 @pytest.fixture(scope="module")
 def e2e_server():
+    # 起動する前に、同じポートで別のサーバが応答していないことを確かめる。起動後の応答の有無だけを
+    # 見ると、既に別の E2E が動いていても起動成功に見えて黙って混線する (Windows では二重 bind が
+    # 成功するので、子が死ぬことでも検知できない)
+    ensure_port_is_free(BASE)
     env = dict(os.environ, PDFTOSVG_E2E_PORT=str(PORT))
     proc = subprocess.Popen(
         [sys.executable, os.path.join(os.path.dirname(__file__), "e2e_server.py")],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
-        for _ in range(100):
-            try:
-                urllib.request.urlopen(BASE + "/", timeout=1)
-                break
-            except urllib.error.HTTPError:
-                break  # 4xx/5xx でも「サーバが応答した」= 起動完了
-            except OSError:
-                if proc.poll() is not None:
-                    raise RuntimeError(proc.stderr.read().decode("utf-8", "replace"))
-                time.sleep(0.2)
-        else:
-            raise RuntimeError("e2e server が起動しない")
+        wait_until_serving(proc, BASE)
         yield BASE
     finally:
         proc.kill()
