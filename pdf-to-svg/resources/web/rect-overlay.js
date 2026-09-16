@@ -26,6 +26,11 @@ function rectsNearlyEqual(a, b) {
 /** 1 種類の矩形オーバーレイを作る。返り値の `draw` / `installDrag` / `clearSel` を呼び出し側が使う。 */
 function createRectOverlay(opts) {
   var ui = opts.ui;
+  // draw() の世代。同じページで draw() が重なったとき、後から出した要求の応答が先に届くと、
+  // 遅れて届いた古い一覧で箱を作り直してしまう (draw() は冒頭で箱を全部消すので、古い応答は
+  // 箱を重複させる)。`mountPage` の token と同じ考え方で、応答が届いた時点で最新の呼び出しで
+  // なければ描かない。
+  var drawSeq = 0;
 
   /** 選択を解き、入力欄を「次に置く値」へ戻す。選択解除の経路 (ツール切替・空白クリック・
    *  ページ移動・選んでいた要素が消えた等) をここへ一元化し、選択中に編集した値が
@@ -38,11 +43,13 @@ function createRectOverlay(opts) {
 
   /** 手順 3 で対象のツールが選ばれている間だけ、ページ上の矩形を箱で重ねる。呼ぶたびに描き直す */
   async function draw(host) {
+    var seq = ++drawSeq;
     host.querySelectorAll("." + opts.boxClass).forEach(function (b) { b.remove(); });
     if (S.phase !== 3 || S.tool !== opts.tool) { clearSel(); return; }
     var svgEl = host.querySelector("svg"); if (!svgEl) return;
     var pg = ui.pageOf();
     var res = await ui.rpc(opts.listRpc, { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
+    if (seq !== drawSeq) return;                     // 取得中に新しい draw() が始まった (追い越された)
     if (host.querySelector("svg") !== svgEl) return; // 取得中にページが変わった
     var items = res[opts.listKey] || [];
     var sel = opts.getSel();

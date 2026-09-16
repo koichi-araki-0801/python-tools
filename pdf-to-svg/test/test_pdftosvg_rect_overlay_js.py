@@ -1,0 +1,68 @@
+# =============================================================================
+# test_pdftosvg_rect_overlay_js.py — resources/web/rect-overlay.js の単体（実ブラウザ）
+# =============================================================================
+# `createRectOverlay` の `draw()` は一覧 RPC を待ってから箱を作る。同じページで `draw()` が
+# 重なったとき、後から出した要求の応答が先に届き、遅れて届いた古い一覧で箱を作り直さない
+# こと（`mountPage` と同じ世代トークン）を、`ui.rpc` を外から resolve できる Promise に
+# 差し替えて確かめる。DOM（`placeRect` の `getBoundingClientRect`）を読むので実ブラウザで回す。
+import json
+
+import pytest
+
+from .pdftosvg_js_harness import js
+
+pytestmark = pytest.mark.browser
+
+SETUP = """
+window.__roSetup = async () => {
+  const st = await import('/state.js');
+  const ro = await import('/rect-overlay.js');
+  st.S.phase = 3; st.S.tool = "cover";
+  const host = document.createElement("div");
+  host.style.cssText = "position:relative;width:300px;height:200px";
+  host.innerHTML = '<svg viewBox="0 0 300 200" width="300" height="200"></svg>';
+  document.body.appendChild(host);
+  const pending = [];  // draw() ごとの一覧 RPC の resolve。テストが届く順を決める
+  const ui = {
+    rpc: () => new Promise((resolve) => { pending.push(resolve); }),
+    afterEdit: async () => {},
+    pageOf: () => ({ fileIndex: 0, pageInFile: 0 }),
+  };
+  let sel = null, drag = null;
+  const ov = ro.createRectOverlay({
+    ui, boxClass: "t-box", tool: "cover", listRpc: "coverList", listKey: "covers", updateRpc: "updateCover",
+    getSel: () => sel, setSel: (v) => { sel = v; }, getDrag: () => drag, setDrag: (v) => { drag = v; },
+    onSelect: () => {},
+  });
+  window.__ro = { host, pending, ov, promises: [] };
+};
+"""
+
+RECT = {"x": 10, "y": 10, "w": 50, "h": 30}
+
+
+@pytest.fixture(scope="module")
+def ro(edge_page):
+    edge_page.evaluate(SETUP)
+    edge_page.evaluate("window.__roSetup()")
+    return edge_page
+
+
+def _box_ids(page):
+    return js(page, "[...window.__ro.host.querySelectorAll('.t-box')].map(b => b.dataset.elId)")
+
+
+def test_draw_discards_a_stale_list_that_arrives_after_a_newer_one(ro):
+    """同じページで draw() が 2 回重なり、先に出した要求の応答が後から届いても、
+    古い一覧で箱を作り直さない。"""
+    # 2 回続けて draw() を始める。どちらも一覧 RPC の応答待ちで止まる
+    n = js(ro, "(() => { const c = window.__ro; c.promises.push(c.ov.draw(c.host)); c.promises.push(c.ov.draw(c.host)); return c.pending.length; })()")
+    assert n == 2
+    # 2 回目 (新しい方) の応答を先に届ける → 箱は elId 2
+    js(ro, "(() => { window.__ro.pending[1]({ covers: [{ elId: 2, rect: %s, text: 'b' }] }); return 0; })()" % json.dumps(RECT))
+    js(ro, "window.__ro.promises[1]")  # 2 回目の draw() の完了を待つ
+    assert _box_ids(ro) == ["2"]
+    # 1 回目 (古い方) の応答を後から届ける → 世代が古いので捨てられ、箱は elId 2 のまま
+    js(ro, "(() => { window.__ro.pending[0]({ covers: [{ elId: 1, rect: %s, text: 'a' }] }); return 0; })()" % json.dumps(RECT))
+    js(ro, "window.__ro.promises[0]")  # 1 回目の draw() の完了を待つ
+    assert _box_ids(ro) == ["2"]
