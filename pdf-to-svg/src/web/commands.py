@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from model.document import Page
-from model.elements import DictMatch, DictRevertInfo, Element, Rect, TextElement
+from model.elements import DictMatch, DictRevertInfo, Element, Rect, RectElement, TextElement
 
 
 class DeleteCommand:
@@ -205,3 +205,38 @@ class UpdateCoverCommand:
         self.el.text = self.old_text
         self.el.original_text = self.old_original_text
         self.el.dict_match = self.old_match
+
+
+class UpdateBorderCommand:
+    """利用者が置いた枠線 (`RectElement.manual_border`) の位置・大きさ・色・太さを変える。
+
+    `RectElement` は外枠 (`bbox`) と描画する矩形 (`rect`) の 2 つを持ち、枠線ではこの 2 つが
+    常に同じ値である (`rpc_addBorder` が同じ `Rect` を両方へ入れる)。片方だけ書き換えると
+    書き出しの見た目と、範囲削除の交差判定が食い違うので、必ず対で書き換える。
+    """
+
+    def __init__(self, el: RectElement, rect: Optional[Rect], color: Optional[str], width: Optional[float]):
+        self.label = "枠線の変更"
+        self.el = el
+        self.new_rect = rect
+        self.new_color = color
+        self.new_width = width
+        self.old_bbox = el.bbox
+        self.old_rect = el.rect
+        self.old_color = el.stroke
+        self.old_width = el.stroke_width
+
+    def redo(self) -> None:
+        if self.new_rect is not None:
+            self.el.bbox = self.new_rect
+            self.el.rect = self.new_rect
+        if self.new_color is not None:
+            self.el.stroke = self.new_color
+        if self.new_width is not None:
+            self.el.stroke_width = self.new_width
+
+    def undo(self) -> None:
+        self.el.bbox = self.old_bbox
+        self.el.rect = self.old_rect
+        self.el.stroke = self.old_color
+        self.el.stroke_width = self.old_width

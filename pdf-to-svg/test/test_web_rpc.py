@@ -312,6 +312,95 @@ def test_add_border_rejects_a_rect_past_the_page_edge(session):
         rpc_methods.dispatch(session, "addBorder", args)
 
 
+def _place_border(session, *, color="#000000", width=1.0):
+    """テスト用に枠線を 1 つ置き、その要素を返す。"""
+    rpc_methods.dispatch(session, "addBorder",
+                         {"fileIndex": 0, "pageInFile": 0,
+                          "rect": {"x": 5, "y": 5, "w": 100, "h": 80},
+                          "color": color, "width": width})
+    return session.page(0, 0).elements[-1]
+
+
+def test_border_list_returns_manual_borders_only(session):
+    """一覧に出るのは利用者が置いた未削除の枠線だけ (PDF 由来の矩形は出ない)。"""
+    el = _place_border(session, color="#ff0000", width=2)
+    got = rpc_methods.dispatch(session, "borderList", {"fileIndex": 0, "pageInFile": 0})["borders"]
+    assert got == [{"elId": el.id, "rect": {"x": 5.0, "y": 5.0, "w": 100.0, "h": 80.0},
+                    "color": "#ff0000", "width": 2.0}]
+    # 削除したら一覧から消える
+    rpc_methods.dispatch(session, "applyDelete",
+                         {"fileIndex": 0, "pageInFile": 0, "elIds": [el.id]})
+    assert rpc_methods.dispatch(session, "borderList", {"fileIndex": 0, "pageInFile": 0})["borders"] == []
+
+
+def test_update_border_changes_rect_color_and_width_and_undo_restores_them(session):
+    """位置・色・太さを変えられ、Undo で元へ戻る。"""
+    el = _place_border(session, color="#000000", width=1)
+    rpc_methods.dispatch(session, "updateBorder",
+                         {"fileIndex": 0, "pageInFile": 0, "elId": el.id,
+                          "rect": {"x": 10, "y": 20, "w": 50, "h": 40},
+                          "color": "#00ff00", "width": 3})
+    assert el.stroke == "#00ff00" and el.stroke_width == 3.0
+    assert (el.bbox.x, el.bbox.y, el.bbox.w, el.bbox.h) == (10.0, 20.0, 50.0, 40.0)
+    assert (el.rect.x, el.rect.y, el.rect.w, el.rect.h) == (10.0, 20.0, 50.0, 40.0)
+    rpc_methods.dispatch(session, "undo", {})
+    assert el.stroke == "#000000" and el.stroke_width == 1.0
+    assert (el.bbox.x, el.bbox.y, el.bbox.w, el.bbox.h) == (5.0, 5.0, 100.0, 80.0)
+
+
+def test_update_border_accepts_width_alone(session):
+    """太さだけを変えられる (矩形を送らずに済む)。"""
+    el = _place_border(session, width=1)
+    rpc_methods.dispatch(session, "updateBorder",
+                         {"fileIndex": 0, "pageInFile": 0, "elId": el.id, "width": 4})
+    assert el.stroke_width == 4.0
+    assert (el.bbox.x, el.bbox.w) == (5.0, 100.0)  # 矩形は動かない
+
+
+def test_update_border_requires_at_least_one_change(session):
+    """何も指定しない `updateBorder` は拒否する (無変更の 1 段が Undo に積まれるのを防ぐ)。"""
+    el = _place_border(session)
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateBorder",
+                             {"fileIndex": 0, "pageInFile": 0, "elId": el.id})
+
+
+def test_update_border_rejects_a_deleted_border(session):
+    """削除済みの枠線は書き換えない。"""
+    el = _place_border(session)
+    rpc_methods.dispatch(session, "applyDelete",
+                         {"fileIndex": 0, "pageInFile": 0, "elIds": [el.id]})
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateBorder",
+                             {"fileIndex": 0, "pageInFile": 0, "elId": el.id, "width": 2})
+
+
+def test_update_border_rejects_a_non_border_element(session):
+    """PDF 由来の要素を `updateBorder` で書き換えられない。"""
+    other = session.page(0, 0).live_elements()[0]
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateBorder",
+                             {"fileIndex": 0, "pageInFile": 0, "elId": other.id, "width": 2})
+
+
+def test_update_border_rejects_a_rect_past_the_page_edge(session):
+    """枠線は成果物に残るので、変更後もページ内を要求する (`addBorder` と同じ検査)。"""
+    el = _place_border(session)
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateBorder",
+                             {"fileIndex": 0, "pageInFile": 0, "elId": el.id,
+                              "rect": {"x": 150, "y": 250, "w": 200, "h": 200}})
+
+
+@pytest.mark.parametrize("bad", [0, -1, 101, float("inf")])
+def test_update_border_rejects_an_out_of_range_width(session, bad):
+    """太さは `addBorder` と同じ範囲 (0 より大きく 100 以下・有限) を要求する。"""
+    el = _place_border(session)
+    with pytest.raises(ValueError):
+        rpc_methods.dispatch(session, "updateBorder",
+                             {"fileIndex": 0, "pageInFile": 0, "elId": el.id, "width": bad})
+
+
 def test_dict_add_and_list(session):
     rpc_methods.dispatch(session, "dictAdd", {"source": "Q'ty", "target": "数量"})
     lst = rpc_methods.dispatch(session, "dictList", {})

@@ -34,6 +34,7 @@ from web.commands import (
     ReplaceTextCommand,
     RestoreCommand,
     RevertDictMatchCommand,
+    UpdateBorderCommand,
     UpdateCoverCommand,
 )
 
@@ -473,6 +474,19 @@ def rpc_removeFile(s: WebSession, args: dict) -> dict:
     return {}
 
 
+def _border_width(args: dict) -> float:
+    """``args["width"]`` を枠線の太さ (pt) にする。外部由来なので範囲を見る —
+    ``float()`` は ``inf`` / ``nan`` を通し、``_fmt`` がそれを書いて SVG が壊れる。
+    未指定 (``None``) だけを既定 1.0 とみなす (``or`` だと明示的な ``0`` が「未指定」に
+    化けて範囲検査をすり抜ける)。``addBorder`` と ``updateBorder`` が同じ検査を共有する
+    (片方だけ緩むのを防ぐ)。"""
+    raw = args.get("width")
+    width = float(raw) if raw is not None else 1.0
+    if not math.isfinite(width) or not (0 < width <= 100):
+        raise ValueError(f"width must be a finite number in (0, 100]: {width!r}")
+    return width
+
+
 def rpc_addBorder(s: WebSession, args: dict) -> dict:
     """ドラッグした矩形に塗りなしの枠線 (RectElement) を 1 つ追加する (Undo 可)。"""
     pg = s.page(args["fileIndex"], args["pageInFile"])
@@ -480,18 +494,61 @@ def rpc_addBorder(s: WebSession, args: dict) -> dict:
     if rect is None:
         raise ValueError("rect is required")
     # 外部由来の色は必ず ``sanitize_color`` を通す (入口)。出口の ``_paint`` にも同じ検証が
-    # あるのは、入口だけだと別の入口が生えたときに漏れるため。``width`` も範囲を見る —
-    # ``float()`` は ``inf`` / ``nan`` を通し、``_fmt`` がそれを書いて SVG が壊れる。
+    # あるのは、入口だけだと別の入口が生えたときに漏れるため。
     color = sanitize_color(args.get("color") or "#000000")
-    width = float(args.get("width") or 1.0)
-    if not math.isfinite(width) or not (0 < width <= 100):
-        raise ValueError(f"width must be a finite number in (0, 100]: {width!r}")
+    width = _border_width(args)
     z = max((e.z for e in pg.elements), default=0) + 1
     el = RectElement(
         bbox=rect, z=z, rect=rect, stroke=color, fill=None, stroke_width=width,
         manual_border=True,
     )
     s.undo.push(AddElementCommand(pg, el))
+    return {}
+
+
+def _manual_border(pg: Page, el_id) -> RectElement:
+    """ページ上の未削除の枠線 (利用者が置いたもの) を id で引く。それ以外は ``ValueError``。"""
+    try:
+        eid = int(el_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"elId must be an integer: {el_id!r}") from None
+    for e in pg.elements:
+        if e.id == eid and isinstance(e, RectElement) and e.manual_border and not e.deleted:
+            return e
+    raise ValueError(f"elId {el_id!r} is not a manual border on this page")
+
+
+def rpc_borderList(s: WebSession, args: dict) -> dict:
+    """ページ上の枠線 (未削除) を要素の並び順で返す。UI のオーバーレイの元データ
+    (表示 SVG から座標を拾わず、モデルを正にする)。"""
+    pg = s.page(args["fileIndex"], args["pageInFile"])
+    borders = [
+        {
+            "elId": e.id,
+            "rect": {"x": e.bbox.x, "y": e.bbox.y, "w": e.bbox.w, "h": e.bbox.h},
+            "color": e.stroke or "#000000",
+            "width": e.stroke_width,
+        }
+        for e in pg.elements
+        if isinstance(e, RectElement) and e.manual_border and not e.deleted
+    ]
+    return {"borders": borders}
+
+
+def rpc_updateBorder(s: WebSession, args: dict) -> dict:
+    """枠線の矩形 (`rect`)・色 (`color`)・太さ (`width`) のどれか以上を変える (Undo 可)。
+
+    3 つとも省かれた呼び出しは拒否する。受け入れると変化の無い 1 段が Undo スタックへ積まれ、
+    次の Ctrl+Z が「何も起きない」ように見える (`updateCover` と同じ方針)。
+    """
+    pg = s.page(args["fileIndex"], args["pageInFile"])
+    el = _manual_border(pg, args.get("elId"))
+    rect = _parse_rect_arg(args, "rect", pg)
+    color = sanitize_color(args["color"]) if "color" in args else None
+    width = _border_width(args) if "width" in args else None
+    if rect is None and color is None and width is None:
+        raise ValueError("rect, color or width is required")
+    s.undo.push(UpdateBorderCommand(el, rect, color, width))
     return {}
 
 
@@ -723,6 +780,8 @@ HANDLERS: Dict[str, Callable[[WebSession, dict], dict]] = {
     "deleteRegion": rpc_deleteRegion,
     "removeFile": rpc_removeFile,
     "addBorder": rpc_addBorder,
+    "borderList": rpc_borderList,
+    "updateBorder": rpc_updateBorder,
     "addCover": rpc_addCover,
     "coverList": rpc_coverList,
     "updateCover": rpc_updateCover,
