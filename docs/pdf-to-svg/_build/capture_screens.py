@@ -282,7 +282,7 @@ def main():
                 shot(page, "step3b_border.png")
                 page.keyboard.press("Control+z")  # 枠線を取り消す
                 time.sleep(0.5)
-                page.click('[data-tool="select"]')
+                page.click('[data-tool="border"]')  # 押下中のタブを再度押して無選択へ戻る
 
                 # ---- ステップ4: SVG に書き出す ----
                 page.click("#btn-next")

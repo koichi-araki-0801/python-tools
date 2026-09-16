@@ -23,11 +23,12 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 11 | 2. 用語置換 | 戻す / 置換 | `.change-row .act-revert` / `.act-apply` | 確認一覧の行ごとに 1 箇所だけ置換前へ戻す / 1 箇所だけ置換する（Undo 可） |
 | 12 | 2. 用語置換 | 番号マーカー | `#doc-master svg [data-editor-marks]` | 一覧の通し番号をページ上の該当箇所へ描く（表示用のみ・書き出しには含めない）。行ホバーで枠強調 |
 | 13 | 2. 用語置換 | JSON書き出し / JSON読み込み | `#btn-dict-export / import` | 辞書の JSON 入出力（連結由来 joined を保持） |
-| 14 | 3. 削除・枠線 | ツール | `選択 / 範囲削除 / 枠線 / 上書き` | 編集モード切替 |
+| 14 | 3. 削除・枠線 | ツール | `範囲削除 / 枠線 / 上書き` | 編集モード切替（初期は無選択。押下中のタブを再度押すと無選択へ戻る。要素のクリック選択はツールに関係なく常に効く） |
 | 14.1 | 3. 削除・枠線 | 上書きの置換語 | `#cover-text` | プレースホルダ「置換語（空なら矩形だけ）」。200 文字まで、空なら矩形のみの上書き |
-| 15 | 3. 削除・枠線 | 枠線色 | `#border-color` | カラーピッカー |
-| 16 | 3. 削除・枠線 | 枠線幅 | `#border-width` | 0.5〜20 pt |
-| 17 | 3. 削除・枠線 | 削除 | `#btn-deletesel` | 選択要素削除 |
+| 15 | 3. 削除・枠線 | 枠線色 | `#border-color` | カラーピッカー。枠線を選んでいる間は選択中の枠線の色を変える |
+| 16 | 3. 削除・枠線 | 枠線幅 | `#border-width` | 0.5〜20 pt。枠線を選んでいる間は選択中の枠線の太さを変える |
+| 16.1 | 3. 削除・枠線 | 枠線のオーバーレイ | `.border-box / .border-box.sel` | 置いた枠線を箱で重ねる。クリックで選択、本体ドラッグで移動、角ハンドルで伸縮 |
+| 17 | 3. 削除・枠線 | 削除 | `#btn-deletesel` | 選択要素・選択中の上書き・選択中の枠線の削除。何も選んでいない間は `disabled` |
 | 18 | 4. 書き出し | 書き出す範囲 | `ボタン群（排他）` | 表示中のページのみ / 全ページ / スキップを除く / ページを指定 |
 | 18.1 | 4. 書き出し（グレーモード） | ページレール | `#pagenav-4` | 各ページの候補数バッジ（採用ありは緑）。クリックでページ移動 |
 | 18.2 | 4. 書き出し（グレーモード） | 図の編集キャンバス | `#fig-stage` | グレースケールのページプレビューに候補矩形を重ねる |
@@ -75,7 +76,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 14 | RPC | `applyDictMatch` | 指定要素 1 件だけ辞書を当てる（1 マクロ） |
 | 15 | RPC | `dictJson / dictImportJson` | 辞書JSONの文字列受け渡し（ファイル保存/読込はブラウザ側） |
 | 16 | RPC | `setSuggestJoin` | クリック取り込み連結フラグ更新 |
-| 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線（Undoへpush）。矩形を取る `deleteRegion`/`addBorder` は `_parse_rect_arg` の 1 本で検査し（数値 4 つの有限性・正の寸法は常に要求）、範囲削除だけはページ外の矩形も許す（`inside_page=False`。矩形自体は成果物に残らず、重なる要素を選ぶだけのため）。枠線はページ内を要求する |
+| 17 | RPC | `applyDelete / deleteRegion / restoreElements / addBorder / borderList / updateBorder` | 削除 / 範囲削除 / 削除一覧の行ごとの戻し / 枠線の追加・一覧・変更（いずれも Undo へ push）。矩形を取る `deleteRegion`/`addBorder`/`updateBorder` は `_parse_rect_arg` の 1 本で検査し（数値 4 つの有限性・正の寸法は常に要求）、範囲削除だけはページ外の矩形も許す（`inside_page=False`。矩形自体は成果物に残らず、重なる要素を選ぶだけのため）。枠線はページ内を要求する。太さの範囲検査は `_border_width` を `addBorder` と `updateBorder` が共有する。一覧・変更の対象は `manual_border` の印が付いた未削除の枠線だけ |
 | 17.1 | RPC | `addCover` | 手動の上書きを 1 つ追加（引数 `fileIndex, pageInFile, rect, text`。不可視かつ置換済み扱いの `TextElement` を作り Undo へ push）。`rect` の検査は `_parse_rect_arg`（ページ内を要求） |
 | 17.2 | RPC | `coverList` | 指定ページの手動の上書き一覧を取得（引数 `fileIndex, pageInFile`。返り値 `{covers: [{elId, rect, text}]}`） |
 | 17.3 | RPC | `updateCover` | 手動の上書きの矩形/置換語を変更（引数 `fileIndex, pageInFile, elId` + 任意で `rect, text`。`UpdateCoverCommand` で Undo へ push）。`rect` の検査は `addCover` と同じ `_parse_rect_arg` |
@@ -120,3 +121,6 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 30 | `test_resource_limits.py::test_raster_and_gray_pixel_caps_stay_equal` | `pdf_engine`（`fitz` import隔離のため複製）と`grayscale`が持つラスタ化の画素上限`MAX_RASTER_PIXELS`/`MAX_GRAY_IMAGE_PIXELS`の等値 | 対で保守する定数がずれていない | 未 |
 | 31 | `test_pdftosvg_app_flow_e2e.py::test_manual_cover_drag_past_the_page_edge_still_places_a_cover` | ページの端をまたいでドラッグしても上書きが置かれること（`rectFromDrag`のページ内クランプが効く）（E2E） | ページ外へ引いても上書きが成立する | 未 |
 | 32 | `test_pdftosvg_app_flow_e2e.py::test_manual_cover_delete_button_removes_cover_selected_with_cover_tool` ほか、`test_pdftosvg_state_js.py::test_transition_resetphaseui_*` ほか | 上書きツールのまま選んだ上書きを削除ボタンで消せること、ツール切替で要素の選択が解けること、手順を戻っても表示中のページが保たれツール・選択が既定へ戻ること（戻るボタンの4→3・3→2、ステップバーの4→3。2ページのPDFを使う）（E2E）と、`resetPhaseUi`の単体 | 手順を行き来したあとも上書きを削除でき、見ていたページへ戻れる | 未 |
+| 33 | `test_web_rpc.py::test_border_list_returns_manual_borders_only` ほか | 枠線の一覧・変更 RPC（印の付いた未削除の枠線だけを返す、位置・色・太さの変更と Undo、太さだけの変更、無変更の呼び出し・削除済み要素・PDF 由来要素・ページ外の矩形・範囲外の太さの拒否） | 置いた枠線だけを後から安全に編集できる | 未 |
+| 34 | `test_pdftosvg_app_flow_e2e.py::test_border_overlay_resize_and_width_change` ほか | 枠線オーバーレイの伸縮・選択して太さ変更・Undo、選択中の編集が次に置く枠線へ漏れないこと、枠線ツールのまま選んだ枠線を削除ボタンで消せること（E2E） | 枠線の後編集が画面で成立する | 未 |
+| 35 | `test_pdftosvg_app_flow_e2e.py::test_element_click_selection_works_while_a_tool_is_active` ほか、`test_pdftosvg_state_js.py::test_transition_resetphaseui_*` | 選択タブ廃止後もどのツール中でもクリックで要素を選んで削除できること、押下中のタブの再クリックで無選択へ戻ること、何も選んでいない間は削除ボタンが `disabled` であること（E2E）と、`resetPhaseUi` がツールを無選択へ戻す単体 | 選択タブが無くても削除の導線が成立する | 未 |
