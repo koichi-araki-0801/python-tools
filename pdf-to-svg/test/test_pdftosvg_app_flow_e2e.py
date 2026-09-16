@@ -727,8 +727,7 @@ def _place_cover(page, word):
 
 
 def _select_visible_text(page):
-    """選択ツールで可視文字を 1 つ選び、青枠 (`.sel-box`) が付くまで待つ。"""
-    page.click('[data-tool="select"]')
+    """ツールを選ばないまま可視文字を 1 つクリックで選び、青枠 (`.sel-box`) が付くまで待つ。"""
     page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
     expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
 
@@ -880,6 +879,29 @@ def test_switching_tool_clears_element_selection(e2e_page, ocr_layer_pdf):
     assert page.evaluate("() => Object.keys(window.__state.elSel['0:0'] || {}).length") == 0
 
 
+def test_element_click_selection_works_while_a_tool_is_active(e2e_page, ocr_layer_pdf):
+    """「選択」タブが無くなっても、どのツール中でもクリックで要素を選んで削除できる。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="crop"]')
+    page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
+    page.click("#btn-deletesel")
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(0)
+    expect(page.locator('#trim-stage svg [data-el]', has_text="visible text")).to_have_count(0)
+
+
+def test_pressing_the_active_tool_again_returns_to_no_tool(e2e_page, ocr_layer_pdf):
+    """押下中のタブをもう一度押すと無選択へ戻り、ツール固有の入力欄が消える。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="border"]')
+    expect(page.locator("#border-opts")).to_be_visible()
+    page.click('[data-tool="border"]')
+    expect(page.locator("#border-opts")).to_be_hidden()
+    expect(page.locator('.float-tools [data-tool][aria-pressed="true"]')).to_have_count(0)
+
+
 def test_back_from_step4_keeps_page_and_clears_selection(e2e_page, ocr_layer_two_page_pdf):
     """「戻る」で手順 4 から 3 へ戻ると、見ていたページのまま選択が解けている。"""
     page = e2e_page
@@ -894,7 +916,7 @@ def test_back_from_step4_keeps_page_and_clears_selection(e2e_page, ocr_layer_two
 
 
 def test_stepbar_back_to_step3_keeps_page_and_resets_tool(e2e_page, ocr_layer_two_page_pdf):
-    """ステップバーで手順 4 から 3 へ戻ると、見ていたページのままツールが「選択」へ戻る。"""
+    """ステップバーで手順 4 から 3 へ戻ると、見ていたページのままツールが無選択に戻る。"""
     page = e2e_page
     _open_second_page_in_step3(page, ocr_layer_two_page_pdf)
     page.click('[data-tool="cover"]')
@@ -903,8 +925,7 @@ def test_stepbar_back_to_step3_keeps_page_and_resets_tool(e2e_page, ocr_layer_tw
     page.click('#stepbar .step[data-step="3"]')
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
     expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
-    expect(page.locator('[data-tool="select"]')).to_have_attribute("aria-pressed", "true")
-    expect(page.locator('[data-tool="cover"]')).to_have_attribute("aria-pressed", "false")
+    expect(page.locator('.float-tools [data-tool][aria-pressed="true"]')).to_have_count(0)
     expect(page.locator("#cover-opts")).to_be_hidden()
 
 

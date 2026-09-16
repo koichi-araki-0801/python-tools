@@ -478,13 +478,16 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
   }
 
-  // 選択モードのクリック結線のみ。SVG は mountPage で毎回差し替わるため漏れない。
-  // crop ドラッグのリスナーは wireStatic で一度だけ張る (多重登録防止)。
+  // 要素のクリック選択の結線。SVG は mountPage で毎回差し替わるため漏れない。
+  // ツールを選んでいてもクリックは要素の選択に使う (ドラッグだけがツール固有の操作)。
+  // crop/border/cover ドラッグのリスナーは wireStatic で一度だけ張る (多重登録防止)。
   function wireTrimStage() {
-    if (S.tool !== "select") return;
     var host = document.getElementById("trim-stage");
     var svgEl = host.querySelector("svg"); if (!svgEl) return;
     svgEl.addEventListener("click", function (e) {
+      // ドラッグで矩形を引いた直後にも click は飛ぶ。そのまま拾うと、引き終わった位置の
+      // 要素が意図せず選択される (範囲削除の直後に無関係な要素が青枠になる)。
+      if (S.dragMoved) { S.dragMoved = false; return; }
       var t = e.target.closest("[data-el]"); if (!t) return;
       var id = t.getAttribute("data-el"); var sel = curElSel();
       if (sel[id]) delete sel[id]; else sel[id] = true;
@@ -500,6 +503,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
       if (e.target.closest(".cover-box") || e.target.closest(".border-box")) return; // オーバーレイ上の移動・伸縮・選択は cover.js / border.js が扱う
       if (!host.querySelector("svg")) return;
+      S.dragMoved = false;
       if (S.tool === "cover") clearCoverSel(); // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
       if (S.tool === "border") clearBorderSel(); // 枠線も同様
       var rubber = document.createElement("div");
@@ -510,6 +514,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
     window.addEventListener("mousemove", function (e) {
       if (!S.cropDrag) return;
+      S.dragMoved = true;
       var hb = host.getBoundingClientRect();
       var x1 = Math.min(S.cropDrag.origin.x, e.clientX), y1 = Math.min(S.cropDrag.origin.y, e.clientY);
       var x2 = Math.max(S.cropDrag.origin.x, e.clientX), y2 = Math.max(S.cropDrag.origin.y, e.clientY);
@@ -824,7 +829,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       document.getElementById("pgnav-3").innerHTML = pageLabel();
       var ed3 = app.querySelector('[data-screen="3"] .editor');
       ed3.classList.toggle("tool-crop", S.tool === "crop");
-      ed3.classList.toggle("tool-select", S.tool === "select");
       ed3.classList.toggle("tool-border", S.tool === "border");
       ed3.classList.toggle("tool-cover", S.tool === "cover");
       // 押下表示は `S.tool` から毎回付け直す (手順の移動で `resetPhaseUi` がツールを戻す経路もあるため)
@@ -975,9 +979,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     // 手順3 ツール
     app.querySelectorAll(".float-tools [data-tool]").forEach(function (b) {
       b.addEventListener("click", function () {
-        S.tool = b.dataset.tool;
-        // ツールを離れたら要素の選択 (青枠) と上書きの選択 (緑枠) を両方解く。残すと 2 つの枠が同時に出て、
-        // 「削除」が画面で選んだつもりの無い側まで消す
+        // 押下中のタブをもう一度押したら無選択へ戻す (ドラッグ操作を止めてクリック選択だけにする)
+        S.tool = S.tool === b.dataset.tool ? null : b.dataset.tool;
+        // ツールを離れたら要素の選択 (青枠)・上書きの選択 (緑枠)・枠線の選択を解く。残すと複数の枠が
+        // 同時に出て、「削除」が画面で選んだつもりの無い側まで消す
         S.elSel = {};
         clearCoverSel();
         clearBorderSel();

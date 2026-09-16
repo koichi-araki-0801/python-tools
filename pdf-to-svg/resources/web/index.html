@@ -29,7 +29,7 @@
   .editor.tool-crop .page-host, .editor.tool-crop .doc-stage,
   .editor.tool-border .page-host, .editor.tool-border .doc-stage,
   .editor.tool-cover .page-host, .editor.tool-cover .doc-stage { cursor: crosshair; }
-  .editor.tool-select .page-host [data-el] { cursor: pointer; }
+  .editor .page-host [data-el] { cursor: pointer; }
   /* 手順2: 文字クリックで「元の語」に取り込めることを示す */
   .screen[data-screen="2"] .page-host text[data-el] { cursor: pointer; }
   .el-hot { outline: 2px solid var(--accent); }
@@ -163,7 +163,6 @@
       <div class="editor">
         <div class="float-tools">
           <div class="segment">
-            <button data-tool="select" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 19 12l-6.2 1.4L9.5 20 5.5 3.5Z"></path></svg>選択</button>
             <button data-tool="crop" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v13.5A1.5 1.5 0 0 0 8.5 18H21"></path><path d="M3 7h13.5A1.5 1.5 0 0 1 18 8.5V21"></path></svg>範囲削除</button>
             <button data-tool="border" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1.5"></rect></svg>枠線</button>
             <button data-tool="cover" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="9" rx="1.5"></rect><path d="M8 12.5h8"></path></svg>上書き</button>

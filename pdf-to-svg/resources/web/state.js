@@ -22,8 +22,9 @@ var S = {
   filterFor: { 2: "all", 3: "pending" },
   selFor: { 2: {}, 3: {} },     // ページレール選択 (global idx -> true)
   collapsed: {},        // "step:fi" -> true (レールのファイル折り畳み)
-  tool: "select",       // 手順3 ツール (select/crop/border/cover)
+  tool: null,           // 手順3 ツール (null=無選択 / crop / border / cover)。無選択でもクリックでの要素選択は効く
   cropDrag: null,       // 範囲ドラッグ中の状態 {origin,rubber,mode}
+  dragMoved: false,     // 直前の mouseup がドラッグ由来か (続けて飛ぶ click を握り潰す)
   coverText: "",        // 上書きツールの置換語 (空なら矩形だけ)
   coverSel: null,       // 上書きツールで選んでいる要素 id (null = 未選択。入力欄は次に置く語)
   coverDrag: null,      // 上書きの移動・伸縮中の状態 (`cover.js` が使う)
@@ -191,7 +192,7 @@ function resetPhaseUi() {
   S.elSel = {};
   S.coverSel = null;
   S.borderSel = null;
-  S.tool = "select";
+  S.tool = null;
 }
 
 /** 手順を 1 つ進める (2→3 / 3→4)。ガード解除・選択クリアも行う。再描画は呼び出し側 */
