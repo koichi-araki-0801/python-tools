@@ -981,6 +981,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       b.addEventListener("click", function () {
         // 押下中のタブをもう一度押したら無選択へ戻す (ドラッグ操作を止めてクリック選択だけにする)
         S.tool = S.tool === b.dataset.tool ? null : b.dataset.tool;
+        // ページ外の余白で mouseup したドラッグは svgEl の click まで届かず (a) が消費し損ね、
+        // 直後にツールを無選択へ戻すと (b) の mousedown ガードも通らず true が残ってしまう。
+        // ツール切替のたびにここで戻し、次のクリックが握り潰されないようにする。
+        S.dragMoved = false;
         // ツールを離れたら要素の選択 (青枠)・上書きの選択 (緑枠)・枠線の選択を解く。残すと複数の枠が
         // 同時に出て、「削除」が画面で選んだつもりの無い側まで消す
         S.elSel = {};

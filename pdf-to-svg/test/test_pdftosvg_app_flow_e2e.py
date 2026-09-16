@@ -902,6 +902,25 @@ def test_pressing_the_active_tool_again_returns_to_no_tool(e2e_page, ocr_layer_p
     expect(page.locator('.float-tools [data-tool][aria-pressed="true"]')).to_have_count(0)
 
 
+def test_click_after_offpage_drag_and_tool_toggle_off_selects_in_one_click(e2e_page, ocr_layer_pdf):
+    """ページ外へはみ出すドラッグの直後にツールを無選択へ戻しても、次の要素クリックが
+    握り潰されない (`S.dragMoved` がツール切替のたびにリセットされることの回帰確認)。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="crop"]')
+    box = page.locator("#trim-stage svg").bounding_box()
+    # ページ内から始めて、ページ (svg) の外まで大きくはみ出した位置で離す。
+    # mouseup の target は svg の子孫ではなくなるため、後続の click は svg の
+    # click リスナー (S.dragMoved を消費する側) へ届かない。
+    page.mouse.move(box["x"] + 10, box["y"] + 10)
+    page.mouse.down()
+    page.mouse.move(5, 5, steps=5)
+    page.mouse.up()
+    page.click('[data-tool="crop"]')  # 押下中のタブの再クリックで無選択へ戻す
+    page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
+
+
 def test_back_from_step4_keeps_page_and_clears_selection(e2e_page, ocr_layer_two_page_pdf):
     """「戻る」で手順 4 から 3 へ戻ると、見ていたページのまま選択が解けている。"""
     page = e2e_page
