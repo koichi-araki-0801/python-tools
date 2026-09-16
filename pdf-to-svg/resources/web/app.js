@@ -516,6 +516,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       S.dragMoved = false;
       if (S.tool === "cover") clearCoverSel(); // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
       if (S.tool === "border") clearBorderSel(); // 枠線も同様
+      blurTextEntry(); // 選択を解いたあとで外す (順序を入れ替えると確定 RPC が飛ぶ)
       var rubber = document.createElement("div");
       rubber.className = S.tool === "border" ? "border-rubber" : S.tool === "cover" ? "cover-rubber" : "crop-rubber";
       host.appendChild(rubber);
@@ -564,6 +565,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     var pg = S.PAGES[S.page];
     invalidate(pg.fileIndex, pg.pageInFile);
     curElSel(); S.elSel[pkey()] = {};
+    blurTextEntry(); // 編集が成功した時点で入力欄のフォーカスを外し、続く Ctrl+Z をアプリの Undo へ通す
     render();
   }
 
@@ -1120,6 +1122,20 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (!target || !target.tagName) return false;
     var tag = target.tagName.toLowerCase();
     return tag === "input" || tag === "textarea" || !!target.isContentEditable;
+  }
+
+  /** 入力欄にフォーカスが残っていれば外す。キャンバスの操作 (ラバーバンドの開始・編集の成功) の
+   *  あとに呼ぶ。入力欄にフォーカスがある間の Ctrl+Z は「ブラウザ標準の取り消しへ譲る」
+   *  (`isTextEntry` のガード) ため、外さないと「語を打つ → 範囲を引く → Ctrl+Z」で上書きが戻らず、
+   *  代わりに入力欄の語が消える。キャンバスの mousedown はテキスト選択を防ぐため
+   *  `preventDefault()` しており、それだけではフォーカスが移らない。
+   *  blur で `change` が発火し確定処理 (`commitCoverText` / `commitBorderStyle`) が走るが、
+   *  ラバーバンド開始時は直前に選択を解いているので「次に置く値」を書くだけで RPC は飛ばず、
+   *  編集成功後は RPC 済みで入力欄は同期済みなので差分が無い。箱を掴んだ瞬間には呼ばない
+   *  (選択中の要素があると確定 RPC → 再マウント → ドラッグ中の箱が消えるため)。 */
+  function blurTextEntry() {
+    var el = document.activeElement;
+    if (isTextEntry(el)) el.blur();
   }
 
   /** 書き出し範囲・実行・ショートカット・進捗 */

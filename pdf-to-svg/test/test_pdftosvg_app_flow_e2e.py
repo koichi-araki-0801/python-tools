@@ -636,8 +636,47 @@ def test_manual_cover_jitter_click_does_not_push_noop_undo(e2e_page, ocr_layer_p
     page.mouse.move(cx + sx * 0.5, cy, steps=1)
     page.mouse.up()
 
+    # Ctrl+Z の時点で入力欄にフォーカスが残っていないこと (残っていると Ctrl+Z はブラウザ標準の
+    # 取り消しへ譲られ、アプリの Undo に届かない)。上書きを置いた時点でアプリが外している前提を
+    # ここで明示し、テストの結果が実行順に依存しないようにする。
+    expect(page.locator("#cover-text")).not_to_be_focused()
     page.keyboard.press("Control+z")
     expect(page.locator("#trim-stage .cover-box")).to_have_count(0)
+
+
+def test_undo_after_typing_a_word_then_placing_a_cover_undoes_the_cover(e2e_page, ocr_layer_pdf):
+    """入力欄に語を打ってから範囲を引いて上書きを置き、そのまま Ctrl+Z を押すと上書きが戻る。
+
+    範囲を引いた時点でアプリが入力欄のフォーカスを外すので、Ctrl+Z がアプリの Undo に届く。
+    外さないと Ctrl+Z はブラウザ標準の取り消しへ譲られ、上書きは戻らず入力欄の語が消える。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="cover"]')
+    page.fill("#cover-text", "打った語")
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    page.mouse.move(box["x"] + 20 * sx, box["y"] + 110 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120 * sx, box["y"] + 135 * sy, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(1)
+    expect(page.locator("#cover-text")).not_to_be_focused()
+    page.keyboard.press("Control+z")
+    expect(page.locator("#trim-stage .cover-box")).to_have_count(0)
+    # 入力欄の語は消えていない (ブラウザ標準の取り消しに取られていない)
+    expect(page.locator("#cover-text")).to_have_value("打った語")
+
+
+def test_undo_after_typing_a_width_then_placing_a_border_undoes_the_border(e2e_page, ocr_layer_pdf):
+    """太さを打ってから枠線を引き、そのまま Ctrl+Z を押すと枠線が戻る (枠線ツールでも同じ)。"""
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page, width="3")
+    expect(page.locator("#border-width")).not_to_be_focused()
+    page.keyboard.press("Control+z")
+    expect(page.locator("#trim-stage .border-box")).to_have_count(0)
+    expect(page.locator("#border-width")).to_have_value("3")
 
 
 def test_manual_cover_resize_and_retext(e2e_page, ocr_layer_pdf):
