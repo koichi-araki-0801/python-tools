@@ -17,6 +17,7 @@ SETUP = """
 window.__roSetup = async () => {
   const st = await import('/state.js');
   const ro = await import('/rect-overlay.js');
+  const saved = { phase: st.S.phase, tool: st.S.tool };
   st.S.phase = 3; st.S.tool = "cover";
   const host = document.createElement("div");
   host.style.cssText = "position:relative;width:300px;height:200px";
@@ -34,7 +35,13 @@ window.__roSetup = async () => {
     getSel: () => sel, setSel: (v) => { sel = v; }, getDrag: () => drag, setDrag: (v) => { drag = v; },
     onSelect: () => {},
   });
-  window.__ro = { host, pending, ov, promises: [] };
+  window.__ro = { host, pending, ov, promises: [], saved, st };
+};
+window.__roTeardown = () => {
+  const c = window.__ro; if (!c) return;
+  c.st.S.phase = c.saved.phase; c.st.S.tool = c.saved.tool;
+  c.host.remove();
+  delete window.__ro;
 };
 """
 
@@ -45,7 +52,10 @@ RECT = {"x": 10, "y": 10, "w": 50, "h": 30}
 def ro(edge_page):
     edge_page.evaluate(SETUP)
     edge_page.evaluate("window.__roSetup()")
-    return edge_page
+    yield edge_page
+    # 共有ページ (session スコープの edge_page) を汚さない。`S` はモジュールシングルトンで、
+    # 書き換えたまま残すと後に走る browser テストが `phase=3 / tool="cover"` を黙って継承する
+    edge_page.evaluate("window.__roTeardown()")
 
 
 def _box_ids(page):

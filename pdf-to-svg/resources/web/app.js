@@ -513,7 +513,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       if (S.phase !== 3 || (S.tool !== "crop" && S.tool !== "border" && S.tool !== "cover")) return;
       if (e.target.closest(".cover-box") || e.target.closest(".border-box")) return; // オーバーレイ上の移動・伸縮・選択は cover.js / border.js が扱う
       if (!host.querySelector("svg")) return;
-      S.dragMoved = false;
       if (S.tool === "cover") clearCoverSel(); // 上書きの空白クリックは選択解除 (新規追加のラバーバンドへ進む)
       if (S.tool === "border") clearBorderSel(); // 枠線も同様
       blurTextEntry(); // 選択を解いたあとで外す (順序を入れ替えると確定 RPC が飛ぶ)
@@ -899,6 +898,12 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   }
 
   function wireStatic() {
+    // ドラッグ直後に飛ぶ click を 1 回だけ握り潰すためのフラグ (`S.dragMoved`) は、次の mousedown が
+    // 来た時点で必ず用済みになる (DOM のイベント順序は mousedown → mouseup → click なので、この
+    // capture リスナは次の click より前に走る)。個別の経路 (ツール切替・手順移動・オーバーレイ上の
+    // mousedown 等) でリセットを足す形だと、経路を 1 つ見落とすたびにクリック 1 回が空振りする
+    // 不具合が再発する。ここ 1 箇所で不変条件として持つ。
+    window.addEventListener("mousedown", function () { S.dragMoved = false; }, true);
     installCropDrag();
     installCoverDrag(document.getElementById("trim-stage"));
     installBorderDrag(document.getElementById("trim-stage"));
@@ -994,10 +999,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       b.addEventListener("click", function () {
         // 押下中のタブをもう一度押したら無選択へ戻す (ドラッグ操作を止めてクリック選択だけにする)
         S.tool = S.tool === b.dataset.tool ? null : b.dataset.tool;
-        // ページ外の余白で mouseup したドラッグは svgEl の click まで届かず (a) が消費し損ね、
-        // 直後にツールを無選択へ戻すと (b) の mousedown ガードも通らず true が残ってしまう。
-        // ツール切替のたびにここで戻し、次のクリックが握り潰されないようにする。
-        S.dragMoved = false;
         // ツールを離れたら要素の選択 (青枠)・上書きの選択 (緑枠)・枠線の選択を解く。残すと複数の枠が
         // 同時に出て、「削除」が画面で選んだつもりの無い側まで消す
         S.elSel = {};
@@ -1020,7 +1021,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
     widthInput.addEventListener("change", function () {
       var v = parseFloat(this.value);
-      if (!isNaN(v) && v > 0) commitBorderStyle({ width: v });
+      if (!isNaN(v) && v > 0) { commitBorderStyle({ width: v }); return; }
+      // 弾いた値を表示に残すと、`change` は値が変わらない限り再発火しないので「表示だけ嘘」の状態で
+      // 次の操作へ進める。直前の妥当な値 (次に置く太さ) へ戻す
+      this.value = String(S.borderWidth);
     });
     widthInput.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
     // 上書きツールの置換語。上書きを選んでいる間、入力欄は選択中の要素の語の編集に使う。

@@ -860,7 +860,7 @@ def test_border_selected_edit_does_not_leak_into_the_next_border(e2e_page, ocr_l
     # `rect-overlay.js` の `draw` が古い一覧の結果で新しい描画を上書きしてしまう
     # (どちらの HTTP 応答が先に返るかは保証されない)。反映後の SVG (`stroke-width="7"`)
     # を待ってから次へ進み、2 つの再描画が重ならないようにする。
-    expect(page.locator("#trim-stage svg rect[data-el]")).to_have_attribute("stroke-width", "7")
+    expect(page.locator("#trim-stage svg rect[data-el]").first).to_have_attribute("stroke-width", "7")
 
     # 空白をドラッグすると選択が解け、2 本目は「次に置く枠線」の太さ 2 で置かれる
     box = page.locator("#trim-stage svg").bounding_box()
@@ -969,6 +969,46 @@ def test_click_after_offpage_drag_and_tool_toggle_off_selects_in_one_click(e2e_p
     page.mouse.move(5, 5, steps=5)
     page.mouse.up()
     page.click('[data-tool="crop"]')  # 押下中のタブの再クリックで無選択へ戻す
+    page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
+    expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
+
+
+def test_click_after_offpage_drag_and_overlay_select_selects_in_one_click(e2e_page, ocr_layer_pdf):
+    """ページ外へはみ出すドラッグで枠線を置いた直後に、その箱をクリックして選んでも
+    `S.dragMoved` が消費されずに残らない。続けて要素をクリックすれば 1 回で選択される。
+
+    箱の mousedown はキャンバスの mousedown ハンドラへ届かない (箱側が stopPropagation する) ため、
+    そこにリセットを置く形では `S.dragMoved` が消費されずに残る。window の capture フェーズで
+    「次の mousedown が来たら用済み」と 1 箇所で持つことで、経路を個別に塞がずに済む。
+
+    箱をクリックした直後の値は `window.__state`(E2E 用の読み取り窓)で直接確かめる。箱は
+    `background: transparent` でも div 全面が pointer-events を奪うため、箱が覆う位置で
+    「続けて要素をクリック」しても実ブラウザではその要素へ届かず (クリックは箱を再選択する
+    だけになり)、`.sel-box` の有無では箱の mousedown が漏れをそのまま検出できない。次の
+    要素クリックは箱と重ならない位置で行い、1 回で選べることの回帰確認として添える。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="border"]')
+    box = page.locator("#trim-stage svg").bounding_box()
+    sx, sy = box["width"] / 300, box["height"] / 200
+    # ページの右下の外までドラッグして枠線を置く (S.dragMoved が true のまま残る操作)。
+    # x=200 起点にして、後で使う「visible text」(x=20, y=150) を箱が覆わないようにする
+    # (`.border-box` は `background: transparent` でも div 全面が pointer-events を奪うため、
+    # 重なると次のクリックが箱に取られてしまい要素を選べない)。
+    page.mouse.move(box["x"] + 200 * sx, box["y"] + 20 * sy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] + 80, box["y"] + box["height"] + 80, steps=5)
+    page.mouse.up()
+    expect(page.locator("#trim-stage .border-box")).to_have_count(1)
+    assert page.evaluate("() => window.__state.dragMoved") is True
+    # 置いた箱をクリックして選ぶ (箱側が stopPropagation するのでキャンバスの mousedown は走らない)
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#trim-stage .border-box.sel")).to_have_count(1)
+    # 本題: 箱の mousedown だけでも `S.dragMoved` が用済みになっていること
+    # (修正前は true のまま残り、次に svg 側で拾う click を誤って握り潰す)
+    assert page.evaluate("() => window.__state.dragMoved") is False
+    # 続けて要素をクリック → 1 回で選ばれること (箱と重ならない要素なので実クリックが届く)
     page.locator("#trim-stage svg [data-el]", has_text="visible text").first.click()
     expect(page.locator("#trim-stage .sel-box")).to_have_count(1)
 

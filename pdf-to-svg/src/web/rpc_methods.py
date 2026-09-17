@@ -474,6 +474,13 @@ def rpc_removeFile(s: WebSession, args: dict) -> dict:
     return {}
 
 
+# 枠線の太さの範囲 (pt)。`index.html` の `#border-width` の `min` / `max` と揃える。
+# 片方だけ変えると UI で打てる値がサーバで拒否される (逆に UI の上限を超えた値がサーバを
+# 素通りすることもある)。
+BORDER_WIDTH_MIN = 0.5
+BORDER_WIDTH_MAX = 20.0
+
+
 def _border_width(args: dict) -> float:
     """``args["width"]`` を枠線の太さ (pt) にする。外部由来なので範囲を見る —
     ``float()`` は ``inf`` / ``nan`` を通し、``_fmt`` がそれを書いて SVG が壊れる。
@@ -482,8 +489,10 @@ def _border_width(args: dict) -> float:
     (片方だけ緩むのを防ぐ)。"""
     raw = args.get("width")
     width = float(raw) if raw is not None else 1.0
-    if not math.isfinite(width) or not (0 < width <= 100):
-        raise ValueError(f"width must be a finite number in (0, 100]: {width!r}")
+    if not math.isfinite(width) or not (BORDER_WIDTH_MIN <= width <= BORDER_WIDTH_MAX):
+        raise ValueError(
+            f"width must be a finite number in [{BORDER_WIDTH_MIN}, {BORDER_WIDTH_MAX}]: {width!r}"
+        )
     return width
 
 

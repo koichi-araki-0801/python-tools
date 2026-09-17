@@ -392,9 +392,9 @@ def test_update_border_rejects_a_rect_past_the_page_edge(session):
                               "rect": {"x": 150, "y": 250, "w": 200, "h": 200}})
 
 
-@pytest.mark.parametrize("bad", [0, -1, 101, float("inf")])
+@pytest.mark.parametrize("bad", [0, 0.4, 20.5, float("inf")])
 def test_update_border_rejects_an_out_of_range_width(session, bad):
-    """太さは `addBorder` と同じ範囲 (0 より大きく 100 以下・有限) を要求する。"""
+    """太さは `addBorder` と同じ範囲 ([0.5, 20]・有限) を要求する。"""
     el = _place_border(session)
     with pytest.raises(ValueError):
         rpc_methods.dispatch(session, "updateBorder",
