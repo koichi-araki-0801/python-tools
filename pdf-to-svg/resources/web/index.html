@@ -61,6 +61,7 @@
     <svg class="step-sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px"><path d="m10 6 6 6-6 6"></path></svg>
     <div class="step" data-step="4"><span class="n">4</span><span id="step4-label">SVGに書き出す</span></div>
     <span class="skipnote" id="gray-skipnote" hidden>手順 2・3 は省略されます</span>
+    <span class="skipnote" id="scan-skipnote" hidden>手順 2 は省略されます（スキャン画像のみのため）</span>
   </div>
 
   <div class="stage">
@@ -276,6 +277,15 @@
     <button class="btn good lg" id="btn-export"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"></path><path d="m8 8 4-4 4 4"></path><path d="M4 14v4.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V14"></path></svg>SVGに書き出す</button>
   </div>
 </div>
+
+<!-- 全ページが純スキャン (文字を持たない画像だけ) のとき、手順 1 の「次へ」で出す案内。
+     閉じる操作 (ボタン・Esc) はすべて手順 3 への遷移として扱う (`app.js` の `wireNav`)。 -->
+<dialog class="notice" id="skip2-dialog" aria-labelledby="skip2-title">
+  <h2 id="skip2-title">用語の置換ができるページがありません</h2>
+  <p>読み込んだ <b id="skip2-n">0</b> ページはすべてスキャン画像で、置き換えられる文字を持ちません。手順 2「用語を置換」は省略します。</p>
+  <p>文字の置き換えは、手順 3 の<b>「上書き」</b>ツールで矩形と置換語を置いて行えます。</p>
+  <div class="actions"><button class="btn primary" id="skip2-go" autofocus>手順 3 へ進む</button></div>
+</dialog>
 
 <!-- role/aria-live: 書き出し完了などの通知をスクリーンリーダーにも読み上げさせる。 -->
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

@@ -1141,3 +1141,95 @@ def test_back_from_step3_to_step2_keeps_page(e2e_page, ocr_layer_two_page_pdf):
     page.click("#btn-back")
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
     expect(page.locator("#pgnav-2")).to_contain_text("2 ページ")
+
+
+def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
+    """全ページが純スキャンなら、手順 1 の「次へ」でモーダルが出て手順 3 へ直行する。
+
+    手順 2 はステップバーから消え、「戻る」は 3→1 になる。手順 4 のまとめには「対象外」が出る。
+    """
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(scanned_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+    # 読み込み直後のトースト (混在時にも出る通知)
+    expect(page.locator("#toast")).to_contain_text("1 ページはスキャン画像のため", timeout=30_000)
+    # 読み込んだ時点でステップバーの 2 が消え、注記が出る (グレーモードと同じ見せ方)
+    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
+    expect(page.locator("#scan-skipnote")).to_be_visible()
+
+    page.click("#btn-next")
+    dialog = page.locator("#skip2-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text("上書き")
+    expect(page.locator("#skip2-n")).to_have_text("1")
+    # モーダルの間は手順 1 のまま
+    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
+    page.click("#skip2-go")
+    expect(dialog).to_be_hidden()
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
+
+    # 「戻る」は手順 1 へ (手順 2 を飛ばしたので)
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
+    # もう一度「次へ」→ Esc でもモーダルは閉じて手順 3 へ進む (ボタンと同じ遷移)
+    page.click("#btn-next")
+    expect(dialog).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+
+    # 手順 3 は未確認のまま「書き出しへ」→ ガード → 未確認をスキップして手順 4
+    page.click("#btn-next")
+    expect(page.locator("#guard")).to_be_visible()
+    page.click("#guard-skip")
+    expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#export-summary")).to_contain_text("対象外 1")
+    # ステップバーの 2 はクリックしても手順 2 に入れない
+    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
+    # 手順 4 の「戻る」は手順 3 のまま (手順 2 の省略は 3→1 だけに効く)
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+
+
+def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_page, scanned_pdf, vector_pdf):
+    """スキャン PDF とベクター PDF が混在するときはモーダルを出さず手順 2 へ進む。
+
+    スキャンページはレールに出ず、手順 2 に入った時点の表示ページはベクター側になる
+    (スキャンを先に読み込んで通し index 0 がスキャンページになる構成で確かめる)。
+    """
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files([str(scanned_pdf), str(vector_pdf)])
+    expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
+    expect(page.locator("#toast")).to_contain_text("1 ページはスキャン画像のため", timeout=30_000)
+    # 混在ならステップバーの 2 は残る
+    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_visible()
+    expect(page.locator("#scan-skipnote")).to_be_hidden()
+
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#skip2-dialog")).to_be_hidden()
+    # レールにはベクター PDF の 1 行だけ。スキャン PDF はファイル行ごと出ない
+    expect(page.locator("#pagenav .pg-row2")).to_have_count(1)
+    expect(page.locator("#pagenav .pl-file")).to_have_count(1)
+    expect(page.locator("#pagenav .pl-file")).to_contain_text("vector_sample.pdf")
+    # 表示中のページはスキャンページ (通し 0) ではなくベクター側
+    expect(page.locator("#pgnav-2")).to_contain_text("vector_sample.pdf")
+    assert page.evaluate("() => window.__state.page") == 1
+    assert page.evaluate("() => window.__state.status2") == ["na", "none"]
+    # 手順 2 上部のまとめにも「対象外 1」
+    expect(page.locator("#sum-2")).to_contain_text("対象外 1")
+
+    # 手順 3 へ進み、戻ると手順 2 のベクターページに戻る (3→2 のまま)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    page.click("#btn-back")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    assert page.evaluate("() => window.__state.page") == 1

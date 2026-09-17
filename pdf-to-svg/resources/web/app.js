@@ -12,7 +12,7 @@ import {
   applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, stepAllowed,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, landOnPhase2,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
@@ -113,7 +113,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
   // ── 4. 読み込み ──
   // 資源上限による劣化の直前値 (要素の切り捨て / 背景の欠落)。同じ状態で何度も通知しない。
-  var degradedNoticed = { truncated: 0, noBackground: 0, ocrPages: 0 };
+  var degradedNoticed = { truncated: 0, noBackground: 0, ocrPages: 0, scannedPages: 0 };
   async function reloadState() {
     var st = await rpc("state");
     applyState(st);
@@ -129,9 +129,13 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (st.ocrPages && st.ocrPages !== degradedNoticed.ocrPages) {
       msgs.push("画像 + OCR 文字のページを " + st.ocrPages + " ページ検出しました。置換箇所は画像の上に矩形で上書きします");
     }
+    if (st.scannedPages && st.scannedPages !== degradedNoticed.scannedPages) {
+      msgs.push(st.scannedPages + " ページはスキャン画像のため、用語の置換対象外です（手順 3 の「上書き」で置き換えられます）");
+    }
     degradedNoticed.truncated = st.truncated || 0;
     degradedNoticed.noBackground = st.noBackground || 0;
     degradedNoticed.ocrPages = st.ocrPages || 0;
+    degradedNoticed.scannedPages = st.scannedPages || 0;
     if (msgs.length) toast(msgs.join(" / "));
   }
 
@@ -270,7 +274,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       '<span class="si"><span class="d pend"></span>要確認 <b>' + c.pend + "</b></span>" +
       '<span class="si"><span class="d done"></span>確認済み <b>' + c.done + "</b></span>" +
       '<span class="si"><span class="d skip"></span>スキップ <b>' + c.skip + "</b></span>" +
-      '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>変更なし <b>' + c.none + "</b></span>";
+      '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>変更なし <b>' + c.none + "</b></span>" +
+      (c.na ? '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>対象外 <b>' + c.na + "</b></span>" : "");
   }
 
   // ── 9. 確認ペイン (手順2) ──
@@ -767,6 +772,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     var stepbar = document.getElementById("stepbar");
     stepbar.classList.toggle("gray-mode", S.gray);
     document.getElementById("gray-skipnote").hidden = !S.gray;
+    // 手順 2 の省略 (全ページが純スキャン)。グレーモード中はそちらの注記だけ出す
+    var skip2 = !S.gray && skipsPhase2();
+    stepbar.classList.toggle("skip2", skip2);
+    document.getElementById("scan-skipnote").hidden = !skip2;
     document.getElementById("step4-label").textContent = S.gray ? "図をグレーで書き出す" : "SVGに書き出す";
     var screen4 = app.querySelector('[data-screen="4"]');
     screen4.classList.toggle("gray", S.gray);
@@ -799,7 +808,9 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     btnNext.style.opacity = btnNext.disabled ? ".5" : "";
 
     if (S.phase === 1) {
-      setHint(S.TOTAL ? "「次へ」で用語の置換に進みます" : "変換するPDFを選びます");
+      setHint(!S.TOTAL ? "変換するPDFを選びます"
+        : (skipsPhase2() && !S.gray) ? "「次へ」で削除・枠線の編集に進みます（スキャン画像のみのため用語の置換は省略）"
+        : "「次へ」で用語の置換に進みます");
       ctxText.textContent = S.TOTAL ? S.FILES.length + " ファイル・" + S.TOTAL + " ページ" : "ファイル未選択";
     } else if (S.phase === 4 && S.gray) {
       var pg4 = S.PAGES[S.page];
@@ -815,7 +826,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       refreshExport();
       var s2 = counts(S.status2), s3 = counts(S.status3);
       document.getElementById("export-summary").innerHTML =
-        S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>用語：確認 " + s2.done + " / スキップ " + s2.skip +
+        S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>用語：確認 " + s2.done + " / スキップ " + s2.skip + (s2.na ? " / 対象外 " + s2.na : "") +
         "　削除：確認 " + s3.done + " / スキップ " + s3.skip;
     } else {
       var task = S.phase === 2 ? "用語の置換" : "削除・枠線の編集";
@@ -878,7 +889,16 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   function tryNext() {
     if (S.phase === 1) {
       if (!S.TOTAL) return;
-      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi(); render();
+      if (!S.gray && skipsPhase2()) {
+        // 全ページが純スキャン: 理由と代替手段 (手順 3 の上書き) を読ませてから進む。
+        // 遷移は dialog の close ハンドラ (`wireNav`) が行う (ボタンと Esc を同じ経路にする)
+        document.getElementById("skip2-n").textContent = S.TOTAL;
+        document.getElementById("skip2-dialog").showModal();
+        return;
+      }
+      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi();
+      if (S.phase === 2) landOnPhase2();
+      render();
       if (S.gray) prefetchFigCand();
       return;
     }
@@ -893,7 +913,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   function back() {
     S.guarding = false;
     resetPhaseUi();
-    if (S.phase === 2) S.phase = 1; else if (S.phase === 3) S.phase = 2; else if (S.phase === 4) S.phase = phaseBeforeExport();
+    if (S.phase === 2) S.phase = 1;
+    else if (S.phase === 3) S.phase = phaseBeforeTrim();
+    else if (S.phase === 4) S.phase = phaseBeforeExport();
+    if (S.phase === 2) landOnPhase2();
     render();
   }
 
@@ -979,12 +1002,21 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("guard-skip").addEventListener("click", function () {
       var arr = statusArr(); for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") arr[i] = "skipped"; advancePhase(); render();
     });
+    // 手順 2 省略の案内モーダル。ボタンも Esc も `close` に集約し、閉じたら手順 3 へ進む
+    var skip2 = document.getElementById("skip2-dialog");
+    document.getElementById("skip2-go").addEventListener("click", function () { skip2.close(); });
+    skip2.addEventListener("close", function () {
+      if (S.phase !== 1 || !S.TOTAL) return;   // 閉じる前にファイルを消した等の取りこぼし
+      S.phase = 3; S.page = 0; S.guarding = false; resetPhaseUi(); render();
+    });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {
         var n = +st.dataset.step; if (n > S.phase || !S.TOTAL || !stepAllowed(n)) return;
         // `back` と同じく表示中のページを保つ。今いる手順を押しただけなら編集中の選択・ツールは残す
         if (n !== S.phase) resetPhaseUi();
-        S.guarding = false; S.phase = n; clearSel(); render();
+        S.guarding = false; S.phase = n; clearSel();
+        if (n === 2) landOnPhase2();
+        render();
       });
     });
   }
