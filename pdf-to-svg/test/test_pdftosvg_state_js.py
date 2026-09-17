@@ -573,3 +573,27 @@ def test_export_noskip_keeps_na_pages(st):
     pages = js(st, "window.__st.exportPageList('', () => [])")
     assert [p["pageInFile"] for p in pages if p["fileIndex"] == 0] == [0]
     assert len(pages) == 4
+
+
+def test_initstatus_and_mergestatus_treat_a_short_scanned_column_as_not_scanned(st):
+    # サーバは pages と同じ長さで scanned を作るが、欠けていても非スキャン扱いへ倒れる (例外にしない)
+    assert js(st, "window.__st.initStatus([true, false, true], [true])") == ["na", "none", "pending"]
+    assert js(st, "window.__st.mergeStatus([true, true], ['reviewed', 'na'], [true])") == ["na", "pending"]
+
+
+def test_applystate_with_a_new_page_list_maps_scanned_via_initstatus(st):
+    # ページ列が変わる再取得 (ファイル追加) は initStatus 経路。scanned が na に写り、旧 status は捨てられる
+    js(st, "window.__st.S.status2[2] = 'reviewed'")
+    js(st, """window.__st.applyState({
+        files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }, { name: "c.pdf", pages: 1 }],
+        pages: [
+          { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
+          { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
+          { fileIndex: 2, pageInFile: 0 },
+        ],
+        total: 6,
+        changed2: [true, false, true, true, false, true], changed3: [false, false, false, false, false, false],
+        scanned: [false, false, false, false, false, true],
+    })""")
+    assert js(st, "window.__st.S.status2") == ["pending", "none", "pending", "pending", "none", "na"]
+    assert js(st, "window.__st.skipsPhase2()") is False

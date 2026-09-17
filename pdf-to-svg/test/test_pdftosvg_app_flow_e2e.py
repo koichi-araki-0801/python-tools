@@ -1188,7 +1188,7 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
     page.click("#guard-skip")
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
     expect(page.locator("#export-summary")).to_contain_text("対象外 1")
-    # ステップバーの 2 はクリックしても手順 2 に入れない
+    # ステップバーの 2 は表示されない（クリック不可そのものは state.js 単体の stepAllowed(2) で固定）
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
     # 手順 4 の「戻る」は手順 3 のまま (手順 2 の省略は 3→1 だけに効く)
     page.click("#btn-back")

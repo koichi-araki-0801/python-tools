@@ -275,7 +275,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       '<span class="si"><span class="d done"></span>確認済み <b>' + c.done + "</b></span>" +
       '<span class="si"><span class="d skip"></span>スキップ <b>' + c.skip + "</b></span>" +
       '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>変更なし <b>' + c.none + "</b></span>" +
-      (c.na ? '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>対象外 <b>' + c.na + "</b></span>" : "");
+      (c.na ? '<span class="si"><span class="d pend" style="background:var(--faint)"></span>対象外 <b>' + c.na + "</b></span>" : "");
   }
 
   // ── 9. 確認ペイン (手順2) ──
@@ -588,6 +588,9 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (st === "none") return '<div class="pa-prompt" style="margin:0">このページは変更がないため操作は不要です</div>';
     if (st === "reviewed") return '<div class="pa-badge good">' + svg('<path d="' + checkD + '"/>', 17) + 'このページは確認済み</div><button class="pa-link" data-pa="reset">取り消す</button>';
     if (st === "skipped") return '<div class="pa-badge warn">' + svg('<path d="M9 8l4 4-4 4M15 8v8"/>', 17) + 'このページはスキップ</div><button class="pa-link" data-pa="review">確認する</button>';
+    // 置換対象外 (純スキャン) は確認状態を持たない。通常は landOnPhase2 が着地を防ぐが、
+    // 将来ページ送りの経路が増えても確認ボタンを出さない
+    if (st === "na") return '<div class="pa-prompt">このページはスキャン画像のため、用語の置換の対象外です</div>';
     return '<div class="pa-prompt">' + (S.phase === 2 ? "このページの置換を確認、または不要ならスキップ" : "このページを確認、または不要ならスキップ") + "</div>" +
       '<div class="pa-btns"><button class="btn ghost" data-pa="skip">スキップ</button><button class="btn primary" data-pa="done">' + (S.phase === 2 ? "確認しました" : "確認しました") + "</button></div>";
   }
@@ -809,6 +812,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
     if (S.phase === 1) {
       setHint(!S.TOTAL ? "変換するPDFを選びます"
+        : S.gray ? "「次へ」で図の選択に進みます（手順 2・3 は省略）"
         : skip2 ? "「次へ」で削除・枠線の編集に進みます（スキャン画像のみのため用語の置換は省略）"
         : "「次へ」で用語の置換に進みます");
       ctxText.textContent = S.TOTAL ? S.FILES.length + " ファイル・" + S.TOTAL + " ページ" : "ファイル未選択";

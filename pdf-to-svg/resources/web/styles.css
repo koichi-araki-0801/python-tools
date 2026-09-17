@@ -835,7 +835,7 @@ a:focus-visible,
 .stepbar.skip2 .step[data-step="2"], .stepbar.skip2 .step[data-step="2"] + .step-sep { display: none; }
 
 /* 案内モーダル (本アプリで唯一の `<dialog>`)。色・角丸はガードバー / パネルに合わせる */
-dialog.notice { border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px 26px; max-width: 460px; color: var(--ink); background: #fff; box-shadow: 0 18px 48px rgba(0,0,0,.18); }
+dialog.notice { border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px 26px; max-width: 460px; color: var(--ink); background: var(--surface); box-shadow: 0 18px 48px rgba(0,0,0,.18); }
 dialog.notice::backdrop { background: rgba(20, 24, 32, .35); }
 dialog.notice h2 { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
 dialog.notice p { margin: 0 0 10px; font-size: 13px; line-height: 1.65; color: var(--muted); }
