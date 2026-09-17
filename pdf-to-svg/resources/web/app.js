@@ -1017,11 +1017,18 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     var widthInput = document.getElementById("border-width");
     widthInput.addEventListener("input", function () {
       var v = parseFloat(this.value);
-      if (!isNaN(v) && v > 0 && S.borderSel === null) S.borderWidth = v;
+      var lo = parseFloat(this.min), hi = parseFloat(this.max);
+      if (!isNaN(v) && v >= lo && v <= hi && S.borderSel === null) S.borderWidth = v;
     });
     widthInput.addEventListener("change", function () {
+      // 範囲の正典は HTML の min / max (index.html の #border-width)。ここで数字を書かず属性から
+      // 読むのは、範囲を HTML・JS・サーバの 3 箇所に書くとどれかがずれるため (サーバ側の
+      // BORDER_WIDTH_MIN/MAX は HTML と揃える旨をコメントで結んである)。number 入力の min / max は
+      // ブラウザが強制しないので、JS で検査しないと範囲外の値がサーバへ届き、拒否された値が
+      // 入力欄に残る。
       var v = parseFloat(this.value);
-      if (!isNaN(v) && v > 0) { commitBorderStyle({ width: v }); return; }
+      var lo = parseFloat(this.min), hi = parseFloat(this.max);
+      if (!isNaN(v) && v >= lo && v <= hi) { commitBorderStyle({ width: v }); return; }
       // 弾いた値を表示に残すと、`change` は値が変わらない限り再発火しないので「表示だけ嘘」の状態で
       // 次の操作へ進める。直前の妥当な値 (次に置く太さ) へ戻す
       this.value = String(S.borderWidth);

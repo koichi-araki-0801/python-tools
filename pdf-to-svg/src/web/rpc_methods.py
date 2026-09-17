@@ -474,13 +474,6 @@ def rpc_removeFile(s: WebSession, args: dict) -> dict:
     return {}
 
 
-# 枠線の太さの範囲 (pt)。`index.html` の `#border-width` の `min` / `max` と揃える。
-# 片方だけ変えると UI で打てる値がサーバで拒否される (逆に UI の上限を超えた値がサーバを
-# 素通りすることもある)。
-BORDER_WIDTH_MIN = 0.5
-BORDER_WIDTH_MAX = 20.0
-
-
 def _border_width(args: dict) -> float:
     """``args["width"]`` を枠線の太さ (pt) にする。外部由来なので範囲を見る —
     ``float()`` は ``inf`` / ``nan`` を通し、``_fmt`` がそれを書いて SVG が壊れる。
@@ -563,6 +556,12 @@ def rpc_updateBorder(s: WebSession, args: dict) -> dict:
 
 # 手動の上書きの置換語の上限文字数 (外部由来の入力なので上限を置く)。
 MAX_COVER_TEXT_CHARS = 200
+
+# 枠線の太さの範囲 (pt)。正典は `resources/web/index.html` の `#border-width` の `min` / `max` で、
+# クライアントはその属性を読んで検査する。サーバは HTML を読めないので同じ値をここに持つ。
+# 片方だけ変えると、UI で打てる値がサーバで拒否される (または逆)。
+BORDER_WIDTH_MIN = 0.5
+BORDER_WIDTH_MAX = 20.0
 
 
 def cover_font_size(h: float) -> float:

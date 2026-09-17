@@ -673,6 +673,26 @@ def test_undo_after_typing_a_width_then_placing_a_border_undoes_the_border(e2e_p
     expect(page.locator("#border-width")).to_have_value("3")
 
 
+def test_border_width_outside_the_html_range_is_rejected_and_the_input_is_restored(e2e_page, ocr_layer_pdf):
+    """入力欄の max (20) を越える太さを打って確定すると、サーバへ送らず入力欄を直前の妥当な値へ戻す。
+
+    HTML の `min` / `max` はブラウザの number 入力で強制力が弱く、25 と打てば JS はその値を読める。
+    JS が HTML の属性を正典として検査しないと、サーバが拒否した値が入力欄に残ったままになる。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    page.click('[data-tool="border"]')
+    page.fill("#border-width", "3")
+    page.press("#border-width", "Enter")  # 次に置く太さを 3 に確定
+    page.fill("#border-width", "25")
+    page.press("#border-width", "Enter")
+    expect(page.locator("#border-width")).to_have_value("3")  # 弾かれて 3 に戻る
+    assert page.evaluate("() => window.__state.borderWidth") == 3
+    page.fill("#border-width", "0.2")
+    page.press("#border-width", "Enter")
+    expect(page.locator("#border-width")).to_have_value("3")
+
+
 def test_manual_cover_resize_and_retext(e2e_page, ocr_layer_pdf):
     page = e2e_page
     _goto_step3(page, ocr_layer_pdf)
