@@ -101,7 +101,8 @@ function wireRail(navId, visSelectable) {
     if (from > to) { var t = from; from = to; to = t; }
     from = Math.max(1, Math.min(fp, from)); to = Math.max(1, Math.min(fp, to));
     var act = nav.querySelector(".rg-act").value;
-    for (var pp = from; pp <= to; pp++) { var gg = start + (pp - 1); if (arr[gg] !== "none") arr[gg] = act; }
+    // 変更なし・置換対象外 (純スキャン) は確認状態を持たないので範囲に含まれても書き換えない
+    for (var pp = from; pp <= to; pp++) { var gg = start + (pp - 1); if (arr[gg] !== "none" && arr[gg] !== "na") arr[gg] = act; }
     ui.render();
   });
   var selbar = nav.querySelector(".pl-selbar");
