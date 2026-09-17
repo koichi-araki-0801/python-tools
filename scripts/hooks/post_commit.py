@@ -14,6 +14,13 @@
 
 `git` を実際に呼ぶ処理は `runner` を受け取り、既定は実 `subprocess.run` だが呼び出し側から
 差し替えられる(単体テストは偽 runner を注入し、実 git push は起動しない)。
+
+auto-push 失敗時のメッセージは stderr に加えて **stdout の末尾** も出す。`git push` が
+起動する pre-push フックは、check_comments の WARN や `[pre-push] 検証が失敗しました` の
+ような案内を stderr へ出す一方、pytest 各段の結果(`[pre-push]   -> Ns (exit N)` や
+pytest の summary 行)は stdout へ流れる。stderr だけを見せると WARN しか目に入らず、
+実際に落ちた段(どの pytest 呼び出しが失敗したか)が分からない事故が起きたため、
+stdout の末尾も併せて出す。
 """
 
 from __future__ import annotations
@@ -26,6 +33,10 @@ from typing import Callable
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+# auto-push 失敗時に stderr へ添える stdout の末尾行数。pre-push 連鎖の pytest 各段の
+# 結果はここに収まる程度の行数で出るため、末尾だけ見せれば落ちた段が分かる。
+STDOUT_TAIL_LINES = 30
 
 
 def default_runner(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -56,9 +67,15 @@ def auto_push(*, runner: Runner = default_runner) -> None:
         out = (result.stdout or result.stderr or "done").strip()
         print(f"[post-commit] auto-push: {out}")
         return
-    msg = (result.stderr or result.stdout or "").strip()
-    print(f"[post-commit] auto-push をスキップしました: {msg}", file=sys.stderr)
-    if any(k in msg.lower() for k in ("non-fast-forward", "rejected", "fetch first")):
+    stderr = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    msg = stderr or stdout
+    output = f"[post-commit] auto-push をスキップしました: {msg}"
+    if stdout:
+        tail = "\n".join(stdout.splitlines()[-STDOUT_TAIL_LINES:])
+        output += f"\n--- stdout (末尾 {STDOUT_TAIL_LINES} 行) ---\n{tail}"
+    print(output, file=sys.stderr)
+    if any(k in (stderr + stdout).lower() for k in ("non-fast-forward", "rejected", "fetch first")):
         print(
             "[post-commit] リモートと分岐しています。amend 直後などツリーの一致を確認のうえ "
             "`git push --force-with-lease` を手動で実行してください。",

@@ -641,6 +641,52 @@ def test_auto_push_does_not_raise_on_non_fast_forward(capsys):
     assert all("--force" not in c and "-f" not in c for c in runner.calls)
 
 
+# ── auto_push: 失敗時は stderr に加えて stdout の末尾も見せる(pre-push 連鎖の結果は
+#    stdout に流れるため、stderr だけでは落ちた段が分からない) ──
+def test_auto_push_includes_stdout_tail_on_failure(capsys):
+    runner = _FakeRunner(
+        [
+            _post_commit_completed(returncode=0),
+            _post_commit_completed(returncode=1, stderr="fatal: エラー", stdout="line1\nline2\n"),
+        ]
+    )
+    post_commit.auto_push(runner=runner)
+    err = capsys.readouterr().err
+    assert "fatal: エラー" in err
+    assert "stdout" in err
+    assert "line1" in err
+    assert "line2" in err
+
+
+def test_auto_push_stdout_tail_keeps_only_last_n_lines(capsys):
+    lines = [f"line{i}" for i in range(1, 41)]  # 40 行 > STDOUT_TAIL_LINES (30)
+    runner = _FakeRunner(
+        [
+            _post_commit_completed(returncode=0),
+            _post_commit_completed(returncode=1, stderr="fatal", stdout="\n".join(lines) + "\n"),
+        ]
+    )
+    post_commit.auto_push(runner=runner)
+    err = capsys.readouterr().err
+    assert "line40" in err
+    assert f"line{41 - post_commit.STDOUT_TAIL_LINES}" in err
+    assert "line1\n" not in err
+    assert "line1" not in err.split("stdout")[0]
+
+
+def test_auto_push_no_stdout_separator_when_stdout_empty(capsys):
+    runner = _FakeRunner(
+        [
+            _post_commit_completed(returncode=0),
+            _post_commit_completed(returncode=1, stderr="fatal: エラー", stdout=""),
+        ]
+    )
+    post_commit.auto_push(runner=runner)
+    err = capsys.readouterr().err
+    assert "fatal: エラー" in err
+    assert "stdout" not in err
+
+
 # ── main: 常に 0 を返す(post-commit はベストエフォートで非ゼロ終了しない契約) ──
 def test_main_always_returns_zero_even_when_steps_fail(monkeypatch, capsys):
     # `auto_push` 自身が捕捉しない**未想定の例外**(git 未導入時の `FileNotFoundError` 等)を
