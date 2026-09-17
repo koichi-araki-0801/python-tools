@@ -15,10 +15,7 @@ pytestmark = pytest.mark.browser
 
 SETUP = """
 window.__roSetup = async () => {
-  const st = await import('/state.js');
   const ro = await import('/rect-overlay.js');
-  const saved = { phase: st.S.phase, tool: st.S.tool };
-  st.S.phase = 3; st.S.tool = "cover";
   const host = document.createElement("div");
   host.style.cssText = "position:relative;width:300px;height:200px";
   host.innerHTML = '<svg viewBox="0 0 300 200" width="300" height="200"></svg>';
@@ -33,15 +30,14 @@ window.__roSetup = async () => {
   };
   let sel = null, drag = null;
   const ov = ro.createRectOverlay({
-    ui, boxClass: "t-box", tool: "cover", listRpc: "coverList", listKey: "covers", updateRpc: "updateCover",
+    ui, boxClass: "t-box", isActive: () => window.__roActive !== false, listRpc: "coverList", listKey: "covers", updateRpc: "updateCover",
     getSel: () => sel, setSel: (v) => { sel = v; }, getDrag: () => drag, setDrag: (v) => { drag = v; },
     onSelect: () => {},
   });
-  window.__ro = { host, pending, ov, promises: [], saved, st, ui };
+  window.__ro = { host, pending, ov, promises: [], ui };
 };
 window.__roTeardown = () => {
   const c = window.__ro; if (!c) return;
-  c.st.S.phase = c.saved.phase; c.st.S.tool = c.saved.tool;
   c.host.remove();
   delete window.__ro;
 };
@@ -62,6 +58,23 @@ def ro(edge_page):
 
 def _box_ids(page):
     return js(page, "[...window.__ro.host.querySelectorAll('.t-box')].map(b => b.dataset.elId)")
+
+
+def test_draw_does_nothing_but_clear_when_not_active(ro):
+    """isActive() が false のとき draw() は箱を描かず選択を解くだけ (以前は S.phase / S.tool を直接
+    読んでいた判定。opts 経由にして rect-overlay.js を state.js から切り離す)。"""
+    js(ro, "(() => { window.__roActive = false; return 0; })()")
+    try:
+        # `c.promises` には積まない: isActive() が false の draw() は await に達せず同期的に完了するので
+        # 追跡する必要が無く、積むと後続テストの `promises[0]` / `promises[1]` の添字がずれる
+        # (後続テストが読む一覧 RPC の応答 (`pending`) の対応がずれ、永久に解決しない Promise を
+        # 待つことになる)
+        n = js(ro, "(() => { const c = window.__ro; c.ov.draw(c.host); return c.pending.length; })()")
+        # RPC は呼ばれない (pending が増えない)
+        assert n == js(ro, "window.__ro.pending.length")
+        assert _box_ids(ro) == []
+    finally:
+        js(ro, "(() => { window.__roActive = true; return 0; })()")
 
 
 def test_draw_discards_a_stale_list_that_arrives_after_a_newer_one(ro):

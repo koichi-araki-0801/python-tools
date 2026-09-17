@@ -1,5 +1,5 @@
 # =============================================================================
-# e2e_server.py — Playwright E2E 用のサーバ起動 (Edge を開かず固定ポートで待受)
+# e2e_server.py — Playwright E2E 用のサーバ起動 (Edge を開かず、PDFTOSVG_E2E_PORT のポートで待受)
 # =============================================================================
 # `src/app.py` の main() から「Edge 起動・watchdog・終了管理」を除いた最小構成。
 # ポートは環境変数 PDFTOSVG_E2E_PORT で指定する (既定 5180。E2E fixture は 0 を渡して OS に選ばせ、
@@ -25,7 +25,8 @@ from web.rpc_methods import WebSession  # noqa: E402
 from web.server import create_server  # noqa: E402
 from web.undo_stack import UndoStack  # noqa: E402
 
-# Python E2E(pytest)は旧 TS E2E(:5180)と並走できるよう PDFTOSVG_E2E_PORT で別ポートを指定する。
+# 既定 5180 は直接起動したときの値。E2E fixture は 0 を渡し、OS が選んだ実ポートを
+# PDFTOSVG_E2E_PORT_FILE で受け取る (冒頭コメント参照)。
 PORT = int(os.environ.get("PDFTOSVG_E2E_PORT", "5180"))
 
 # E2E だけの固定セッショントークン。本番は起動ごとの CSPRNG 値 (`create_server` の既定) で、

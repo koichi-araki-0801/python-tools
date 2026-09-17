@@ -4,12 +4,13 @@
 // 手順 3 の「上書き」(`cover.js`) と「枠線」(`border.js`) は、置いた矩形を後から選び・動かし・
 // 大きさを変える点で同じ振る舞いをする。モデルを正とし (表示 SVG から座標を拾わない)、ドラッグ中は
 // 箱だけを動かし、mouseup の 1 回だけ更新 RPC を送る、という流儀もそろえる。両者で違うのは
-// 「どの一覧 RPC を引くか」「選択したとき入力欄に何を映すか」だけなので、それを `opts` で受け取る。
-// 複製して 2 本持つと、片方だけ直した不具合がもう片方に残る。
+// 「どの一覧 RPC を引くか」「選択したとき入力欄に何を映すか」「いまこのオーバーレイを描くべきか」
+// (`isActive`) だけなので、それを `opts` で受け取る。複製して 2 本持つと、片方だけ直した不具合が
+// もう片方に残る。このファイルは `S` を読まない。手順やツールの状態は `opts.isActive()` で受け取る。
+// 単体テストが共有ページの `S` を書き換えずに済み、部品として本当に `opts` だけで動く。
 // 矩形操作のヘルパ (`copyRect` / `pageSizeOf` / `clampToPage` / `placeRect` / `MIN_SIZE_PT` /
 // `resizeFromPointer` / `CORNER_HANDLES_HTML`) は手順 4 の採用矩形と共通なので `geometry.js` から読む。
 import { clientToPage, copyRect, pageSizeOf, clampToPage, placeRect, MIN_SIZE_PT, resizeFromPointer, CORNER_HANDLES_HTML } from "./geometry.js";
-import { S } from "./state.js";
 
 // ジッター判定のしきい値 (ページ座標 pt)。通常の表示倍率ではおおむね画面 1px 相当で、
 // 意図した伸縮・移動 (数 pt 以上動く) までは無視しない。
@@ -47,7 +48,7 @@ function createRectOverlay(opts) {
   async function draw(host) {
     var seq = ++drawSeq;
     host.querySelectorAll("." + opts.boxClass).forEach(function (b) { b.remove(); });
-    if (S.phase !== 3 || S.tool !== opts.tool) { clearOverlaySel(); return; }
+    if (!opts.isActive()) { clearOverlaySel(); return; }
     var svgEl = host.querySelector("svg"); if (!svgEl) { if (ui.syncDeleteButton) ui.syncDeleteButton(); return; }
     var pg = ui.pageOf();
     var res = await ui.rpc(opts.listRpc, { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });

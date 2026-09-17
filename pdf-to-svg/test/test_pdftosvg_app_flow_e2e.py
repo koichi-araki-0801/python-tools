@@ -816,22 +816,55 @@ def _place_border(page, width="2"):
 
 
 def _poll_borders(page, predicate_js, timeout_ms=3000):
-    """`borderList` RPC の結果が `predicate_js` (borders 配列 -> 真偽の JS 関数式) を
-    満たすまで待って返す。枠線の編集確定 (`updateBorder`) は `afterEdit` の再取得を挟む
-    ため、確定を起こした側 (`press("Enter")` 等) と読む側 (直接の `borderList` 呼び出し)
-    が別々の RPC 往復になり、待たずに読むと往復の完了より先に走って古い値を拾う競合が
-    ある。ここへ一元化し、条件を満たすまでブラウザ側でポーリングしてから 1 回で返す。"""
-    return page.evaluate("""async (predicateSrc) => {
-        var predicate = eval("(" + predicateSrc + ")");
-        var deadline = Date.now() + %d;
-        var borders;
-        while (Date.now() < deadline) {
-            borders = (await window.rpc("borderList", { fileIndex: 0, pageInFile: 0 })).borders;
-            if (predicate(borders)) return borders;
-            await new Promise(function (r) { setTimeout(r, 50); });
-        }
-        return borders;
-    }""" % timeout_ms, predicate_js)
+    """`borderList` の結果が `predicate_js`（JS の関数式。引数は borders 配列）を満たすまで待ち、
+    満たした時点の borders を返す。Playwright の `wait_for_function` に任せる（以前は文字列を
+    `eval` で関数に戻して自前でポーリングしていた）。
+
+    2 つの制約を踏まえた形にしてある。
+    ① `wait_for_function` の predicate は async 関数を渡しても 1 回しか呼ばれない（呼び出し直後の
+    戻り値は Promise で、Promise は常に truthy なのでポーリング側はその場で「満たした」とみなし、
+    その後 Promise を await した中身をそのまま返す。中身が false でも再ポーリングされない。実測でも
+    `polling="raf"` / 数値ポーリングいずれも同じ挙動だった）。そのため `borderList` の RPC 往復
+    （本質的に非同期）は predicate の外に出し、裏で定期取得するタイマーの最新値を、predicate 自身は
+    同期関数として読むだけにする（同期 predicate なら `wait_for_function` が正しく再ポーリングする）。
+    ② このアプリの応答は CSP（`default-src 'self'`。`unsafe-eval` を許可しない）を持ち、
+    `wait_for_function` の predicate 内で `eval` を呼ぶとそこで CSP 違反になる（通常の `evaluate` は
+    CDP 経由で CSP の対象にならず通るが、`wait_for_function` のポーリング機構は対象になる。実測で
+    確認済み）。そのため `predicate_js`（関数式の文字列）の実体化（`eval` 相当）は通常の `evaluate`
+    側で 1 回だけ行い、`wait_for_function` へは実体化済みの関数への参照（JSHandle）を渡す。"""
+    page.evaluate(
+        """() => {
+            if (window.__bordersPollTimer) return;
+            window.__bordersSnapshot = null;
+            var tick = function () {
+                window.rpc("borderList", { fileIndex: 0, pageInFile: 0 }).then(function (r) {
+                    window.__bordersSnapshot = r.borders;
+                });
+            };
+            tick();
+            window.__bordersPollTimer = setInterval(tick, 100);
+        }"""
+    )
+    # 式がそのまま関数として渡ると Playwright は「呼び出す関数」とみなして即実行してしまうため
+    # (evaluate 系 API の標準の解釈)、オブジェクトで包んで関数そのものへの参照だけを取り出す。
+    pred_handle = page.evaluate_handle("({fn: " + predicate_js + "})")
+    try:
+        handle = page.wait_for_function(
+            """(predObj) => {
+                var bs = window.__bordersSnapshot;
+                return bs && predObj.fn(bs) ? bs : false;
+            }""",
+            arg=pred_handle,
+            timeout=timeout_ms,
+            polling=100,
+        )
+        return handle.json_value()
+    finally:
+        page.evaluate(
+            """() => {
+                if (window.__bordersPollTimer) { clearInterval(window.__bordersPollTimer); window.__bordersPollTimer = null; }
+            }"""
+        )
 
 
 def test_border_overlay_resize_and_width_change(e2e_page, ocr_layer_pdf):

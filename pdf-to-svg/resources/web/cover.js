@@ -15,7 +15,7 @@ function initCover(deps) {
   overlay = createRectOverlay({
     ui: deps,
     boxClass: "cover-box",
-    tool: "cover",
+    isActive: function () { return S.phase === 3 && S.tool === "cover"; },
     listRpc: "coverList",
     listKey: "covers",
     updateRpc: "updateCover",

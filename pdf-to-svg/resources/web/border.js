@@ -15,7 +15,7 @@ function initBorder(deps) {
   overlay = createRectOverlay({
     ui: deps,
     boxClass: "border-box",
-    tool: "border",
+    isActive: function () { return S.phase === 3 && S.tool === "border"; },
     listRpc: "borderList",
     listKey: "borders",
     updateRpc: "updateBorder",

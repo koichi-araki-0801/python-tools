@@ -187,9 +187,10 @@ def edge_page(web_root_url):
     稼働中 app の /rpc 失敗処理・/ping ハートビートがテスト状態を汚すため。
     404 の文書でも origin は静的サーバなので dynamic import は同じ URL 空間で解決する。
 
-    `/state.js` の `S` を書き換えるテストは、fixture の teardown で元の値へ戻すこと。
-    `edge_page` は session スコープで、`pytest-randomly` を入れない運用のため
-    順序に依存した汚染は黙って通る。"""
+    `/state.js` の `S` はモジュールシングルトンで、このページを共有する全テストに見える。
+    browser テストは原則 `S` を書き換えない（部品側が状態を `opts` で受け取る形にしてある）。
+    やむを得ず書き換えるときは fixture の teardown で元の値へ戻すこと。`edge_page` は session スコープで、
+    `pytest-randomly` を入れない運用のため順序に依存した汚染は黙って通る。"""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
