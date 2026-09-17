@@ -28,6 +28,8 @@ window.__roSetup = async () => {
     rpc: () => new Promise((resolve) => { pending.push(resolve); }),
     afterEdit: async () => {},
     pageOf: () => ({ fileIndex: 0, pageInFile: 0 }),
+    syncCalls: 0,
+    syncDeleteButton() { this.syncCalls++; },
   };
   let sel = null, drag = null;
   const ov = ro.createRectOverlay({
@@ -35,7 +37,7 @@ window.__roSetup = async () => {
     getSel: () => sel, setSel: (v) => { sel = v; }, getDrag: () => drag, setDrag: (v) => { drag = v; },
     onSelect: () => {},
   });
-  window.__ro = { host, pending, ov, promises: [], saved, st };
+  window.__ro = { host, pending, ov, promises: [], saved, st, ui };
 };
 window.__roTeardown = () => {
   const c = window.__ro; if (!c) return;
@@ -76,3 +78,15 @@ def test_draw_discards_a_stale_list_that_arrives_after_a_newer_one(ro):
     js(ro, "(() => { window.__ro.pending[0]({ covers: [{ elId: 1, rect: %s, text: 'a' }] }); return 0; })()" % json.dumps(RECT))
     js(ro, "window.__ro.promises[0]")  # 1 回目の draw() の完了を待つ
     assert _box_ids(ro) == ["2"]
+
+
+def test_draw_syncs_the_delete_button_even_when_the_svg_is_missing(ro):
+    """host に svg が無いとき draw() は早期 return するが、押下可否の同期は飛ばさない
+    (「選択が変わる全経路から呼ぶ」に穴を作らない)。"""
+    before = js(ro, "window.__ro.ui.syncCalls")
+    js(ro, "(() => { const c = window.__ro; c.host.querySelector('svg').remove(); return 0; })()")
+    js(ro, "window.__ro.ov.draw(window.__ro.host)")
+    after = js(ro, "window.__ro.ui.syncCalls")
+    assert after == before + 1
+    # svg を戻す (後続のテストのため)
+    js(ro, "(() => { window.__ro.host.innerHTML = '<svg viewBox=\"0 0 300 200\" width=\"300\" height=\"200\"></svg>'; return 0; })()")

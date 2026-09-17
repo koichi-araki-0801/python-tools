@@ -34,8 +34,10 @@ function createRectOverlay(opts) {
 
   /** 選択を解き、入力欄を「次に置く値」へ戻す。選択解除の経路 (ツール切替・空白クリック・
    *  ページ移動・選んでいた要素が消えた等) をここへ一元化し、選択中に編集した値が
-   *  「次に置く値」へ紛れ込んだまま入力欄に残らないようにする。 */
-  function clearSel() {
+   *  「次に置く値」へ紛れ込んだまま入力欄に残らないようにする。
+   *  `state.js` が export する `clearSel`（ページレールの選択を解く）と同名にならないよう、
+   *  内部名はこれにする。公開名は呼び出し側（`cover.js` / `border.js`）を変えないため `clearSel` のまま。 */
+  function clearOverlaySel() {
     opts.setSel(null);
     opts.onSelect(null);
     if (ui.syncDeleteButton) ui.syncDeleteButton();
@@ -45,15 +47,15 @@ function createRectOverlay(opts) {
   async function draw(host) {
     var seq = ++drawSeq;
     host.querySelectorAll("." + opts.boxClass).forEach(function (b) { b.remove(); });
-    if (S.phase !== 3 || S.tool !== opts.tool) { clearSel(); return; }
-    var svgEl = host.querySelector("svg"); if (!svgEl) return;
+    if (S.phase !== 3 || S.tool !== opts.tool) { clearOverlaySel(); return; }
+    var svgEl = host.querySelector("svg"); if (!svgEl) { if (ui.syncDeleteButton) ui.syncDeleteButton(); return; }
     var pg = ui.pageOf();
     var res = await ui.rpc(opts.listRpc, { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
     if (seq !== drawSeq) return;                     // 取得中に新しい draw() が始まった (追い越された)
     if (host.querySelector("svg") !== svgEl) return; // 取得中にページが変わった
     var items = res[opts.listKey] || [];
     var sel = opts.getSel();
-    if (sel !== null && !items.some(function (c) { return c.elId === sel; })) clearSel();
+    if (sel !== null && !items.some(function (c) { return c.elId === sel; })) clearOverlaySel();
     items.forEach(function (c) {
       var box = document.createElement("div");
       box.className = opts.boxClass + (c.elId === opts.getSel() ? " sel" : "");
@@ -112,7 +114,7 @@ function createRectOverlay(opts) {
         if (ui.syncDeleteButton) ui.syncDeleteButton();
         return;
       }
-      var svgEl = host.querySelector("svg"); if (!svgEl) return;
+      var svgEl = host.querySelector("svg"); if (!svgEl) { if (ui.syncDeleteButton) ui.syncDeleteButton(); return; }
       var sz = pageSizeOf(svgEl);
       var r = clampToPage(d.rect, sz.w, sz.h);
       if (r.w < MIN_SIZE_PT || r.h < MIN_SIZE_PT) { await draw(host); return; }
@@ -129,7 +131,7 @@ function createRectOverlay(opts) {
     });
   }
 
-  return { draw: draw, installDrag: installDrag, clearSel: clearSel };
+  return { draw: draw, installDrag: installDrag, clearSel: clearOverlaySel };
 }
 
 export { createRectOverlay };

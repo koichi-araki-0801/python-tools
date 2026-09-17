@@ -1051,7 +1051,14 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       if (S.coverSel !== null && ids.indexOf(String(S.coverSel)) < 0) ids.push(String(S.coverSel));
       if (S.borderSel !== null && ids.indexOf(String(S.borderSel)) < 0) ids.push(String(S.borderSel));
       if (!ids.length) return;
-      await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: ids }); await afterEdit();
+      // 削除する要素の選択を即座に解く (elIds はここまでに ids へ確定済みなので、この後 RPC 往復を
+      // 待たずに消しても削除自体には影響しない)。`await rpc` の後まで残すと、`afterEdit` →
+      // `render()` → `syncDeleteButton()` が削除予定の id をまだ選択中と見て有効のままにし、
+      // 非同期の一覧再取得 (オーバーレイの `draw()`) が届くまでボタンが一瞬ずれる
+      S.coverSel = null;
+      S.borderSel = null;
+      await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: ids });
+      await afterEdit();
     });
   }
 

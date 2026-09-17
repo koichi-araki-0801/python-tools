@@ -934,13 +934,22 @@ def test_delete_button_is_disabled_until_something_is_selected(e2e_page, ocr_lay
     expect(page.locator("#btn-deletesel")).to_be_disabled()
 
 
-def test_delete_button_is_enabled_by_a_border_selection(e2e_page, ocr_layer_pdf):
-    """枠線を選んだときも「削除」ボタンが有効になる。"""
+def test_delete_button_is_enabled_by_a_border_selection_and_disabled_right_after_deleting(e2e_page, ocr_layer_pdf):
+    """枠線を選んだときに「削除」ボタンが有効になり、削除した直後には (一覧の再取得を待たず) 無効に戻る。
+
+    削除の直後は `S.borderSel` に削除済みの id が残ったまま `render()` が走るため、以前は非同期の
+    一覧再取得が届くまで一瞬ボタンが有効のままだった。削除のハンドラで選択を即座に解く。
+    """
     page = e2e_page
     _goto_step3(page, ocr_layer_pdf)
     _place_border(page)
     page.locator("#trim-stage .border-box").click()
     expect(page.locator("#btn-deletesel")).to_be_enabled()
+    page.click("#btn-deletesel")
+    # 削除の RPC 往復を待たずに、クリック直後の同期処理で無効になっていること
+    assert page.evaluate("() => window.__state.borderSel") is None
+    expect(page.locator("#btn-deletesel")).to_be_disabled()
+    expect(page.locator("#trim-stage .border-box")).to_have_count(0)
 
 
 def test_switching_tool_clears_element_selection(e2e_page, ocr_layer_pdf):
