@@ -1054,9 +1054,13 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       // 削除する要素の選択を即座に解く (elIds はここまでに ids へ確定済みなので、この後 RPC 往復を
       // 待たずに消しても削除自体には影響しない)。`await rpc` の後まで残すと、`afterEdit` →
       // `render()` → `syncDeleteButton()` が削除予定の id をまだ選択中と見て有効のままにし、
-      // 非同期の一覧再取得 (オーバーレイの `draw()`) が届くまでボタンが一瞬ずれる
-      S.coverSel = null;
-      S.borderSel = null;
+      // 非同期の一覧再取得 (オーバーレイの `draw()`) が届くまでボタンが一瞬ずれる。
+      // 選択解除は `clearSel` (rect-overlay.js の `clearOverlaySel`) 経由に一元化されているため、
+      // ここも `S.coverSel` / `S.borderSel` への直接代入ではなく `clearCoverSel` / `clearBorderSel`
+      // を呼ぶ。直接代入だと `clearOverlaySel` の `onSelect(null)` を通らず、入力欄が削除済み要素の
+      // 値のまま残る (`syncDeleteButton()` の呼び出しも一緒に素通りする)。
+      clearCoverSel();
+      clearBorderSel();
       await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: ids });
       await afterEdit();
     });

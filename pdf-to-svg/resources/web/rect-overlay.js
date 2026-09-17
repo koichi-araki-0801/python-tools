@@ -24,7 +24,19 @@ function rectsNearlyEqual(a, b) {
   );
 }
 
-/** 1 種類の矩形オーバーレイを作る。返り値の `draw` / `installDrag` / `clearSel` を呼び出し側が使う。 */
+/** 1 種類の矩形オーバーレイを作る。返り値の `draw` / `installDrag` / `clearSel` を呼び出し側が使う。
+ *  `opts` の必須キー:
+ *  - `ui`: `{ rpc, afterEdit, pageOf, syncDeleteButton }`（`syncDeleteButton` は無くても動くが、
+ *    渡さないと削除ボタンの押下可否が選択の変化に追従しない）。
+ *  - `boxClass`: 箱要素へ付ける CSS クラス名 (`border-box` / `cover-box` 等)。
+ *  - `isActive`: `() => boolean` — いまこのオーバーレイを描くべきか。false なら `draw()` は選択を
+ *    解くだけで RPC を呼ばない。渡し忘れると `draw()` の中で TypeError になり、呼び出し側が
+ *    await しないため無音で止まる。
+ *  - `listRpc` / `listKey`: 一覧取得 RPC の名前と、応答オブジェクトから配列を取り出すキー。
+ *  - `updateRpc`: ドラッグ確定 (移動・伸縮) を送る RPC の名前。
+ *  - `getSel` / `setSel`: 選択中の要素 id の読み書き (`S.borderSel` 等への橋渡し)。
+ *  - `getDrag` / `setDrag`: ドラッグ中の状態の読み書き。
+ *  - `onSelect`: `(item | null) => void` — 選択が変わるたびに呼ばれ、入力欄への反映を担う。 */
 function createRectOverlay(opts) {
   var ui = opts.ui;
   // draw() の世代。同じページで draw() が重なったとき、後から出した要求の応答が先に届くと、
@@ -44,7 +56,7 @@ function createRectOverlay(opts) {
     if (ui.syncDeleteButton) ui.syncDeleteButton();
   }
 
-  /** 手順 3 で対象のツールが選ばれている間だけ、ページ上の矩形を箱で重ねる。呼ぶたびに描き直す */
+  /** `opts.isActive()` が真の間だけ、ページ上の矩形を箱で重ねる。呼ぶたびに描き直す */
   async function draw(host) {
     var seq = ++drawSeq;
     host.querySelectorAll("." + opts.boxClass).forEach(function (b) { b.remove(); });

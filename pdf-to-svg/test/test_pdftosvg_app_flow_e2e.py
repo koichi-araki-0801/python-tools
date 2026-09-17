@@ -988,8 +988,31 @@ def test_delete_button_is_enabled_by_a_border_selection_and_disabled_right_after
     page.click("#btn-deletesel")
     # 削除の RPC 往復を待たずに、クリック直後の同期処理で無効になっていること
     assert page.evaluate("() => window.__state.borderSel") is None
+    assert page.evaluate("() => document.getElementById('btn-deletesel').disabled") is True
     expect(page.locator("#btn-deletesel")).to_be_disabled()
     expect(page.locator("#trim-stage .border-box")).to_have_count(0)
+
+
+def test_deleting_a_selected_border_restores_the_width_input_to_the_next_value(e2e_page, ocr_layer_pdf):
+    """選択中の枠線の太さを変えてから削除すると、入力欄は「次に置く太さ」へ戻る。
+
+    削除ボタンのハンドラは選択を `clearBorderSel` 経由で解く（`S.borderSel = null` の直接代入だと
+    `clearOverlaySel` の `onSelect(null)` が呼ばれず、入力欄に削除済みの枠線の値が残る。次に置く枠線は
+    `S.borderWidth` で置かれるため、表示と実際が食い違っていた）。
+    """
+    page = e2e_page
+    _goto_step3(page, ocr_layer_pdf)
+    _place_border(page, width="3")
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#border-width")).to_have_value("3")
+    page.fill("#border-width", "7")
+    page.press("#border-width", "Enter")
+    _poll_borders(page, "function (bs) { return bs[0] && bs[0].width === 7; }")
+    page.click("#btn-deletesel")
+    expect(page.locator("#trim-stage .border-box")).to_have_count(0)
+    # 入力欄は選択中の値 (7) ではなく「次に置く太さ」(3) へ戻る
+    expect(page.locator("#border-width")).to_have_value("3")
+    assert page.evaluate("() => window.__state.borderWidth") == 3
 
 
 def test_switching_tool_clears_element_selection(e2e_page, ocr_layer_pdf):
