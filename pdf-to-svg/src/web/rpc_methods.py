@@ -105,6 +105,7 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
     pages = []
     changed2: List[bool] = []
     changed3: List[bool] = []
+    scanned: List[bool] = []
     for fi, d in enumerate(s.docs):
         files.append(
             {
@@ -120,14 +121,22 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
             changed2.append(_page_has_replacements(pg, s.store))
             # 手順3: トリミングは全ページが対象 (各ページを見て確認/スキップ)。
             changed3.append(True)
+            # 手順2 の「置換対象外」: 文字要素を持たない純スキャンページ。辞書は構造的に
+            # 当たらないので、クライアントはレールから外し全ページ該当なら手順 2 ごと省略する。
+            # 不可視 OCR 文字のページは `is_scanned` ではない (辞書が当たりうる) ので含めない。
+            scanned.append(bool(pg.is_scanned))
     total = len(pages)
     # suggestJoin は state には含めない (クライアントの読者は
-    # files/pages/total/changed2/changed3 のみ。辞書設定は dictList 側ペイロードが正)。
+    # files/pages/total/changed2/changed3/scanned のみ。辞書設定は dictList 側ペイロードが正)。
     return {
         "files": files,
         "pages": pages,
         "changed2": changed2,
         "changed3": changed3,
+        "scanned": scanned,
+        # `scanned` の True の数。`app.js` の `reloadState` が読み込み直後のトーストに使う
+        # (`ocrPages` と同じ差分抑止の経路)。
+        "scannedPages": sum(1 for x in scanned if x),
         "total": total,
         # 要素数の資源上限に当たって抽出を打ち切ったページ数 (`engine/pdf_engine.py`)。
         # 欠落を無言にしないための通知経路で、`app.js` の `reloadState` が出す。

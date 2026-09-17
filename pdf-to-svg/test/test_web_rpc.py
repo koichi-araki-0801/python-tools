@@ -124,6 +124,25 @@ def test_state_counts_pages_with_invisible_ocr_text(session):
     assert st["ocrPages"] == 1
 
 
+def test_state_marks_scanned_pages_as_not_replaceable(session):
+    """純スキャンページ (`is_scanned`) をページ単位の `scanned` 列と件数 `scannedPages` で返す。
+
+    手順 2 の「置換対象外」の判定源はこの列だけ (クライアントは `status2 = "na"` に写す)。
+    ベクターページは False。不可視 OCR 文字を持つページも `is_scanned` ではないので False
+    (辞書が当たりうるため手順 2 を通す)。
+    """
+    doc = session.docs[0]
+    scanned = Page(index=1, width_pt=200.0, height_pt=300.0, is_scanned=True)
+    ocr = Page(index=2, width_pt=200.0, height_pt=300.0)
+    ocr.elements = [TextElement(bbox=Rect(10, 10, 40, 12), text="OCR", invisible=True)]
+    doc.pages.extend([scanned, ocr])
+    st = rpc_methods.dispatch(session, "state", {})
+    assert st["scanned"] == [False, True, False]
+    assert st["scannedPages"] == 1
+    # `scanned` は `pages` と添字で対応する (クライアントは添字で引く)
+    assert len(st["scanned"]) == len(st["pages"])
+
+
 def test_page_svg_and_export_svg_report_cover_fallback(session):
     """下に画像が無い不可視・置換済み文字は白で隠し、その件数を応答に載せる。"""
     pg = session.docs[0].pages[0]
