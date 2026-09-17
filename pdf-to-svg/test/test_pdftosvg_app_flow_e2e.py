@@ -1166,8 +1166,20 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
     expect(dialog).to_be_visible()
     expect(dialog).to_contain_text("上書き")
     expect(page.locator("#skip2-n")).to_have_text("1")
+    # 省略した PDF の一覧 (ファイル名とページ数) を本文に出す
+    expect(page.locator("#skip2-list li")).to_have_count(1)
+    expect(page.locator("#skip2-list li")).to_contain_text("scanned_sample.pdf")
+    expect(page.locator("#skip2-list li")).to_contain_text("1 ページ")
     # モーダルの間は手順 1 のまま
     expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
+    # OK 専用: Esc (2 回押しても) では閉じず、手順 1 に留まる
+    page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_visible()
+    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
+    # 背景クリック (backdrop) でも閉じない
+    page.mouse.click(5, 5)
+    expect(dialog).to_be_visible()
     page.click("#skip2-go")
     expect(dialog).to_be_hidden()
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
@@ -1176,10 +1188,10 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
     # 「戻る」は手順 1 へ (手順 2 を飛ばしたので)
     page.click("#btn-back")
     expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
-    # もう一度「次へ」→ Esc でもモーダルは閉じて手順 3 へ進む (ボタンと同じ遷移)
+    # もう一度「次へ」でも案内は出る (OK を押すまで進めないのは同じ)
     page.click("#btn-next")
     expect(dialog).to_be_visible()
-    page.keyboard.press("Escape")
+    page.click("#skip2-go")
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
 
     # 手順 3 は未確認のまま「書き出しへ」→ ガード → 未確認をスキップして手順 4
@@ -1260,8 +1272,10 @@ def test_dialog_closed_after_a_vector_pdf_was_added_lands_on_step2(e2e_page, sca
         page.evaluate("() => document.getElementById('btn-pick').click()")
     fc2_info.value.set_files(str(vector_pdf))
     expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
-    # 読み込みが済んでもモーダルは開いたまま (閉じるのは利用者の操作だけ)
+    # 読み込みが済んでもモーダルは開いたまま (閉じるのは利用者の OK だけ)
     expect(dialog).to_be_visible()
+    # 一覧は開いた時点のもの (足したベクター PDF は載らない)
+    expect(page.locator("#skip2-list li")).to_have_count(1)
 
     page.click("#skip2-go")
     expect(dialog).to_be_hidden()

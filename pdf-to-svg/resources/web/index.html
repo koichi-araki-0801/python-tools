@@ -279,12 +279,14 @@
 </div>
 
 <!-- 全ページが純スキャン (文字を持たない画像だけ) のとき、手順 1 の「次へ」で出す案内。
-     閉じる操作 (ボタン・Esc) はすべて手順 3 への遷移として扱う (`app.js` の `wireNav`)。 -->
-<dialog class="notice" id="skip2-dialog" aria-labelledby="skip2-title">
+     OK 専用のモーダル (Esc・背景クリックでは閉じない)。OK で手順 3 へ進む (`app.js` の `wireNav`)。
+     一覧 `#skip2-list` には省略した PDF のファイル名とページ数を出す。 -->
+<dialog class="notice" id="skip2-dialog" role="alertdialog" aria-labelledby="skip2-title" aria-describedby="skip2-desc">
   <h2 id="skip2-title">用語の置換ができるページがありません</h2>
-  <p>読み込んだ <b id="skip2-n">0</b> ページはすべてスキャン画像で、置き換えられる文字を持ちません。手順 2「用語を置換」は省略します。</p>
+  <p id="skip2-desc">次の PDF（計 <b id="skip2-n">0</b> ページ）はすべてスキャン画像で、置き換えられる文字を持ちません。手順 2「用語を置換」は省略します。</p>
+  <ul class="skip-list" id="skip2-list"></ul>
   <p>文字の置き換えは、手順 3 の<b>「上書き」</b>ツールで矩形と置換語を置いて行えます。</p>
-  <div class="actions"><button class="btn primary" id="skip2-go" autofocus>手順 3 へ進む</button></div>
+  <div class="actions"><button class="btn primary" id="skip2-go" autofocus>OK</button></div>
 </dialog>
 
 <!-- role/aria-live: 書き出し完了などの通知をスクリーンリーダーにも読み上げさせる。 -->

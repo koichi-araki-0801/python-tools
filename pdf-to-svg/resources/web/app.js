@@ -12,7 +12,7 @@ import {
   applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, landOnPhase2,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, scannedFiles, landOnPhase2,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
@@ -894,8 +894,15 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (S.phase === 1) {
       if (!S.TOTAL) return;
       if (!S.gray && skipsPhase2()) {
-        // 全ページが純スキャン: 理由と代替手段 (手順 3 の上書き) を読ませてから進む。
-        // 遷移は dialog の close ハンドラ (`wireNav`) が行う (ボタンと Esc を同じ経路にする)
+        // 全ページが純スキャン: 何を省略したか (ファイル名・ページ数) と代替手段 (手順 3 の
+        // 上書き) を読ませてから進む。閉じられるのは OK だけで、遷移は OK のハンドラ (`wireNav`) が行う
+        var list = document.getElementById("skip2-list");
+        list.textContent = "";
+        scannedFiles().forEach(function (f) {
+          var li = document.createElement("li");
+          li.textContent = f.name + "（" + f.pages + " ページ）";   // textContent: ファイル名は利用者由来
+          list.appendChild(li);
+        });
         document.getElementById("skip2-n").textContent = S.TOTAL;
         document.getElementById("skip2-dialog").showModal();
         return;
@@ -1006,16 +1013,25 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("guard-skip").addEventListener("click", function () {
       var arr = statusArr(); for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") arr[i] = "skipped"; advancePhase(); render();
     });
-    // 手順 2 省略の案内モーダル。ボタンも Esc も `close` に集約し、閉じたら手順 3 へ進む
+    // 手順 2 省略の案内モーダル。OK 専用 (VBA の vbOKOnly と同じ): 閉じられるのは OK だけで、
+    // OK を押した時点で手順 3 へ進む。Esc は `cancel` で止めるが、Chromium は cancel の
+    // preventDefault を連続では認めない (2 回目の Esc は閉じる) ので、OK 以外で閉じたら
+    // `close` で開き直す。背景 (backdrop) のクリックは元々 dialog を閉じない。
     var skip2 = document.getElementById("skip2-dialog");
-    document.getElementById("skip2-go").addEventListener("click", function () { skip2.close(); });
-    skip2.addEventListener("close", function () {
-      if (S.phase !== 1 || !S.TOTAL) return;   // 閉じる前にファイルを消した等の取りこぼし
-      // 行き先は開いた時点でなく閉じた時点の状態で決める。モーダル表示中も進行中の読み込み
-      // (`addFiles`) は止まらず、完了した `reloadState` で混在に変わっていることがある
+    var skip2Ok = false;
+    skip2.addEventListener("cancel", function (ev) { ev.preventDefault(); });
+    document.getElementById("skip2-go").addEventListener("click", function () {
+      skip2Ok = true; skip2.close();
+      if (S.phase !== 1 || !S.TOTAL) return;   // OK の前にファイルを消した等の取りこぼし
+      // 行き先は開いた時点でなく OK を押した時点の状態で決める。モーダル表示中も進行中の
+      // 読み込み (`addFiles`) は止まらず、完了した `reloadState` で混在に変わっていることがある
       S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi();
       if (S.phase === 2) landOnPhase2();
       render();
+    });
+    skip2.addEventListener("close", function () {
+      if (skip2Ok) { skip2Ok = false; return; }
+      if (S.phase === 1 && S.TOTAL) skip2.showModal();   // OK 以外で閉じられた: 読み直させる
     });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {

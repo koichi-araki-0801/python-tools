@@ -191,6 +191,16 @@ function firstPending(arr) { for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "p
 function skipsPhase2() {
   return S.TOTAL > 0 && S.status2.every(function (s) { return s === "na"; });
 }
+/** 全ページが置換対象外 (純スキャン) のファイルの一覧 (`S.FILES` の順・同じ要素)。
+ *  手順 2 省略の案内モーダルが「何を省略したか」を利用者に示すために使う。
+ *  判定源は `status2` の `"na"` だけ (`skipsPhase2` と同じ) */
+function scannedFiles() {
+  return S.FILES.filter(function (f, i) {
+    var start = S.FILE_START[i] || 0;
+    for (var p = start; p < start + f.pages; p++) if (S.status2[p] !== "na") return false;
+    return true;
+  });
+}
 /** 手順 1 の「次へ」の行き先。グレーモードが最優先、次に手順 2 の省略 */
 function phaseAfterLoad() { return S.gray ? 4 : (skipsPhase2() ? 3 : 2); }
 /** 手順 3 の「戻る」の行き先。手順 2 を省略していれば手順 1 へ */
@@ -326,7 +336,7 @@ export {
   S, counts, pass, initStatus, mergeStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, scannedFiles, firstEditablePage2, landOnPhase2,
   applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };

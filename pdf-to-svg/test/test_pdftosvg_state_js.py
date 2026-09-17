@@ -377,6 +377,25 @@ def test_gray_skips_steps_2_and_3(st):
     assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, False, True]
 
 
+def test_scannedfiles_lists_files_whose_pages_are_all_na(st):
+    # a.pdf は 2 ページとも純スキャン、b.pdf はベクター、c.pdf は 1 ページだけスキャンの混在
+    js(st, """window.__st.applyState({files: [{name: 'a.pdf', pages: 2}, {name: 'b.pdf', pages: 1}, {name: 'c.pdf', pages: 2}],
+        pages: [[0,0],[0,1],[1,0],[2,0],[2,1]], total: 5,
+        changed2: [false, false, true, false, false], changed3: [false, false, false, false, false],
+        scanned: [true, true, false, true, false]})""")
+    assert js(st, "window.__st.scannedFiles().map(f => [f.name, f.pages])") == [["a.pdf", 2]]
+    assert js(st, "window.__st.skipsPhase2()") is False
+
+
+def test_scannedfiles_is_every_file_when_phase2_is_skipped(st):
+    js(st, """window.__st.applyState({files: [{name: 'a.pdf', pages: 1}, {name: 'b.pdf', pages: 3}],
+        pages: [[0,0],[1,0],[1,1],[1,2]], total: 4,
+        changed2: [false, false, false, false], changed3: [false, false, false, false],
+        scanned: [true, true, true, true]})""")
+    assert js(st, "window.__st.skipsPhase2()") is True
+    assert js(st, "window.__st.scannedFiles().map(f => f.name)") == ["a.pdf", "b.pdf"]
+
+
 def test_svg_cache_key_includes_gray(st):
     assert js(st, "window.__st.svgKey(1, 2)") == "1:2"
     js(st, "window.__st.S.gray = true")
