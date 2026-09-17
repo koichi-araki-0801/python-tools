@@ -51,8 +51,8 @@ def ro(edge_page):
     edge_page.evaluate(SETUP)
     edge_page.evaluate("window.__roSetup()")
     yield edge_page
-    # 共有ページ (session スコープの edge_page) を汚さない。`S` はモジュールシングルトンで、
-    # 書き換えたまま残すと後に走る browser テストが `phase=3 / tool="cover"` を黙って継承する
+    # teardown は host を外し window.__ro を消すだけ。rect-overlay.js は S を書き換えないので
+    # 復元も不要 (共有ページ (session スコープの edge_page) 側に残る状態はこの host だけ)
     edge_page.evaluate("window.__roTeardown()")
 
 
@@ -65,6 +65,7 @@ def test_draw_does_nothing_but_clear_when_not_active(ro):
     読んでいた判定。opts 経由にして rect-overlay.js を state.js から切り離す)。"""
     js(ro, "(() => { window.__roActive = false; return 0; })()")
     try:
+        before = js(ro, "window.__ro.ui.syncCalls")
         # `c.promises` には積まない: isActive() が false の draw() は await に達せず同期的に完了するので
         # 追跡する必要が無く、積むと後続テストの `promises[0]` / `promises[1]` の添字がずれる
         # (後続テストが読む一覧 RPC の応答 (`pending`) の対応がずれ、永久に解決しない Promise を
@@ -73,6 +74,8 @@ def test_draw_does_nothing_but_clear_when_not_active(ro):
         # RPC は呼ばれない (pending が増えない)
         assert n == js(ro, "window.__ro.pending.length")
         assert _box_ids(ro) == []
+        # clearOverlaySel() -> syncDeleteButton() を通った直接の証跡
+        assert js(ro, "window.__ro.ui.syncCalls") == before + 1
     finally:
         js(ro, "(() => { window.__roActive = true; return 0; })()")
 

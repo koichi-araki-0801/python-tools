@@ -832,23 +832,28 @@ def _poll_borders(page, predicate_js, timeout_ms=3000):
     CDP 経由で CSP の対象にならず通るが、`wait_for_function` のポーリング機構は対象になる。実測で
     確認済み）。そのため `predicate_js`（関数式の文字列）の実体化（`eval` 相当）は通常の `evaluate`
     側で 1 回だけ行い、`wait_for_function` へは実体化済みの関数への参照（JSHandle）を渡す。"""
-    page.evaluate(
-        """() => {
-            if (window.__bordersPollTimer) return;
-            window.__bordersSnapshot = null;
-            var tick = function () {
-                window.rpc("borderList", { fileIndex: 0, pageInFile: 0 }).then(function (r) {
-                    window.__bordersSnapshot = r.borders;
-                });
-            };
-            tick();
-            window.__bordersPollTimer = setInterval(tick, 100);
-        }"""
-    )
-    # 式がそのまま関数として渡ると Playwright は「呼び出す関数」とみなして即実行してしまうため
-    # (evaluate 系 API の標準の解釈)、オブジェクトで包んで関数そのものへの参照だけを取り出す。
-    pred_handle = page.evaluate_handle("({fn: " + predicate_js + "})")
+    # `pred_handle`（evaluate_handle が返す JSHandle）はページ側にリソースを持つので、
+    # 成功・タイムアウト・例外のどの経路でも dispose() する。evaluate_handle 自体が例外を投げる
+    # 経路もあるため None で初期化してから try に入り、setInterval の起動も try の中（先頭）へ
+    # 置いて、以降のどの行が例外を投げても finally の clearInterval / dispose に必ず到達させる。
+    pred_handle = None
     try:
+        page.evaluate(
+            """() => {
+                if (window.__bordersPollTimer) return;
+                window.__bordersSnapshot = null;
+                var tick = function () {
+                    window.rpc("borderList", { fileIndex: 0, pageInFile: 0 }).then(function (r) {
+                        window.__bordersSnapshot = r.borders;
+                    });
+                };
+                tick();
+                window.__bordersPollTimer = setInterval(tick, 100);
+            }"""
+        )
+        # 式がそのまま関数として渡ると Playwright は「呼び出す関数」とみなして即実行してしまうため
+        # (evaluate 系 API の標準の解釈)、オブジェクトで包んで関数そのものへの参照だけを取り出す。
+        pred_handle = page.evaluate_handle("({fn: " + predicate_js + "})")
         handle = page.wait_for_function(
             """(predObj) => {
                 var bs = window.__bordersSnapshot;
@@ -865,6 +870,8 @@ def _poll_borders(page, predicate_js, timeout_ms=3000):
                 if (window.__bordersPollTimer) { clearInterval(window.__bordersPollTimer); window.__bordersPollTimer = null; }
             }"""
         )
+        if pred_handle is not None:
+            pred_handle.dispose()
 
 
 def test_border_overlay_resize_and_width_change(e2e_page, ocr_layer_pdf):

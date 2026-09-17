@@ -592,6 +592,14 @@ def test_draw_does_nothing_but_clear_when_not_active(ro):
 
 ただし、このテストは既存テストの `pending` の状態に依存するので、**ファイル内の最初のテストとして置く**（`test_draw_discards_a_stale_list_...` の前）。既存テストの `pending[0]` / `pending[1]` の添字がずれないよう、このテストでは RPC を発生させない（`isActive` が false なら `draw()` は RPC の前に return する）ことを利用する。
 
+> **訂正（実装時、2026-09-17）:** 新規テストでは `c.promises.push(c.ov.draw(c.host))` とせず `c.ov.draw(c.host);`
+> とだけ書く。`ro` fixture は module スコープで `window.__ro.promises` をファイル内の全テストが共有しており、
+> 新規テストが `promises[0]` を占めると既存テストが読む `promises[1]` / `promises[0]` の添字がずれ、まだ
+> 解決していない `pending` を待つ `page.evaluate` が無期限に止まる（実測では 300〜360 秒後にブラウザが
+> 応答不能になり `TargetClosedError`）。上の説明は `pending` の添字だけを見て `promises` を見落としていた。
+> `isActive()` が false の `draw()` は `await` に到達せず同期で終わるので、追跡する必要もない。
+> コミット `6bc9637` はこの形で実装している。
+
 - [ ] **Step 2: テストを走らせて失敗を確認する**
 
 Run: `py -3.13 -m pytest pdf-to-svg/test/test_pdftosvg_rect_overlay_js.py -v`
@@ -649,6 +657,16 @@ def _poll_borders(page, predicate_src, timeout_ms=3000):
 ```
 
 `predicate_src` に関数式の文字列を渡す既存の呼び出し（`test_border_overlay_resize_and_width_change` 等）は変えなくてよい。`(0, eval)(src)` は間接 eval で、Playwright の `wait_for_function` の引数として関数式を受ける最小の形。**もし呼び出し側が全部「特定の値になるまで待つ」だけなら**、`predicate_src` を止めて `expected` の値を渡す形へ単純化してよい（例: `_wait_border_width(page, 7)`）。呼び出し側を読んで判断し、報告に書くこと。
+
+> **訂正（実装時、2026-09-17）:** 上のコード例は実際には動かない。実測で 2 点が分かった。
+> (a) `wait_for_function` に async の述語を渡すと 1 回しか呼ばれず、その戻り値をそのまま最終結果にして
+> ポーリングしない（`polling` の指定を変えても同じ）。(b) 本アプリの応答には CSP（`default-src 'self'`、
+> `unsafe-eval` なし）が付いており、`wait_for_function` の述語内で `eval` を呼ぶと `EvalError` になる
+> （通常の `page.evaluate` は CDP 経由で CSP の対象にならないため、旧実装では通っていた）。
+> 実装では、`borderList` の取得を `setInterval` でブラウザ側の裏更新に出し、述語は同期関数にし、関数式の
+> 実体化は `evaluate_handle` で 1 回だけ行って JSHandle を `wait_for_function` へ渡す。引数名 `predicate_js`
+> と述語形の契約、呼び出し側 3 箇所は変えていない（呼び出しの 1 つが `w > 100 && h > 25` の述語なので、
+> 期待値 1 個への単純化は成立しない）。コミット `6bc9637` を参照。
 
 - [ ] **Step 7: テストが通ることを確認する**
 
