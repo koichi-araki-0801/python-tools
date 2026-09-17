@@ -2,45 +2,47 @@
 # test_pdftosvg_app_flow_e2e.py — 4 ステップ UI の通し E2E(旧 app_flow.e2e.ts の 1:1)
 # =============================================================================
 # 実 Python バックエンド(test/e2e_server.py)を子プロセスで起動し、Edge channel の
-# 実ブラウザから叩く。旧 TS E2E(:5180)と並走できるよう別ポート(:5181)を使う。
+# 実ブラウザから叩く。ポートは OS に選ばせる（`e2e_server.py` の説明を参照）。
 # page は module スコープ共有(旧 TS はテスト毎に新規 page)だが、全テストが冒頭で
 # goto するため JS realm は毎回作り直され、サーバ状態は resetSession が戻す — 等価。
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
-from .e2e_server import ensure_port_is_free, wait_until_serving
+from .e2e_server import wait_for_port_file, wait_until_serving
 
 pytestmark = [pytest.mark.browser, pytest.mark.e2e]
 
-PORT = 5181
 TOKEN = "e2e-fixed-session-token"
-BASE = f"http://127.0.0.1:{PORT}"
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.pdf")
 
 
 @pytest.fixture(scope="module")
 def e2e_server():
-    # 起動する前に、同じポートで別のサーバが応答していないことを確かめる。起動後の応答の有無だけを
-    # 見ると、既に別の E2E が動いていても起動成功に見えて黙って混線する (Windows では二重 bind が
-    # 成功するので、子が死ぬことでも検知できない)
-    ensure_port_is_free(BASE)
-    env = dict(os.environ, PDFTOSVG_E2E_PORT=str(PORT))
-    proc = subprocess.Popen(
-        [sys.executable, os.path.join(os.path.dirname(__file__), "e2e_server.py")],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    try:
-        wait_until_serving(proc, BASE)
-        yield BASE
-    finally:
-        proc.kill()
-        proc.wait()
+    # ポート 0 で起動して OS に選ばせ、子が bind した実ポートをファイルで受け取る。固定ポートだと
+    # 2 本並走したときに混線する (Windows では SO_REUSEADDR で二重 bind が成功し、接続が
+    # どちらへ届くか不定になる) ため、毎回違うポートにして衝突そのものを無くす
+    with tempfile.TemporaryDirectory(prefix="pdftosvg-e2e-port-") as tmp:
+        port_file = Path(tmp) / "port"
+        env = dict(os.environ, PDFTOSVG_E2E_PORT="0", PDFTOSVG_E2E_PORT_FILE=str(port_file))
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "e2e_server.py")],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            port = wait_for_port_file(port_file, proc)
+            base = f"http://127.0.0.1:{port}"
+            wait_until_serving(proc, base)
+            yield base
+        finally:
+            proc.kill()
+            proc.wait()
 
 
 @pytest.fixture(scope="module")
