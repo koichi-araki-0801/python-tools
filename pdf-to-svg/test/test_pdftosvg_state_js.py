@@ -49,7 +49,7 @@ def _reset_state(st):
 
 def test_pure_helpers_counts_tallies_by_status(st):
     result = js(st, "window.__st.counts(['pending', 'reviewed', 'skipped', 'none', 'pending'])")
-    assert result == {"done": 1, "skip": 1, "pend": 2, "none": 1}
+    assert result == {"done": 1, "skip": 1, "pend": 2, "none": 1, "na": 0}
 
 
 def test_pure_helpers_pass_all_always_passes_others_match_only(st):
@@ -467,3 +467,109 @@ def test_adopted_figures_lists_all_pages_regardless_of_exp_mode(st):
 
 def test_adopted_figures_is_empty_before_any_adoption(st):
     assert js(st, "window.__st.adoptedFigures()") == []
+
+
+# ── 手順 2 の省略 (純スキャンページ = status2 "na") ──
+
+
+def _apply_with_scanned(st, scanned, changed2=None):
+    """5 ページ構成のまま `scanned` 列だけ差し替えて applyState する (RESET と同じページ列)。"""
+    js(st, """(a) => window.__st.applyState({
+        files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }],
+        pages: [
+          { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
+          { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
+        ],
+        total: 5,
+        changed2: a.changed2, changed3: [false, false, false, false, false],
+        scanned: a.scanned,
+    })""", {"scanned": scanned, "changed2": changed2 or [True, False, True, True, False]})
+
+
+def test_initstatus_marks_scanned_pages_na_regardless_of_changed(st):
+    result = js(st, "window.__st.initStatus([true, false, true], [true, true, false])")
+    assert result == ["na", "na", "pending"]
+    # 第 2 引数を省略した既存の呼び方は従来どおり
+    assert js(st, "window.__st.initStatus([true, false])") == ["pending", "none"]
+
+
+def test_mergestatus_keeps_na_even_when_changed_flips(st):
+    result = js(st, "window.__st.mergeStatus([true, true, false], ['reviewed', 'reviewed', 'none'], [true, false, false])")
+    assert result == ["na", "reviewed", "none"]
+
+
+def test_counts_tallies_na(st):
+    result = js(st, "window.__st.counts(['na', 'pending', 'na', 'none'])")
+    assert result == {"done": 0, "skip": 0, "pend": 1, "none": 1, "na": 2}
+
+
+def test_pass_never_shows_na_even_for_all(st):
+    assert js(st, "window.__st.pass('na', 'all')") is False
+    assert js(st, "window.__st.pass('na', 'none')") is False
+    assert js(st, "window.__st.pass('none', 'all')") is True
+
+
+def test_applystate_without_scanned_column_has_no_na(st):
+    # RESET は scanned を渡さない。旧サーバ・既存テストとの互換で全ページ非スキャン扱い
+    assert js(st, "window.__st.S.status2.includes('na')") is False
+    assert js(st, "window.__st.skipsPhase2()") is False
+
+
+def test_applystate_maps_scanned_to_na_and_preserves_status_on_reload(st):
+    _apply_with_scanned(st, [True, False, False, False, True])
+    assert js(st, "window.__st.S.status2") == ["na", "none", "pending", "pending", "na"]
+    js(st, "window.__st.S.status2[2] = 'reviewed'")
+    # 同じページ列で再取得しても na は na のまま、確認済みも引き継ぐ
+    _apply_with_scanned(st, [True, False, False, False, True])
+    assert js(st, "window.__st.S.status2") == ["na", "none", "reviewed", "pending", "na"]
+
+
+def test_skipsphase2_only_when_every_page_is_na(st):
+    _apply_with_scanned(st, [True, True, True, True, True])
+    assert js(st, "window.__st.skipsPhase2()") is True
+    assert js(st, "window.__st.phaseAfterLoad()") == 3
+    assert js(st, "window.__st.phaseBeforeTrim()") == 1
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, True, True]
+    _apply_with_scanned(st, [True, True, True, True, False])
+    assert js(st, "window.__st.skipsPhase2()") is False
+    assert js(st, "window.__st.phaseAfterLoad()") == 2
+    assert js(st, "window.__st.phaseBeforeTrim()") == 2
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, True, True, True]
+
+
+def test_skipsphase2_is_false_with_no_pages(st):
+    js(st, "window.__st.applyState({ files: [], pages: [], total: 0, changed2: [], changed3: [], scanned: [] })")
+    assert js(st, "window.__st.skipsPhase2()") is False
+
+
+def test_gray_mode_wins_over_skipsphase2(st):
+    _apply_with_scanned(st, [True, True, True, True, True])
+    js(st, "window.__st.S.gray = true")
+    assert js(st, "window.__st.phaseAfterLoad()") == 4
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, False, True]
+
+
+def test_landonphase2_moves_off_a_scanned_page_to_the_first_editable_one(st):
+    _apply_with_scanned(st, [True, True, False, True, False])
+    js(st, "window.__st.S.page = 0; window.__st.landOnPhase2()")
+    assert js(st, "window.__st.S.page") == 2
+    # 対象ページに居るときは動かさない (戻ったときに見ていたページを保つ)
+    js(st, "window.__st.S.page = 4; window.__st.landOnPhase2()")
+    assert js(st, "window.__st.S.page") == 4
+    assert js(st, "window.__st.firstEditablePage2()") == 2
+
+
+def test_nextpending_and_firstpending_never_land_on_na(st):
+    _apply_with_scanned(st, [True, False, True, False, True], [True, True, True, True, True])
+    assert js(st, "window.__st.S.status2") == ["na", "pending", "na", "pending", "na"]
+    js(st, "window.__st.S.page = 1")
+    assert js(st, "window.__st.nextPending(window.__st.S.status2)") == 3
+    assert js(st, "window.__st.firstPending(window.__st.S.status2)") == 1
+
+
+def test_export_noskip_keeps_na_pages(st):
+    _apply_with_scanned(st, [True, False, False, False, False])
+    js(st, "window.__st.S.status2[1] = 'skipped'; window.__st.S.expMode = 'noskip'")
+    pages = js(st, "window.__st.exportPageList('', () => [])")
+    assert [p["pageInFile"] for p in pages if p["fileIndex"] == 0] == [0]
+    assert len(pages) == 4

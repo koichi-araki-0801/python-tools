@@ -15,7 +15,7 @@ var S = {
   FILE_START: [],       // fileIndex -> 通し先頭ページ index
   TOTAL: 0,
   changed2: [], changed3: [],   // ページごとの「変更あり」(手順2=置換 / 手順3=削除)
-  status2: [], status3: [],     // ページごとの確認状態 (pending/reviewed/skipped/none)
+  status2: [], status3: [],     // ページごとの確認状態 (pending/reviewed/skipped/none。status2 のみ na = 置換対象外)
   phase: 1,             // ウィザード手順 (1=取込 / 2=置換 / 3=削除 / 4=書き出し)
   page: 0,              // 現在ページ (通し index)
   guarding: false,      // 未確認ガードバー表示中か
@@ -48,15 +48,20 @@ var S = {
 // ── 2. 純粋ヘルパ (S 非依存) ──
 
 function counts(arr) {
-  var c = { done: 0, skip: 0, pend: 0, none: 0 };
+  var c = { done: 0, skip: 0, pend: 0, none: 0, na: 0 };
   arr.forEach(function (s) {
     if (s === "reviewed") c.done++; else if (s === "skipped") c.skip++;
-    else if (s === "pending") c.pend++; else c.none++;
+    else if (s === "pending") c.pend++; else if (s === "na") c.na++; else c.none++;
   });
   return c;
 }
-function pass(st, filt) { return filt === "all" ? true : st === filt; }
-function initStatus(ch) { return ch.map(function (c) { return c ? "pending" : "none"; }); }
+// "na" (置換対象外 = 純スキャンページ) は「すべて」でもレールに出さない。手順 2 で見せない
+// 根拠をここ 1 箇所に置く (レール・ファイル行の件数・全選択は全部 pass を通る)。
+function pass(st, filt) { if (st === "na") return false; return filt === "all" ? true : st === filt; }
+// scanned[i] が真なら changed に関わらず "na"。手順 3 の status3 は scanned を渡さないので na を持たない。
+function initStatus(ch, scanned) {
+  return ch.map(function (c, i) { return scanned && scanned[i] ? "na" : (c ? "pending" : "none"); });
+}
 
 // ── 3. 導出 (現在手順の別名参照・選択集合) ──
 
@@ -121,9 +126,13 @@ function samePageList(oldPages, newPages) {
 // 使う (`applyState` 参照)。changed が立った (= 要確認になった) ページは pending へ、
 // 落ちた (= 変更が無くなった) ページは none へ倒し、それ以外は reviewed/skipped/pending
 // をそのまま引き継ぐ。
-function mergeStatus(changed, oldStatus) {
+function mergeStatus(changed, oldStatus, scanned) {
   return changed.map(function (isChanged, i) {
+    if (scanned && scanned[i]) return "na";   // スキャン判定はページの属性で変わらない
     var old = oldStatus[i];
+    // かつて na だったページが (通常は起きないはずの) スキャン扱い解除を受けた場合、
+    // na は利用者が確認した実績を意味しないため、未確認から出直す (none 扱いへ倒す)。
+    if (old === "na") old = "none";
     if (!isChanged) return "none";
     return old === "none" ? "pending" : old;
   });
@@ -142,11 +151,12 @@ function applyState(st) {
     && oldStatus2.length === st.pages.length && oldStatus3.length === st.pages.length;
   S.FILES = st.files; S.PAGES = st.pages; S.TOTAL = st.total;
   S.changed2 = st.changed2; S.changed3 = st.changed3;
+  var scanned = st.scanned || [];   // 旧形式 (列なし) は全ページ非スキャン扱い
   if (samePages) {
-    S.status2 = mergeStatus(S.changed2, oldStatus2);
+    S.status2 = mergeStatus(S.changed2, oldStatus2, scanned);
     S.status3 = mergeStatus(S.changed3, oldStatus3);
   } else {
-    S.status2 = initStatus(S.changed2); S.status3 = initStatus(S.changed3);
+    S.status2 = initStatus(S.changed2, scanned); S.status3 = initStatus(S.changed3);
     // レール選択は通しページ index、折り畳みは fileIndex をキーにするため、ページ列が
     // 変わると別のページ・別のファイルを指す。持ち越すと意図しないページを一括操作する。
     S.selFor = { 2: {}, 3: {} }; S.collapsed = {};
@@ -174,12 +184,31 @@ function nextPending(arr) {
 /** 先頭から最初の「要確認」ページ。無ければ 0 */
 function firstPending(arr) { for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") return i; return 0; }
 
-/** 手順 1 の「次へ」の行き先。グレーモードは手順 2・3 を飛ばす */
-function phaseAfterLoad() { return S.gray ? 4 : 2; }
+/** 全ページが置換対象外 (純スキャン) か。ページが無ければ false (手順 1 の「次へ」は別途無効) */
+function skipsPhase2() {
+  return S.TOTAL > 0 && S.status2.every(function (s) { return s === "na"; });
+}
+/** 手順 1 の「次へ」の行き先。グレーモードが最優先、次に手順 2 の省略 */
+function phaseAfterLoad() { return S.gray ? 4 : (skipsPhase2() ? 3 : 2); }
+/** 手順 3 の「戻る」の行き先。手順 2 を省略していれば手順 1 へ */
+function phaseBeforeTrim() { return skipsPhase2() ? 1 : 2; }
 /** 手順 4 の「戻る」の行き先 */
 function phaseBeforeExport() { return S.gray ? 1 : 3; }
 /** ステップバーのクリックで移ってよい手順か */
-function stepAllowed(n) { return !S.gray || n === 1 || n === 4; }
+function stepAllowed(n) {
+  if (S.gray) return n === 1 || n === 4;
+  if (skipsPhase2() && n === 2) return false;
+  return true;
+}
+/** 手順 2 で表示してよい (置換対象外でない) 最初のページ。無ければ 0 */
+function firstEditablePage2() {
+  for (var i = 0; i < S.TOTAL; i++) if (S.status2[i] !== "na") return i;
+  return 0;
+}
+/** 手順 2 に入る直前に呼ぶ。表示中のページが置換対象外ならレールに出ているページへ差し替える
+ * (レールに無いページに立つと、キャンバスに画像だけが出て何の画面か分からない)。対象ページに
+ * 居るときは動かさない (「戻る」で見ていたページを保つ)。 */
+function landOnPhase2() { if (S.status2[S.page] === "na") S.page = firstEditablePage2(); }
 
 /** 手順を移るときに、手順 3 の編集で使う一時状態を既定へ戻す。再描画は呼び出し側。
  *
@@ -291,10 +320,10 @@ function zipName(list) {
 }
 
 export {
-  S, counts, pass, initStatus,
+  S, counts, pass, initStatus, mergeStatus,
   statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, stepAllowed,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
   applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };
