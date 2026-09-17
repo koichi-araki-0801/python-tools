@@ -1233,3 +1233,39 @@ def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_pa
     page.click("#btn-back")
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
     assert page.evaluate("() => window.__state.page") == 1
+
+
+def test_dialog_closed_after_a_vector_pdf_was_added_lands_on_step2(e2e_page, scanned_pdf, vector_pdf):
+    """案内モーダルの表示中に文字を持つ PDF が加わったら、閉じたときは手順 2 へ進む。
+
+    モーダルは手順 1 を離れる前に出すだけで、進行中の読み込み (`addFiles`) は止めない。
+    行き先を開いた時点の状態で決め打ちすると、混在になったのに手順 2 を飛ばしてしまう。
+    """
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(scanned_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+
+    page.click("#btn-next")
+    dialog = page.locator("#skip2-dialog")
+    expect(dialog).to_be_visible()
+
+    # モーダル表示中にベクター PDF を足す。モーダルは背景を inert にするため実クリックは
+    # 届かないが、スクリプトからの `click()` は inert でも通る (hit-test とフォーカスだけが
+    # 止まる)。これで実際の `addFiles` → `reloadState` の経路がモーダルの裏で走る。
+    with page.expect_file_chooser() as fc2_info:
+        page.evaluate("() => document.getElementById('btn-pick').click()")
+    fc2_info.value.set_files(str(vector_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
+    # 読み込みが済んでもモーダルは開いたまま (閉じるのは利用者の操作だけ)
+    expect(dialog).to_be_visible()
+
+    page.click("#skip2-go")
+    expect(dialog).to_be_hidden()
+    # 混在になっているので手順 3 ではなく手順 2 へ進む
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    # 表示ページは対象外 (通し 0 のスキャンページ) を避けてベクター側へ寄る
+    assert page.evaluate("() => window.__state.page") == 1

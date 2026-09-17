@@ -13,7 +13,7 @@ var FILTERS = [
   { v: "pending", t: "要確認" }, { v: "all", t: "すべて" },
   { v: "reviewed", t: "確認済み" }, { v: "skipped", t: "スキップ" }, { v: "none", t: "変更なし" },
 ];
-var STAT = { reviewed: "確認済み", skipped: "スキップ", pending: "要確認", none: "変更なし" };
+var STAT = { reviewed: "確認済み", skipped: "スキップ", pending: "要確認", none: "変更なし", na: "対象外" };
 
 // app.js から注入される再描画/遷移フック ({ render, tryNext })
 var ui = { render: function () {}, tryNext: function () {} };

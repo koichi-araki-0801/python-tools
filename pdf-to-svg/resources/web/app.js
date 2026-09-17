@@ -809,7 +809,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
     if (S.phase === 1) {
       setHint(!S.TOTAL ? "変換するPDFを選びます"
-        : (skipsPhase2() && !S.gray) ? "「次へ」で削除・枠線の編集に進みます（スキャン画像のみのため用語の置換は省略）"
+        : skip2 ? "「次へ」で削除・枠線の編集に進みます（スキャン画像のみのため用語の置換は省略）"
         : "「次へ」で用語の置換に進みます");
       ctxText.textContent = S.TOTAL ? S.FILES.length + " ファイル・" + S.TOTAL + " ページ" : "ファイル未選択";
     } else if (S.phase === 4 && S.gray) {
@@ -1007,7 +1007,11 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("skip2-go").addEventListener("click", function () { skip2.close(); });
     skip2.addEventListener("close", function () {
       if (S.phase !== 1 || !S.TOTAL) return;   // 閉じる前にファイルを消した等の取りこぼし
-      S.phase = 3; S.page = 0; S.guarding = false; resetPhaseUi(); render();
+      // 行き先は開いた時点でなく閉じた時点の状態で決める。モーダル表示中も進行中の読み込み
+      // (`addFiles`) は止まらず、完了した `reloadState` で混在に変わっていることがある
+      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi();
+      if (S.phase === 2) landOnPhase2();
+      render();
     });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {

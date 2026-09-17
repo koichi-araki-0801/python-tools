@@ -125,13 +125,16 @@ function samePageList(oldPages, newPages) {
 // 再取得後の changed 列と旧 status 列から新 status 列を組む。ページ列が同一のときに
 // 使う (`applyState` 参照)。changed が立った (= 要確認になった) ページは pending へ、
 // 落ちた (= 変更が無くなった) ページは none へ倒し、それ以外は reviewed/skipped/pending
-// をそのまま引き継ぐ。
+// をそのまま引き継ぐ。第 3 引数 `scanned` (省略可) が真のページは changed や旧 status に
+// 関わらず `"na"` にする (スキャン判定はページの属性で変わらない)。
 function mergeStatus(changed, oldStatus, scanned) {
   return changed.map(function (isChanged, i) {
     if (scanned && scanned[i]) return "na";   // スキャン判定はページの属性で変わらない
     var old = oldStatus[i];
-    // かつて na だったページが (通常は起きないはずの) スキャン扱い解除を受けた場合、
-    // na は利用者が確認した実績を意味しないため、未確認から出直す (none 扱いへ倒す)。
+    // 再取得の `st.scanned` が無い、または `changed` より短いとき (旧形式の応答では
+    // `applyState` が `[]` を渡す) は、このページのスキャン判定を確かめられない。na は
+    // 利用者が確認した実績を意味しないので、古い na を残さず通常の changed/旧 status の
+    // 規則へ戻す (none 扱いへ倒す)。
     if (old === "na") old = "none";
     if (!isChanged) return "none";
     return old === "none" ? "pending" : old;
