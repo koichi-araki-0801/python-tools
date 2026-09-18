@@ -834,3 +834,14 @@ dialog.notice .skip-list li { word-break: break-all; }
 .howto { margin-top: auto; background: var(--accent-soft); border-radius: var(--r-md); padding: 12px 14px; font-size: 12px; color: var(--muted); line-height: 1.7; }
 .howto b { display: block; color: var(--accent-ink); margin-bottom: 6px; }
 .howto ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+
+/* ---- ページへ移動 (手順 2・3 のキャンバス下) ---- */
+.page-jump { gap: 8px; padding: 6px 8px 6px 6px; left: calc(50% - 64px); }
+.page-jump .pj-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); display: grid; place-items: center; cursor: pointer; }
+.page-jump .pj-btn:disabled { opacity: .4; cursor: default; }
+.page-jump .pj-btn svg { width: 16px; height: 16px; }
+.page-jump .pj-file { height: 30px; max-width: 180px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--paper); font-family: var(--font-ui); font-size: 12.5px; color: var(--ink); padding: 0 8px; }
+.page-jump .pj-num { width: 44px; height: 30px; border: 1px solid var(--border-strong); border-radius: 8px; text-align: center; font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--ink); background: var(--surface); }
+.page-jump .pj-num::-webkit-outer-spin-button, .page-jump .pj-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.page-jump .pj-of { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.page-jump .pj-go { height: 30px; padding: 0 10px; font-size: 12px; }

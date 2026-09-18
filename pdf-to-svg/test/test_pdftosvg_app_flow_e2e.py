@@ -793,7 +793,7 @@ def _open_second_page_in_step3(page, pdf_path):
     """手順 3 で 2 ページ目を開く。絞り込みの既定は「すべてのページ」なので、行をクリックするだけ。"""
     _goto_step3(page, pdf_path)
     page.click('#pagenav-3 .pg-row2[data-g="1"]')
-    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+    expect(page.locator("#pgnav-3 .pj-num")).to_have_value("2")
 
 
 def _advance_step3_to_step4(page):
@@ -1120,7 +1120,7 @@ def test_back_from_step4_keeps_page_and_clears_selection(e2e_page, ocr_layer_two
     _advance_step3_to_step4(page)
     page.click("#btn-back")
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
-    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+    expect(page.locator("#pgnav-3 .pj-num")).to_have_value("2")
     expect(page.locator("#trim-stage svg")).to_be_visible()
     expect(page.locator("#trim-stage .sel-box")).to_have_count(0)
 
@@ -1134,7 +1134,7 @@ def test_stepbar_back_to_step3_keeps_page_and_resets_tool(e2e_page, ocr_layer_tw
     _advance_step3_to_step4(page)
     page.click('#stepbar .step[data-step="3"]')
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
-    expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
+    expect(page.locator("#pgnav-3 .pj-num")).to_have_value("2")
     expect(page.locator('.float-tools [data-tool][aria-pressed="true"]')).to_have_count(0)
     expect(page.locator("#cover-opts")).to_be_hidden()
 
@@ -1145,7 +1145,7 @@ def test_back_from_step3_to_step2_keeps_page(e2e_page, ocr_layer_two_page_pdf):
     _open_second_page_in_step3(page, ocr_layer_two_page_pdf)
     page.click("#btn-back")
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
-    expect(page.locator("#pgnav-2")).to_contain_text("2 ページ")
+    expect(page.locator("#pgnav-2 .pj-num")).to_have_value("2")
 
 
 def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
@@ -1236,7 +1236,7 @@ def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_pa
     expect(page.locator("#pagenav .pl-file")).to_have_count(1)
     expect(page.locator("#pagenav .pl-file")).to_contain_text("vector_sample.pdf")
     # 表示中のページはスキャンページ (通し 0) ではなくベクター側
-    expect(page.locator("#pgnav-2")).to_contain_text("vector_sample.pdf")
+    expect(page.locator("#pgnav-2 .pj-file")).to_have_value("1")
     assert page.evaluate("() => window.__state.page") == 1
     assert page.evaluate("() => window.__state.status2") == ["na", "none"]
     # 手順 2 上部のまとめにも「対象外 1」
@@ -1286,3 +1286,37 @@ def test_dialog_closed_after_a_vector_pdf_was_added_lands_on_step2(e2e_page, sca
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
     # 表示ページは対象外 (通し 0 のスキャンページ) を避けてベクター側へ寄る
     assert page.evaluate("() => window.__state.page") == 1
+
+
+def test_page_jump_moves_by_number_and_arrows_including_pages_hidden_from_the_rail(e2e_page, ocr_layer_two_page_pdf):
+    """画面下の「ページへ移動」: 番号 + 移動 / Enter / 前後ボタンで表示ページが変わる。
+    手順 2 のレールは辞書に一致したページだけを出すが、移動はどのページへも効く。"""
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files(str(ocr_layer_two_page_pdf))
+    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    # 辞書が空なのでレールに行は無いが、番号で 2 ページ目へ行ける
+    expect(page.locator("#pagenav .pg-row2")).to_have_count(0)
+    page.fill("#pgnav-2 .pj-num", "2")
+    page.click("#pgnav-2 .pj-go")
+    assert page.evaluate("() => window.__state.page") == 1
+    expect(page.locator("#pgnav-2 .pj-num")).to_have_value("2")
+    # 前へ
+    page.click('#pgnav-2 [data-pj="prev"]')
+    assert page.evaluate("() => window.__state.page") == 0
+    # Enter でも移動。範囲外は端に丸める
+    page.fill("#pgnav-2 .pj-num", "9")
+    page.press("#pgnav-2 .pj-num", "Enter")
+    assert page.evaluate("() => window.__state.page") == 1
+    expect(page.locator('#pgnav-2 [data-pj="next"]')).to_be_disabled()
+    # 手順 3 でも同じ部品
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
+    expect(page.locator("#pgnav-3 .pj-num")).to_have_value("1")
+    page.click('#pgnav-3 [data-pj="next"]')
+    expect(page.locator("#pgnav-3 .pj-num")).to_have_value("2")

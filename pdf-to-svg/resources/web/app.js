@@ -16,6 +16,7 @@ import {
 } from "./state.js";
 import { fileIcon, xIcon, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
+import { initPageJump, buildPageJump } from "./page-jump.js";
 import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
 import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel } from "./cover.js";
 import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, clearBorderSel } from "./border.js";
@@ -856,7 +857,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (S.phase === 2 && S.TOTAL) {
       buildRail("pagenav");
       wirePageFoot2();
-      document.getElementById("pgnav-2").innerHTML = pageLabel();
+      buildPageJump("pgnav-2");
       mountPage(document.getElementById("doc-master"), app.querySelector('[data-screen="2"] .editor'), false, function () {
         wireConfirmPick();
         drawChangeMarkers(S.lastChanges || []);
@@ -867,7 +868,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (S.phase === 3 && S.TOTAL) {
       buildRail("pagenav-3");
       wirePageFoot3();
-      document.getElementById("pgnav-3").innerHTML = pageLabel();
+      buildPageJump("pgnav-3");
       var ed3 = app.querySelector('[data-screen="3"] .editor');
       ed3.classList.toggle("tool-crop", S.tool === "crop");
       ed3.classList.toggle("tool-border", S.tool === "border");
@@ -1359,6 +1360,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   window.__rpcReady.then(function () {
     window.__state = S; // E2E/デバッグ用の読み取り窓
     initRail({ render: render });
+    initPageJump({ render: render });
     initFigure({ render: render });
     initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
     initBorder({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
