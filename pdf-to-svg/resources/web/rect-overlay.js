@@ -48,8 +48,7 @@ function createRectOverlay(opts) {
   /** 選択を解き、入力欄を「次に置く値」へ戻す。選択解除の経路 (ツール切替・空白クリック・
    *  ページ移動・選んでいた要素が消えた等) をここへ一元化し、選択中に編集した値が
    *  「次に置く値」へ紛れ込んだまま入力欄に残らないようにする。
-   *  `state.js` が export する `clearSel`（ページレールの選択を解く）と同名にならないよう、
-   *  内部名はこれにする。公開名は呼び出し側（`cover.js` / `border.js`）を変えないため `clearSel` のまま。 */
+   *  公開名は呼び出し側（`cover.js` / `border.js`）に合わせて `clearSel` 。 */
   function clearOverlaySel() {
     opts.setSel(null);
     opts.onSelect(null);

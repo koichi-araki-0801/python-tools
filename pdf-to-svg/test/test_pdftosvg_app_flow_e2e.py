@@ -182,6 +182,16 @@ def test_four_step_flow(e2e_page):
     # ファイル名の案内は色モードの文言のまま (グレーモード専用の _fig1_gray. にならない)
     expect(page.locator("#exp-name-hint")).to_contain_text("_p1.svg")
 
+    # フッターの案内は書き出す範囲を変えるたびに追従する (範囲のボタンとページ指定の
+    # 入力は `render()` を通らないため、古い件数が残る退行をここで止める)
+    page.click("#exp-page")
+    expect(page.locator("#nav-hint")).to_contain_text("1 個の SVG")
+    page.click("#exp-spec-btn")
+    page.fill("#exp-spec", "9")  # 1 ページの PDF なので範囲外 = 0 ページ
+    expect(page.locator("#nav-hint")).to_contain_text("書き出すページがありません")
+    page.click("#exp-all")
+    expect(page.locator("#nav-hint")).to_contain_text("1 個の SVG を保存します")
+
     # 書き出しの失敗は握り潰さず通知し、ボタンを押せる状態へ戻す
     page.evaluate("""() => {
         const w = window;

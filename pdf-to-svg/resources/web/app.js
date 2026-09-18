@@ -604,8 +604,15 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
    *  ページ SVG のキャッシュと要素の選択は `applyState` が捨てるため、ここでは触らない。 */
   async function afterEdit() {
     blurTextEntry(); // 編集が成功した時点で入力欄のフォーカスを外し、続く Ctrl+Z をアプリの Undo へ通す
-    await reloadState();
-    render();
+    // 取り直しに失敗しても理由を出してから必ず描き直す。黙って抜けると、編集は通っているのに
+    // 画面が更新されず、利用者には何も起きていないように見える。
+    try {
+      await reloadState();
+    } catch (e) {
+      toast("状態を取り直せませんでした: " + String((e && e.message) || e));
+    } finally {
+      render();
+    }
   }
 
   // ── 12. ページ送り (右パネル下部) ──
@@ -656,8 +663,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("dict-rows").querySelectorAll("[data-del]").forEach(function (b) {
       b.addEventListener("click", async function () {
         dictState = await rpc("dictDelete", { id: +b.dataset.del }); renderDict();
-        // 削除した語に当たっていたページは「要確認」から降りる。state を取り直さないと
-        // 案内バーが消えた語の件数を数え続ける。
+        // 削除した語に当たっていたページは一致件数 (`S.matches2`) が変わるため、state を取り直す。
+        // 取り直さないとレールの件数タグとフッターの件数が消えた語を数え続ける。
         await reloadState(); render();
       });
     });
@@ -826,7 +833,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("export-title").textContent = S.gray ? "図をグレーで書き出す" : "SVG に書き出す";
     document.getElementById("exp-name-hint").textContent = S.gray
       ? "元ファイル名_p8_fig1_gray.svg …（複数は元ファイル名_gray_svg.zip）"
-      : "元ファイル名_p1.svg, _p2.svg …";
+      : "元ファイル名_p1.svg, _p2.svg …（複数は元ファイル名_svg.zip にまとめます）";
     document.getElementById("mode-normal-box").classList.toggle("on", !S.gray);
     document.getElementById("mode-gray-box").classList.toggle("on", S.gray);
     document.getElementById("flow-step2").classList.toggle("skip", skip2);
@@ -860,10 +867,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       document.getElementById("export-summary").innerHTML =
         S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>採用 " + figCount() + " 図・グレースケール";
     } else if (S.phase === 4) {
-      var nExp = expCount(expSpecValue(), parseSpec);
-      setHint(nExp > 1 ? nExp + " 個の SVG を zip にまとめて保存します" : "1 個の SVG を保存します");
       ctxText.textContent = S.FILES.length + " ファイル・" + S.TOTAL + " ページ";
-      refreshExport();
+      refreshExport(); // フッターの案内 (何個書き出すか) も refreshExport が出す
       document.getElementById("export-summary").innerHTML = exportSummaryRows();
     } else {
       var pg = S.PAGES[S.page];
@@ -1133,8 +1138,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       }
       pendingJoined = false;
       src.value = ""; tgt.value = ""; renderDict();
-      // 登録した語に当たるページは「要確認」へ上がる。他の辞書操作 (再適用・戻す) と同じく
-      // state を取り直さないと、確認済みのページに新語が当たっても案内バーが気付かない。
+      // 登録した語に当たるページは一致件数 (`S.matches2`) が変わるため、他の辞書操作
+      // (再適用・戻す) と同じく state を取り直す。
       await reloadState(); render();
     });
     // 元の語を手編集したら連結由来を外す (取り込んだ連結文字列ではなくなるため)
@@ -1255,6 +1260,14 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     }
     var num = S.gray ? (S.expMode === "page" ? figSelOf(S.page).length : figCount()) : expCount(expSpecValue(), parseSpec);
     document.getElementById("exp-num").textContent = num;
+    // 書き出す個数はフッターの案内にも出す。範囲のボタン・ファイル選択・ページ指定の
+    // 入力は `render()` を通らずここだけを呼ぶため、案内の文言もここで作らないと古い件数が残る。
+    // グレーモードの案内は採用した図の数を出す別の文言なので、`render()` 側に置いたままにする。
+    if (S.phase === 4 && !S.gray) {
+      setHint(num === 0 ? "書き出すページがありません"
+        : num === 1 ? "1 個の SVG を保存します"
+        : num + " 個の SVG を zip にまとめて保存します");
+    }
     var btn = document.getElementById("btn-export");
     if (btn) btn.disabled = S.gray && num === 0;
   }

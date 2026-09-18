@@ -302,9 +302,9 @@ def plan_replacements(page: Page, store: DictionaryStore) -> List[Replacement]:
 def has_replacement_candidate(page: Page, store: DictionaryStore) -> bool:
     """置換候補が 1 件でもあるかだけを判定する (`plan_replacements` の軽量版)。
 
-    `state` RPC はページ単位で毎回呼ばれるホット経路で、全件の置換計画を作る必要は
-    無く「1 件でもあるか」だけが要る。`_iter_replacements` を最初の 1 件で打ち切り、
-    辞書が空なら (`store.all()` が空) ページの走査自体を省く。
+    存在だけを知りたい呼び出し側のための述語で、現在はテスト (`test_wrap_header.py`) が使う。
+    `_iter_replacements` を最初の 1 件で打ち切り、辞書が空なら (`store.all()` が空)
+    ページの走査自体を省く。
     """
     if not store.all():
         return False

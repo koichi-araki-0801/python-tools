@@ -168,8 +168,8 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
         "matches2": matches2,
         "edits3": edits3,
         "scanned": scanned,
-        # `scanned` の True の数。`app.js` の `reloadState` が読み込み直後のトーストに使う
-        # (`ocrPages` と同じ差分抑止の経路)。
+        # `scanned` の True の数。現状のクライアントは `scanned[]` から自前で数える。
+        # 互換のため残す。
         "scannedPages": sum(1 for x in scanned if x),
         "total": total,
         # 要素数の資源上限に当たって抽出を打ち切ったページ数 (`engine/pdf_engine.py`)。
