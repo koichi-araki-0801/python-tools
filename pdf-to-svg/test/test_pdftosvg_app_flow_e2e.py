@@ -116,12 +116,10 @@ def test_four_step_flow(e2e_page):
     page.fill("#dict-tgt", "売上高")
     page.click("#dict-add")
     expect(page.locator("#dict-count")).to_have_text("登録済みの用語（1）")
-    # 辞書に語を足しただけで、その語に当たるページは「要確認」に上がる(再適用の前でも)
-    expect(page.locator("#nav-hint")).to_contain_text("要確認 1")
+    # 辞書に語を足しただけで、その語に当たるページは「辞書に一致」に上がる(再適用の前でも)
+    expect(page.locator("#nav-hint")).to_contain_text("辞書に一致 1 ページ")
     page.click("#btn-reapply")
-    # 「N 件置換」ヒントは直後の render() が状態行で上書きするため文言では見ない。
-    # 置換の成立は「要確認 1(changed 化)」とページ表示(書き出しと同一経路)で確認する。
-    expect(page.locator("#nav-hint")).to_contain_text("要確認 1")
+    expect(page.locator("#nav-hint")).to_contain_text("置換 1 か所")
     expect(page.locator("#doc-master")).to_contain_text("売上高", timeout=15_000)
 
     # 箇所単位: 一覧の「戻す」で 1 件だけ置換前へ → 行は未置換(置換ボタン)になる → 「置換」で再び当たる
@@ -147,7 +145,7 @@ def test_four_step_flow(e2e_page):
     assert page.evaluate("() => window.__rpcLog") == []
 
     # ── 3. 不要範囲を削除: 要素クリック選択 → 削除 → Undo → 再削除 ──
-    page.click('[data-screen="2"] [data-skipall]')  # 未確認をまとめてスキップ → 手順3 へ
+    page.click("#btn-next")  # ページごとの確認は無いので「次へ」でそのまま手順 3 へ
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
     target = page.locator('#trim-stage svg [data-el]', has_text="DeleteMe")
     target.click()
@@ -167,8 +165,13 @@ def test_four_step_flow(e2e_page):
     expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（1）")
 
     # ── 4. SVG に書き出す(1 ページ → 単一 SVG ダウンロード) ──
-    page.click('[data-screen="3"] [data-skipall]')
+    page.click("#btn-next")  # 「書き出しへ」
     expect(page.locator("#btn-export")).to_be_visible()
+    # まとめは表 (置換の箇所数・編集したページ)
+    expect(page.locator("#export-summary")).to_contain_text("置換 1 か所")
+    expect(page.locator("#export-summary")).to_contain_text("編集したページ 1")
+    # 書き出す範囲は 3 択 (「スキップを除く」は無い)
+    expect(page.locator("#exp-modes [data-mode]")).to_have_count(3)
 
     # グレーモード専用のペインは色モードでは描かれない (hidden が .editor/.segment の display に負けない)
     expect(page.locator("#fig-editor")).to_be_hidden()
@@ -215,7 +218,7 @@ def test_stale_page_fetch_does_not_break_current_page(e2e_page):
         expect(page.locator("#filelist-count")).to_contain_text(f"{i + 1} ファイル", timeout=30_000)
 
     page.click("#btn-next")
-    page.click('[data-screen="2"] [data-skipall]')
+    page.click("#btn-next")
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
     expect(page.locator("#trim-stage svg")).to_be_visible(timeout=30_000)
 
@@ -315,7 +318,7 @@ def test_list_fetch_failure_clears_rows_and_offers_retry(e2e_page):
     page.click("#confirm-dyn [data-retry]")
     expect(page.locator("#confirm-dyn .change-row")).to_have_count(1)
 
-    page.click('[data-screen="2"] [data-skipall]')
+    page.click("#btn-next")
     expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
     break_rpc("removedList")
     page.locator('#pagenav-3 .pg-row2[data-g="0"]').click()
@@ -786,18 +789,15 @@ def _select_visible_text(page):
 
 
 def _open_second_page_in_step3(page, pdf_path):
-    """手順 3 で 2 ページ目を開く。変更の無いページは既定の絞り込み「要確認」に出ないため「すべて」へ切り替える。"""
+    """手順 3 で 2 ページ目を開く。絞り込みの既定は「すべてのページ」なので、行をクリックするだけ。"""
     _goto_step3(page, pdf_path)
-    page.select_option("#pagenav-3 .pl-filter", "all")
     page.click('#pagenav-3 .pg-row2[data-g="1"]')
     expect(page.locator("#pgnav-3")).to_contain_text("2 ページ")
 
 
 def _advance_step3_to_step4(page):
-    """手順 3 から 4 へ進む。OCR 文字層のページは手順 3 で要確認になるため、未確認ガードをスキップで抜ける。"""
+    """手順 3 から 4 へ進む。ページごとの確認は無いので「書き出しへ」でそのまま進む。"""
     page.click("#btn-next")
-    expect(page.locator("#guard")).to_be_visible()
-    page.click("#guard-skip")
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
 
 
@@ -1194,10 +1194,8 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
     page.click("#skip2-go")
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
 
-    # 手順 3 は未確認のまま「書き出しへ」→ ガード → 未確認をスキップして手順 4
+    # 手順 3 から「書き出しへ」で手順 4
     page.click("#btn-next")
-    expect(page.locator("#guard")).to_be_visible()
-    page.click("#guard-skip")
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
     expect(page.locator("#export-summary")).to_contain_text("対象外 1")
     # ステップバーの 2 は表示されない（クリック不可そのものは state.js 単体の stepAllowed(2) で固定）
@@ -1237,7 +1235,7 @@ def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_pa
     assert page.evaluate("() => window.__state.page") == 1
     assert page.evaluate("() => window.__state.status2") == ["na", "none"]
     # 手順 2 上部のまとめにも「対象外 1」
-    expect(page.locator("#sum-2")).to_contain_text("対象外 1")
+    expect(page.locator("#pagenav .pl-title")).to_contain_text("対象外 1")
 
     # 手順 3 へ進み、戻ると手順 2 のベクターページに戻る (3→2 のまま)
     page.click("#btn-next")

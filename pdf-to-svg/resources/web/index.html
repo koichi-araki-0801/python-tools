@@ -123,10 +123,14 @@
 
         <div class="tabpane on" data-pane="confirm">
           <div class="panel-body">
-            <div class="statusbar" id="sum-2"></div>
             <div id="confirm-dyn" style="display:flex;flex-direction:column;min-height:0;flex:1;gap:14px;"></div>
           </div>
-          <div class="panel-foot" id="pageact-2"></div>
+          <div class="panel-foot" id="pagefoot-2">
+            <div class="pa-btns">
+              <button class="btn outline" id="prev-page-2">前のページ</button>
+              <button class="btn outline" id="next-match-2">次の一致ページ</button>
+            </div>
+          </div>
         </div>
 
         <div class="tabpane" data-pane="dict">
@@ -189,13 +193,17 @@
       <aside class="panel">
         <div class="panel-head">
           <h2><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px"><path d="M7 3v13.5A1.5 1.5 0 0 0 8.5 18H21"></path><path d="M3 7h13.5A1.5 1.5 0 0 1 18 8.5V21"></path></svg>削除・枠線の編集</h2>
-          <p class="desc">要らない要素は選んで削除、範囲削除でドラッグした領域内の要素をまとめて削除、枠線で罫線枠を追加できます。</p>
+          <p class="desc lines"><span>編集は自動で保存されます。</span><span>編集しないページはそのまま書き出されます。</span></p>
         </div>
         <div class="panel-body">
-          <div class="statusbar" id="sum-3"></div>
           <div id="trim-dyn" style="display:flex;flex-direction:column;min-height:0;flex:1;"></div>
         </div>
-        <div class="panel-foot" id="pageact-3"></div>
+        <div class="panel-foot" id="pagefoot-3">
+          <div class="pa-btns">
+            <button class="btn outline" id="prev-page-3">前のページ</button>
+            <button class="btn outline" id="next-page-3">次のページ</button>
+          </div>
+        </div>
       </aside>
     </section>
 
@@ -215,12 +223,11 @@
       <div class="center-scroll" id="export-center">
         <div class="sheet">
           <h1 id="export-title">SVG に書き出す</h1>
-          <p class="lead">設定を確認して書き出します。書き出しはこの画面だけで行います。</p>
+          <p class="lead lines"><span>内容を確かめて、右下の「SVG に書き出す」を押します。</span><span>ファイルはダウンロードフォルダーに保存されます。</span></p>
 
-          <div class="opt" style="display:flex;align-items:center;gap:16px">
+          <div class="opt" style="display:flex;align-items:flex-start;gap:24px">
             <div class="big-tally"><span class="num" id="exp-num">0</span><span class="u">個のSVG</span></div>
-            <div style="flex:1"></div>
-            <div style="text-align:right;color:var(--muted);font-size:12.5px" id="export-summary"></div>
+            <table class="sum-table" id="export-summary"></table>
           </div>
 
           <div class="opt">
@@ -228,7 +235,6 @@
             <div class="segment" id="exp-modes">
               <button id="exp-page" data-mode="page" aria-pressed="false">表示中のページのみ</button>
               <button id="exp-all" data-mode="all" aria-pressed="true">全ページ</button>
-              <button id="exp-noskip" data-mode="noskip" aria-pressed="false">スキップを除く</button>
               <button id="exp-spec-btn" data-mode="spec" aria-pressed="false">ページを指定</button>
             </div>
             <div class="segment" id="exp-modes-gray" hidden>
@@ -240,6 +246,7 @@
               <input id="exp-spec" type="text" placeholder="例: 1-5, 8" style="font-size:13px;padding:5px 8px;width:140px">
               <span style="font-size:12px;color:var(--muted)">ページ</span>
             </div>
+            <div class="opt-note" id="exp-range-note">一部のページだけ書き出すときは「ページを指定」で範囲（例: 1-5, 8）を入れます。</div>
             <div style="font-size:12px;color:var(--muted);margin-top:10px">ファイル名：<b id="exp-name-hint" style="color:var(--ink)">元ファイル名_p1.svg, _p2.svg …</b></div>
           </div>
 
@@ -248,22 +255,11 @@
             <div class="selist" id="fig-selist"></div>
           </div>
 
-          <div class="opt" style="background:var(--good-soft);border-color:var(--good-line)">
-            <div class="ot" style="color:var(--good-ink)"><svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:17px;height:17px"><path d="m4.5 12.5 5 5 10-11"></path></svg>テキストは本物の文字のまま</div>
-            <div style="font-size:12.5px;color:var(--muted)">後から検索・再編集できます。使用フォントのみ埋め込むので出力は軽量です。</div>
-          </div>
+          <div class="note-line"><svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5 10-11"></path></svg><span class="lines"><span>文字は文字のまま書き出します（後から検索・再編集できます）。</span><span>使ったフォントだけを埋め込みます。</span></span></div>
         </div>
       </div>
     </section>
 
-  </div>
-
-  <!-- 確認バー -->
-  <div class="guard" id="guard" hidden="">
-    <span class="gi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.5"></path><path d="M10.3 3.9 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path></svg>まだ確認していないページが <b id="guard-n">0</b> 件あります</span>
-    <div class="spacer"></div>
-    <button class="btn ghost" id="guard-back">最初の未確認へ</button>
-    <button class="btn primary" id="guard-skip">未確認をすべてスキップして進む</button>
   </div>
 
   <!-- フッター -->

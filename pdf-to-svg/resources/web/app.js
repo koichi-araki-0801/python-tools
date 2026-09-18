@@ -7,12 +7,12 @@
 import { esc, svg } from "./dom.js";
 import { clientToPage, parseSpec, rectFromDrag, pageSizeOf } from "./geometry.js";
 import {
-  S, counts, pass, initStatus,
-  statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
-  applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
+  S, pkey, curElSel,
+  applyState, invalidateAll, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, scannedFiles, landOnPhase2,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
+  matchCount, nextMatched, scannedCountOf, scannedTotal, matchTotals, editTotals,
 } from "./state.js";
 import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
@@ -268,23 +268,15 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
   // ── 8. 左: ページ一覧 — rail.js の buildRail/wireRail が担う (initRail で render/tryNext を注入) ──
 
-    function renderSummary(id, arr) {
-    var c = counts(arr);
-    document.getElementById(id).innerHTML =
-      '<span class="si"><span class="d pend"></span>要確認 <b>' + c.pend + "</b></span>" +
-      '<span class="si"><span class="d done"></span>確認済み <b>' + c.done + "</b></span>" +
-      '<span class="si"><span class="d skip"></span>スキップ <b>' + c.skip + "</b></span>" +
-      '<span class="si"><span class="d pend" style="background:var(--border-strong)"></span>変更なし <b>' + c.none + "</b></span>" +
-      (c.na ? '<span class="si"><span class="d pend" style="background:var(--faint)"></span>対象外 <b>' + c.na + "</b></span>" : "");
-  }
-
   // ── 9. 確認ペイン (手順2) ──
   async function renderConfirm() {
     var el = document.getElementById("confirm-dyn");
     var ed2 = app.querySelector('[data-screen="2"] .editor');
-    if (!S.changed2[S.page]) {
+    if (!matchCount(S.page)) {
       ed2.classList.add("nochange");
-      el.innerHTML = noChangeNote("このページに置換はありません");
+      el.innerHTML = noChangeNote(S.scanned[S.page]
+        ? "このページはスキャン画像のため、用語の置換の対象外です"
+        : "このページに辞書と一致する語はありません");
       S.lastChanges = [];
       drawChangeMarkers([]);
       return;
@@ -570,6 +562,9 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     invalidate(pg.fileIndex, pg.pageInFile);
     curElSel(); S.elSel[pkey()] = {};
     blurTextEntry(); // 編集が成功した時点で入力欄のフォーカスを外し、続く Ctrl+Z をアプリの Undo へ通す
+    // レールの件数タグ・フッターの「編集したページ」・手順 4 のまとめは `S.edits3` から描くため、
+    // 編集のたびに state を取り直す。取り直さないと、削除・枠線・上書きを置いても件数が 0 のまま残る。
+    await reloadState();
     render();
   }
 
@@ -582,29 +577,21 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     render();
   }
 
-  // ── 12. ページ単位アクション ──
-  function pageActHTML() {
-    var st = statusOfCur();
-    if (st === "none") return '<div class="pa-prompt" style="margin:0">このページは変更がないため操作は不要です</div>';
-    if (st === "reviewed") return '<div class="pa-badge good">' + svg('<path d="' + checkD + '"/>', 17) + 'このページは確認済み</div><button class="pa-link" data-pa="reset">取り消す</button>';
-    if (st === "skipped") return '<div class="pa-badge warn">' + svg('<path d="M9 8l4 4-4 4M15 8v8"/>', 17) + 'このページはスキップ</div><button class="pa-link" data-pa="review">確認する</button>';
-    // 置換対象外 (純スキャン) は確認状態を持たない。通常は landOnPhase2 が着地を防ぐが、
-    // 将来ページ送りの経路が増えても確認ボタンを出さない
-    if (st === "na") return '<div class="pa-prompt">このページはスキャン画像のため、用語の置換の対象外です</div>';
-    return '<div class="pa-prompt">' + (S.phase === 2 ? "このページの置換を確認、または不要ならスキップ" : "このページを確認、または不要ならスキップ") + "</div>" +
-      '<div class="pa-btns"><button class="btn ghost" data-pa="skip">スキップ</button><button class="btn primary" data-pa="done">' + (S.phase === 2 ? "確認しました" : "確認しました") + "</button></div>";
+  // ── 12. ページ送り (右パネル下部) ──
+  function wirePageFoot2() {
+    var prev = document.getElementById("prev-page-2"), next = document.getElementById("next-match-2");
+    prev.disabled = S.page === 0;
+    var nm = nextMatched(S.page);
+    next.disabled = nm < 0;
+    prev.onclick = function () { if (S.page > 0) { S.page--; render(); } };
+    next.onclick = function () { var n = nextMatched(S.page); if (n >= 0) { S.page = n; render(); } };
   }
-  function onPageAct(actv) {
-    var arr = statusArr();
-    if (actv === "done") { arr[S.page] = "reviewed"; var n1 = nextPending(arr); if (n1 >= 0) S.page = n1; }
-    else if (actv === "skip") { arr[S.page] = "skipped"; var n2 = nextPending(arr); if (n2 >= 0) S.page = n2; }
-    else { arr[S.page] = "pending"; }
-    render();
-  }
-  function renderPageAct() {
-    var el = document.getElementById(S.phase === 2 ? "pageact-2" : "pageact-3");
-    el.innerHTML = pageActHTML();
-    el.querySelectorAll("[data-pa]").forEach(function (b) { b.addEventListener("click", function () { onPageAct(b.dataset.pa); }); });
+  function wirePageFoot3() {
+    var prev = document.getElementById("prev-page-3"), next = document.getElementById("next-page-3");
+    prev.disabled = S.page === 0;
+    next.disabled = S.page >= S.TOTAL - 1;
+    prev.onclick = function () { if (S.page > 0) { S.page--; render(); } };
+    next.onclick = function () { if (S.page < S.TOTAL - 1) { S.page++; render(); } };
   }
   function pageLabel() { var pg = S.PAGES[S.page]; return "<b>" + esc(S.FILES[pg.fileIndex].name) + "</b> ・ " + (pg.pageInFile + 1) + " ページ"; }
 
@@ -693,6 +680,26 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   // ── 14. 描画 ──
   function setHint(html) { document.getElementById("nav-hint").innerHTML = html; }
 
+  /** 手順 4 のまとめの表 (PDF / 用語の置換 / 削除・枠線)。0 の項目は省く */
+  function exportSummaryRows() {
+    var mt = matchTotals(), et = editTotals();
+    var terms = [];
+    if (mt.applied) terms.push("置換 <b>" + mt.applied + "</b> か所（<b>" + mt.pages + "</b> ページ）");
+    if (mt.pending) terms.push("未置換 <b>" + mt.pending + "</b> か所");
+    if (mt.scanned) terms.push("対象外（スキャン画像） <b>" + mt.scanned + "</b> ページ");
+    if (!terms.length) terms.push("辞書に一致した語はありません");
+    var edits = [];
+    if (et.pages) {
+      edits.push("編集したページ <b>" + et.pages + "</b>");
+      if (et.removed) edits.push("削除 <b>" + et.removed + "</b>");
+      if (et.borders) edits.push("枠線 <b>" + et.borders + "</b>");
+      if (et.covers) edits.push("上書き <b>" + et.covers + "</b>");
+    } else edits.push("編集したページはありません");
+    function row(th, items) { return "<tr><th>" + th + "</th><td>" + items.map(function (x) { return "<span>" + x + "</span>"; }).join("") + "</td></tr>"; }
+    return row("PDF", ["<b>" + S.FILES.length + "</b> ファイル・全 <b>" + S.TOTAL + "</b> ページ"]) +
+      row("用語の置換", terms) + row("削除・枠線", edits);
+  }
+
   // RPC で通しページ g の候補を取得し `S.figCand`/`S.figSel` へ記録する下位ヘルパ。
   // 「未取得か」の判定と二重要求ガードは呼び出し側 (`ensureFigCand`/`prefetchFigCand`) が持つ
   // (ここでは無条件に取得しに行く)。取得中は `null` を立てる (`seedFigSel` の初回判定にも使う印)。
@@ -769,7 +776,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     var btnNext = document.getElementById("btn-next");
     var btnExport = document.getElementById("btn-export");
     var ctxText = document.getElementById("ctx-text");
-    var guard = document.getElementById("guard");
 
     screens.forEach(function (s) { s.classList.toggle("on", +s.dataset.screen === S.phase); });
     var stepbar = document.getElementById("stepbar");
@@ -797,12 +803,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       st.classList.toggle("future", !done && !active); st.classList.toggle("clickable", n <= S.phase);
       st.querySelector(".n").innerHTML = done ? ckMark : n;
     });
-    if (S.guarding && (S.phase === 2 || S.phase === 3)) {
-      var gpend = counts(statusArr()).pend;
-      if (gpend === 0) S.guarding = false;            // 未確認0 → ガードを閉じる
-      else document.getElementById("guard-n").textContent = gpend; // 件数を最新に
-    }
-    guard.hidden = !S.guarding;
     btnBack.style.visibility = S.phase === 1 ? "hidden" : "visible";
     btnNext.style.display = S.phase < 4 ? "" : "none";
     btnExport.style.display = S.phase === 4 ? "" : "none";
@@ -825,23 +825,25 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       document.getElementById("export-summary").innerHTML =
         S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>採用 " + figCount() + " 図・グレースケール";
     } else if (S.phase === 4) {
-      setHint("内容を確認して書き出します。");
+      var nExp = expCount(expSpecValue(), parseSpec);
+      setHint(nExp > 1 ? nExp + " 個の SVG を zip にまとめて保存します" : "1 個の SVG を保存します");
       ctxText.textContent = S.FILES.length + " ファイル・" + S.TOTAL + " ページ";
       refreshExport();
-      var s2 = counts(S.status2), s3 = counts(S.status3);
-      document.getElementById("export-summary").innerHTML =
-        S.FILES.length + "ファイル・全" + S.TOTAL + "ページ<br/>用語：確認 " + s2.done + " / スキップ " + s2.skip + (s2.na ? " / 対象外 " + s2.na : "") +
-        "　削除：確認 " + s3.done + " / スキップ " + s3.skip;
+      document.getElementById("export-summary").innerHTML = exportSummaryRows();
     } else {
-      var task = S.phase === 2 ? "用語の置換" : "削除・枠線の編集";
-      var c = counts(statusArr());
-      setHint(task + " — 要確認 <b>" + c.pend + "</b> / 確認済み <b>" + c.done + "</b> / スキップ <b>" + c.skip + "</b>");
       var pg = S.PAGES[S.page];
+      if (S.phase === 2) {
+        var mt = matchTotals();
+        setHint("用語の置換 — 辞書に一致 <b>" + mt.pages + "</b> ページ ・ 置換 <b>" + mt.applied + "</b> か所 / 未置換 <b>" + mt.pending + "</b> か所");
+      } else {
+        setHint("削除・枠線の編集 — 編集したページ <b>" + editTotals().pages + "</b> / " + S.TOTAL);
+      }
       ctxText.textContent = S.FILES[pg.fileIndex].name + " ・ " + (pg.pageInFile + 1) + "/" + S.FILES[pg.fileIndex].pages + " ページ";
     }
 
     if (S.phase === 2 && S.TOTAL) {
-      buildRail("pagenav"); renderSummary("sum-2", S.status2); renderPageAct();
+      buildRail("pagenav");
+      wirePageFoot2();
       document.getElementById("pgnav-2").innerHTML = pageLabel();
       mountPage(document.getElementById("doc-master"), app.querySelector('[data-screen="2"] .editor'), false, function () {
         wireConfirmPick();
@@ -851,7 +853,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       updateZoomLabel();
     }
     if (S.phase === 3 && S.TOTAL) {
-      buildRail("pagenav-3"); renderSummary("sum-3", S.status3); renderPageAct();
+      buildRail("pagenav-3");
+      wirePageFoot3();
       document.getElementById("pgnav-3").innerHTML = pageLabel();
       var ed3 = app.querySelector('[data-screen="3"] .editor');
       ed3.classList.toggle("tool-crop", S.tool === "crop");
@@ -893,36 +896,17 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   function tryNext() {
     if (S.phase === 1) {
       if (!S.TOTAL) return;
-      if (!S.gray && skipsPhase2()) {
-        // 全ページが純スキャン: 何を省略したか (ファイル名・ページ数) と代替手段 (手順 3 の
-        // 上書き) を読ませてから進む。閉じられるのは OK だけで、遷移は OK のハンドラ (`wireNav`) が行う
-        var list = document.getElementById("skip2-list");
-        list.textContent = "";
-        scannedFiles().forEach(function (f) {
-          var li = document.createElement("li");
-          li.textContent = f.name + "（" + f.pages + " ページ）";   // textContent: ファイル名は利用者由来
-          list.appendChild(li);
-        });
-        document.getElementById("skip2-n").textContent = S.TOTAL;
-        document.getElementById("skip2-dialog").showModal();
-        return;
-      }
-      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi();
-      if (S.phase === 2) landOnPhase2();
+      S.phase = phaseAfterLoad(); S.page = 0; resetPhaseUi();
+      if (S.phase === 2) S.page = firstEditablePage2();
       render();
       if (S.gray) prefetchFigCand();
       return;
     }
-    if (S.phase === 2 || S.phase === 3) {
-      var pend = counts(statusArr()).pend;
-      if (pend > 0) { S.guarding = true; document.getElementById("guard-n").textContent = pend; render(); return; }
-      advancePhase(); render();
-    }
+    if (S.phase === 2 || S.phase === 3) { advancePhase(); render(); }
   }
   // 戻るときは表示中のページ (`S.page`) を保つ。手順 4 で気付いた直しへそのページのまま戻れるようにするため
   // (ページ番号は全手順で共通の通し index なので、そのまま引き継げる)。
   function back() {
-    S.guarding = false;
     resetPhaseUi();
     if (S.phase === 2) S.phase = 1;
     else if (S.phase === 3) S.phase = phaseBeforeTrim();
@@ -979,7 +963,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
     document.getElementById("chk-gray").addEventListener("change", function () {
       S.gray = this.checked;
-      S.expMode = "all";  // グレーモードに noskip / spec は無い (手順 2・3 を通らない)
+      S.expMode = "all";  // グレーモードに spec は無い (手順 2・3 を通らない)
       S.svgCache = {};    // カラー/グレーで SVG が違う (キーも違うが、古い方を持ち続けない)
       render();
     });
@@ -1003,42 +987,18 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
   }
 
-  /** フッター/ステップバー/ガード/Undo・Redo のナビゲーション */
+  /** フッター/ステップバー/Undo・Redo のナビゲーション */
   function wireNav() {
     document.getElementById("btn-back").addEventListener("click", back);
     document.getElementById("btn-next").addEventListener("click", tryNext);
     document.getElementById("btn-undo").addEventListener("click", async function () { await rpc("undo"); await afterUndoRedo(); });
     document.getElementById("btn-redo").addEventListener("click", async function () { await rpc("redo"); await afterUndoRedo(); });
-    document.getElementById("guard-back").addEventListener("click", function () { S.guarding = false; S.page = firstPending(statusArr()); render(); });
-    document.getElementById("guard-skip").addEventListener("click", function () {
-      var arr = statusArr(); for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") arr[i] = "skipped"; advancePhase(); render();
-    });
-    // 手順 2 省略の案内モーダル。OK 専用 (VBA の vbOKOnly と同じ): 閉じられるのは OK だけで、
-    // OK を押した時点で手順 3 へ進む。Esc は `cancel` で止めるが、Chromium は cancel の
-    // preventDefault を連続では認めない (2 回目の Esc は閉じる) ので、OK 以外で閉じたら
-    // `close` で開き直す。背景 (backdrop) のクリックは元々 dialog を閉じない。
-    var skip2 = document.getElementById("skip2-dialog");
-    var skip2Ok = false;
-    skip2.addEventListener("cancel", function (ev) { ev.preventDefault(); });
-    document.getElementById("skip2-go").addEventListener("click", function () {
-      skip2Ok = true; skip2.close();
-      if (S.phase !== 1 || !S.TOTAL) return;   // OK の前にファイルを消した等の取りこぼし
-      // 行き先は開いた時点でなく OK を押した時点の状態で決める。モーダル表示中も進行中の
-      // 読み込み (`addFiles`) は止まらず、完了した `reloadState` で混在に変わっていることがある
-      S.phase = phaseAfterLoad(); S.page = 0; S.guarding = false; resetPhaseUi();
-      if (S.phase === 2) landOnPhase2();
-      render();
-    });
-    skip2.addEventListener("close", function () {
-      if (skip2Ok) { skip2Ok = false; return; }
-      if (S.phase === 1 && S.TOTAL) skip2.showModal();   // OK 以外で閉じられた: 読み直させる
-    });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {
         var n = +st.dataset.step; if (n > S.phase || !S.TOTAL || !stepAllowed(n)) return;
         // `back` と同じく表示中のページを保つ。今いる手順を押しただけなら編集中の選択・ツールは残す
         if (n !== S.phase) resetPhaseUi();
-        S.guarding = false; S.phase = n; clearSel();
+        S.phase = n;
         if (n === 2) landOnPhase2();
         render();
       });
@@ -1111,7 +1071,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       // 待たずに消しても削除自体には影響しない)。`await rpc` の後まで残すと、`afterEdit` →
       // `render()` → `syncDeleteButton()` が削除予定の id をまだ選択中と見て有効のままにし、
       // 非同期の一覧再取得 (オーバーレイの `draw()`) が届くまでボタンが一瞬ずれる。
-      // 選択解除は `clearSel` (rect-overlay.js の `clearOverlaySel`) 経由に一元化されているため、
+      // 選択解除は `rect-overlay.js` の `clearOverlaySel` 経由に一元化されているため、
       // ここも `S.coverSel` / `S.borderSel` への直接代入ではなく `clearCoverSel` / `clearBorderSel`
       // を呼ぶ。直接代入だと `clearOverlaySel` の `onSelect(null)` を通らず、入力欄が削除済み要素の
       // 値のまま残る (`syncDeleteButton()` の呼び出しも一緒に素通りする)。
@@ -1386,7 +1346,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   // ── 17. 起動 ──
   window.__rpcReady.then(function () {
     window.__state = S; // E2E/デバッグ用の読み取り窓
-    initRail({ render: render, tryNext: tryNext });
+    initRail({ render: render });
     initFigure({ render: render });
     initCover({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
     initBorder({ rpc: rpc, afterEdit: afterEdit, pageOf: function () { return S.PAGES[S.page]; }, syncDeleteButton: syncDeleteButton });
