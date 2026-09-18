@@ -12,11 +12,13 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 1 | 1. PDF選択 | ドロップゾーン | `D&D / ピッカー` | 複数PDF選択可 |
 | 2 | 1. PDF選択 | ファイルリスト | `list（削除可）` | 選択PDF一覧 |
 | 3 | 1. PDF選択 | 次へ | `button` | 1件以上で有効化 |
-| 3.1 | 1. PDF選択 | 図だけをグレースケールで書き出す | `#chk-gray` | ON で手順 2・3 を省略し手順 4 へ直行（サーバ側の状態には影響しない） |
-| 3.2 | 1. PDF選択 | 手順 2 省略の案内 | `#skip2-dialog` | 全ページが純スキャン（文字を持たない画像だけ）のとき「次へ」で表示。本文に合計ページ数（`#skip2-n`）と省略した PDF のファイル名・ページ数の一覧（`#skip2-list`）を出す。OK 専用のモーダルで、閉じられるのはボタン「OK」（`#skip2-go`）だけ（Esc・背景クリックでは閉じない）。OK を押した時点の状態で行き先を決める（表示中に文字を持つ PDF が加わって混在になっていれば手順 2 へ）。ステップバーの 2 は非表示（`.stepbar.skip2`。注記は `#scan-skipnote`）・クリック不可、手順 3 の「戻る」は手順 1 へ |
-| 3.3 | 1. PDF選択 | スキャンページの通知 | `#toast` | 読み込み直後に「N ページはスキャン画像のため、用語の置換対象外です」。混在時も出る |
+| 3.1 | 1. PDF選択 | 書き出し方 | `#mode-normal` / `#mode-gray` | ラジオ 2 択のカード（`.mode-card.on` が選択中）。「ページを SVG にする」（既定）と「図だけをグレースケールで書き出す」。グレーは手順 2・3 を省略して手順 4 へ直行（サーバ側の状態には影響しない）。通常側の流れ表示の「2 用語」（`#flow-step2`）は手順 2 を省略するとき打ち消し |
+| 3.2 | 1. PDF選択 | スキャン画像のバナー | `#scan-banner` | スキャンページが 1 ページ以上あるとき、ファイル一覧の見出しとカードの間に常設。文言は全ページ用と混在用の 2 系統（グレーモードでは出さない）。全ページが純スキャンなら「次へ」は案内を出さず手順 3 へ直行し、ステップバーの 2 は非表示（`.stepbar.skip2`。注記は `#scan-skipnote`）・クリック不可、手順 3 の「戻る」は手順 1 へ |
+| 3.3 | 1. PDF選択 | ファイルカードのバッジ | `.file-card .chip` | スキャンページを持つファイルに「スキャン画像 n / m ページ」（n = そのファイルのスキャンページ数、m = ページ数） |
 | 4 | 2. 用語置換 | ページプレビュー | `SVG表示（ズーム）` | 中央キャンバス |
-| 4.1 | 2. 用語置換 | ページレール | `#pagenav` | 純スキャンページ（`status2 = "na"`）は「すべて」の絞り込みでも行を出さない。上部のまとめ（`#sum-2`）に「対象外 N」 |
+| 4.1 | 2. 用語置換 | ページレール | `#pagenav` | 絞り込みの既定は「辞書に一致したページだけ」（もう一方は「すべてのページ」）。各行の右端に「置換 a ・ 未置換 b」（0 の側は省略）。純スキャンページはどちらの絞り込みでも行を出さない。見出しに「全 N ページ　辞書に一致 n ページ　対象外 k」（対象外はスキャンページが 1 ページ以上のときだけ） |
+| 4.2 | 2・3 共通 | ページへ移動 | `#pgnav-2` / `#pgnav-3`（`.page-jump`） | キャンバス下。ファイル選択 + ページ番号 + 「移動」+ 前後（‹ ›）。レールの絞り込みに出ていないページへも番号で移れる |
+| 4.3 | 2. 用語置換 | 件数カード | `.count-card` | 「このページで置き換えた語」の数。中立の背景で 0 件でも緑にしない。説明文で未置換の残り件数を示す |
 | 5 | 2. 用語置換 | 確認タブ | `置換一覧` | クリックでハイライト・幅超過警告。行ごとに番号マーカーと対応（No.12）、戻す/置換ボタンで箇所単位に取消・適用（No.11） |
 | 6 | 2. 用語置換 | 元の語 | `#dict-src` | 辞書追加フォーム |
 | 7 | 2. 用語置換 | 置換後 | `#dict-tgt` | 辞書追加フォーム |
@@ -28,19 +30,21 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 13 | 2. 用語置換 | JSON書き出し / JSON読み込み | `#btn-dict-export / import` | 辞書の JSON 入出力（連結由来 joined を保持） |
 | 14 | 3. 削除・枠線 | ツール | `範囲削除 / 枠線 / 上書き` | 編集モード切替（初期は無選択。押下中のタブを再度押すと無選択へ戻る。要素のクリック選択はツールに関係なく常に効く） |
 | 14.1 | 3. 削除・枠線 | 上書きの置換語 | `#cover-text` | プレースホルダ「置換語（空なら矩形だけ）」。200 文字まで、空なら矩形のみの上書き |
+| 14.2 | 3. 削除・枠線 | このページの編集 | `#trim-dyn .edit-row` | 削除・枠線・上書きの一覧（`data-kind` で種別）。削除の行は「戻す」、枠線・上書きの行は「削除」。1 件も無ければ「このページに編集はありません」 |
+| 14.3 | 3. 削除・枠線 | 使い方 | `.howto` | 右パネル下部の箇条書き。表示中のページがスキャン画像かどうかで文言を切り替える |
 | 15 | 3. 削除・枠線 | 枠線色 | `#border-color` | カラーピッカー。枠線を選んでいる間は選択中の枠線の色を変える |
 | 16 | 3. 削除・枠線 | 枠線幅 | `#border-width` | 0.5〜20 pt。枠線を選んでいる間は選択中の枠線の太さを変える |
 | 16.1 | 3. 削除・枠線 | 枠線のオーバーレイ | `.border-box` / `.border-box.sel` | 置いた枠線を箱で重ねる。クリックで選択、本体ドラッグで移動、角ハンドルで伸縮 |
 | 17 | 3. 削除・枠線 | 削除 | `#btn-deletesel` | 選択要素・選択中の上書き・選択中の枠線の削除。何も選んでいない間は `disabled` |
-| 18 | 4. 書き出し | 書き出す範囲 | `ボタン群（排他）` | 表示中のページのみ / 全ページ / スキップを除く / ページを指定 |
+| 18 | 4. 書き出し | 書き出す範囲 | `ボタン群（排他）` | 表示中のページのみ / 全ページ / ページを指定 |
 | 18.1 | 4. 書き出し（グレーモード） | ページレール | `#pagenav-4` | 各ページの候補数バッジ（採用ありは緑）。クリックでページ移動 |
 | 18.2 | 4. 書き出し（グレーモード） | 図の編集キャンバス | `#fig-stage` | グレースケールのページプレビューに候補矩形を重ねる |
 | 18.3 | 4. 書き出し（グレーモード） | 候補／採用矩形 | `.fig-cand` / `.fig-cand.sel` | 点線=未採用の候補（クリックで採用）、実線=採用済み（角ハンドルで伸縮、× で採用解除）。空白ドラッグで自前の矩形を追加 |
-| 18.4 | 4. 書き出し（グレーモード） | 書き出す範囲 | `#exp-modes-gray` | 表示中のページの図 / 全ページの採用した図 の 2 択（`noskip` / `spec` は非表示） |
+| 18.4 | 4. 書き出し（グレーモード） | 書き出す範囲 | `#exp-modes-gray` | 表示中のページの図 / 全ページの採用した図 の 2 択（通常モードの 3 択 `#exp-modes` は非表示） |
 | 18.5 | 4. 書き出し（グレーモード） | 採用した図の一覧 | `#fig-selist-box` / `#fig-selist` | 採用済みの図を書き出しファイル名（`<元名>_p<N>_fig<k>_gray.svg`）と pt 寸法で全ページ分列挙（`S.expMode` に関係なく常に全件）。クリックでそのページへ移動。0 件時は案内文を表示 |
 | 19 | 4. 書き出し | SVGに書き出す | `button` | ファイル名は <元名>_pN.svg（グレーモードは <元名>_pN_figK_gray.svg） |
-| 19.1 | 4. 書き出し | まとめ | `#export-summary` | 用語：確認 X / スキップ Y / 対象外 N（「対象外 N」は純スキャンページが 1 ページ以上あるときだけ出す） |
-| 20 | トップバー | Undo/Redo | `Ctrl+Z / Ctrl+Y` | 操作の取消/やり直し |
+| 19.1 | 4. 書き出し | まとめ | `#export-summary`（`.sum-table`） | 3 行の表。PDF：F ファイル・全 N ページ／用語の置換：置換 a か所（p ページ）・未置換 b か所・対象外（スキャン画像）k ページ（0 の項目は省略）／削除・枠線：編集したページ n・削除 x・枠線 y・上書き z（0 件なら「編集したページはありません」） |
+| 20 | トップバー | Undo/Redo | `#btn-undo` / `#btn-redo` | アイコンの右に「元に戻す」「やり直し」の文字ラベル付き。Ctrl+Z / Ctrl+Y でも同じ |
 
 # 入出力定義
 
@@ -51,7 +55,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 3 | 入力 | フォント | `同梱フォント自動解決` | BIZ UDPゴシック / Noto Serif JP |
 | 4 | 入力 | suggest_join | `bool（既定 false）` | クリック取り込みで折返し 2 行を連結するか |
 | 5 | 入力 | 枠線色/幅 | `hex / 0.5〜20pt` | 枠線追加 |
-| 6 | 入力 | 書き出す範囲 | `表示中のページのみ / 全ページ / スキップを除く / ページを指定` | ページ選別 |
+| 6 | 入力 | 書き出す範囲 | `表示中のページのみ / 全ページ / ページを指定` | ページ選別 |
 | 6.1 | 入力 | 上書きの矩形/置換語 | `{x,y,w,h}` / 200 文字まで | 手動の上書き |
 | 7 | 出力 | SVGファイル | `決定的SVG` | 実<text>保持・使用グリフのみWOFF2埋込 |
 | 8 | 出力 | PNG背景 | `ラスタ（SCAN_RENDER_SCALE=2.0）` | スキャンページ背景 |
@@ -68,7 +72,7 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 3 | HTTP | `POST /upload` | PDF 読み込み（バイト列。辞書は適用しない。適用は再適用 RPC のみ） |
 | 4 | HTTP | `POST /quit` | 終了ビーコン |
 | 5 | HTTP | `POST /ping` | ハートビート |
-| 6 | RPC | `state` | ファイル/ページ/置換当たり等の状態取得。`scanned: bool[]`（ページ単位の純スキャン判定。文字要素を持たないページ）と `scannedPages`（その件数）も返す |
+| 6 | RPC | `state` | ファイル一覧・ページ一覧・総ページ数と、ページごとの件数の列を返す。`matches2: [[置換済み, 未置換], ...]`、`edits3: [[削除, 枠線, 上書き], ...]`、`scanned: bool[]`（ページ単位の純スキャン判定。文字要素を持たないページ）と `scannedPages`（その件数）。ページごとの確認状態は返さない |
 | 6.1 | RPC | `figureCandidates` | スチュワードシップ図の候補矩形を取得。引数 `fileIndex`, `pageInFile`。返り値 `{rects: [{x, y, w, h}]}`（0 または 1 件）。検出の想定外例外はページ単位で握って候補なしにする |
 | 7 | RPC | `pageSvg` | ページSVG取得（annotate 付き）。引数に `grayscale: bool = false`, `clip: {x,y,w,h}`（省略時 null）を追加。`clip` の検査は `_parse_rect_arg`（ページ内を要求） |
 | 8 | RPC | `planPage` | 置換予定の算出。確認一覧の行を出現順に返し、各行に `state`（applied/pending）を含める |
@@ -134,5 +138,6 @@ title: PdfToSvg 仕様一覧（画面項目 / 入出力 / RPC・HTTP / テスト
 | 39 | `test_pdftosvg_app_flow_e2e.py::test_click_after_offpage_drag_and_overlay_select_selects_in_one_click`、`test_pdftosvg_rect_overlay_js.py` の `ro` fixture の teardown | ページ外へはみ出すドラッグで枠線を置いた直後にその箱をクリックして選んでも `S.dragMoved` が消費されずに残らないこと（`window.__state` で直接確認）、続けて要素をクリックすれば1回で選べること（E2E）。`rect-overlay.js` 単体テストは `isActive` を `opts` で渡すだけで `S` を触らないため、teardown は共有の `edge_page` を汚さないよう `host` と `window.__ro` を消すだけでよい | オーバーレイの mousedown 経由でもクリック握り潰しが再発しない、テストの実行順に依存しない | 未 |
 | 40 | `test_pdftosvg_app_flow_e2e.py::test_border_width_outside_the_html_range_is_rejected_and_the_input_is_restored` | 入力欄の `max` を越える太さを確定すると、JS が HTML の `min`/`max` を読んで弾き、入力欄を直前の妥当な値へ戻すこと（E2E） | 範囲外の太さがサーバへ届かず入力欄に残らない | 未 |
 | 41 | `test_pdftosvg_rect_overlay_js.py::test_draw_syncs_the_delete_button_even_when_the_svg_is_missing` / `::test_draw_does_nothing_but_clear_when_not_active`、`test_pdftosvg_app_flow_e2e.py::test_delete_button_is_enabled_by_a_border_selection_and_disabled_right_after_deleting` / `::test_deleting_a_selected_border_restores_the_width_input_to_the_next_value` | `draw()` の早期 return でも押下可否を同期すること、`isActive()` が false なら RPC を呼ばず選択だけ解くこと（実ブラウザ単体）、削除直後に一覧の再取得を待たずボタンが無効に戻ること（E2E）、削除ボタンが選択を `clearSel` 経由で解き、入力欄が「次に置く値」へ戻ること（E2E） | 押下可否の同期に穴が無く、`rect-overlay.js` が `S` に依存しない | 未 |
-| 42 | `test_web_rpc.py::test_state_marks_scanned_pages_as_not_replaceable`、`test_pdftosvg_state_js.py::test_skipsphase2_only_when_every_page_is_na` ほか | `state` が純スキャンページの `scanned` 列と件数を返すこと、`status2` の `na` が `changed2` に関わらず付き再取得でも保たれること、`pass` が `na` を「すべて」でも落とすこと、全ページ `na` のときだけ `phaseAfterLoad()=3` / `phaseBeforeTrim()=1` / `stepAllowed(2)=false` になること、`landOnPhase2` が対象ページへ寄せること、`noskip` 書き出しが `na` を落とさないこと | 純スキャンページの判定源が 1 本で、手順 2 の省略が状態機械で閉じる | 未 |
-| 43 | `test_pdftosvg_app_flow_e2e.py::test_all_scanned_pdf_skips_step2_via_dialog` / `::test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog` | 全ページ純スキャンなら「次へ」で `#skip2-dialog` が省略した PDF の一覧付きで出て、Esc（2 回）・背景クリックでは閉じず、OK で手順 3 へ進み、ステップバーの 2 が消え、手順 3 の「戻る」が手順 1 へ戻り、手順 4 のまとめに「対象外」が出ること。混在ならモーダルを出さず手順 2 へ進み、レールにスキャン行が無く表示ページがベクター側になること（E2E） | スキャン画像だけの PDF で手順 2 に迷い込まない | 未 |
+| 42 | `test_web_rpc.py::test_state_counts_pending_candidates_and_reverted_matches` / `::test_state_counts_removed_borders_and_covers_per_page` / `::test_state_marks_scanned_pages_as_not_replaceable`、`test_pdftosvg_state_js.py::test_railpages_*` / `::test_nextmatched_*` / `::test_skipsphase2_only_when_every_page_is_scanned` / `::test_export_modes_are_page_all_spec_only` ほか | `state` が `matches2`（未適用の候補と戻した箇所を未置換として数える）・`edits3`（削除 / 枠線 / 上書きをページごとに数える）・`scanned` 列と件数を返すこと、レールの絞り込みの既定（手順 2 は「辞書に一致したページだけ」・手順 3 は「すべてのページ」）とスキャンページの除外、「次の一致ページ」の巡回、全ページがスキャンのときだけ `phaseAfterLoad()=3` / `phaseBeforeTrim()=1` / `stepAllowed(2)=false` になること、`landOnPhase2` が対象ページへ寄せること、書き出しモードが `page` / `all` / `spec` の 3 つだけであること | ページごとの確認を持たずに件数から画面を組み立てられ、手順 2 の省略が状態機械で閉じる | 未 |
+| 43 | `test_pdftosvg_app_flow_e2e.py::test_all_scanned_pdf_shows_banner_and_skips_step2_without_a_dialog` / `::test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog` | 全ページ純スキャンなら手順 1 に常設バナーとファイルカードのバッジが出て、モーダルは出ず、「次へ」で止まらずに手順 3 へ進み、ステップバーの 2 が消え、手順 3 の「戻る」が手順 1 へ戻り、手順 4 のまとめに「対象外」が出ること。混在なら手順 2 へ進み、レールにスキャン行が無く表示ページがベクター側になること（E2E） | スキャン画像だけの PDF で手順 2 に迷い込まず、案内が常に画面に出ている | 未 |
+| 44 | `test_pdftosvg_page_jump_js.py`、`test_pdftosvg_app_flow_e2e.py::test_page_jump_moves_by_number_and_arrows_including_pages_hidden_from_the_rail` | `resolveJump` がファイル内のページ番号を通し index へ変換し、範囲外は 1〜ページ数へ丸め、数字でない値は 1 とみなし、未知のファイルは -1 を返すこと（実ブラウザ単体）。実画面で番号入力・「移動」・前後ボタンによりページが変わり、レールの絞り込みに出ていないページへも移れること（E2E） | レールに出ないページへも確実にたどり着ける | 未 |
