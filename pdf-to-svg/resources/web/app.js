@@ -7,8 +7,8 @@
 import { esc, svg } from "./dom.js";
 import { clientToPage, parseSpec, rectFromDrag, pageSizeOf } from "./geometry.js";
 import {
-  S, pkey, curElSel,
-  applyState, invalidateAll, resetPhaseUi, advancePhase,
+  S, curElSel,
+  applyState, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
@@ -574,22 +574,17 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
   }
 
+  /** 手順 3 の編集・Undo・Redo のあとの後始末。編集が成立しうる経路 (ツールのドラッグ・
+   *  一覧の行ボタン・オーバーレイの移動と伸縮・Undo/Redo) はすべてここを通す。
+   *
+   *  どの経路でも `state` を丸ごと取り直す。ページごとの件数 (`S.matches2` / `S.edits3`) は
+   *  サーバの `state` にしか無いので、取り直さないと削除・枠線・上書きを置いてもレールの
+   *  件数タグ・フッターの件数・手順 4 のまとめが 0 のまま残る。Undo/Redo は現在ページ以外の
+   *  編集も巻き戻す (別ページで削除してからページを移った後など) ので、そもそも全ページ分を
+   *  見直す必要がある。
+   *  ページ SVG のキャッシュと要素の選択は `applyState` が捨てるため、ここでは触らない。 */
   async function afterEdit() {
-    var pg = S.PAGES[S.page];
-    invalidate(pg.fileIndex, pg.pageInFile);
-    curElSel(); S.elSel[pkey()] = {};
     blurTextEntry(); // 編集が成功した時点で入力欄のフォーカスを外し、続く Ctrl+Z をアプリの Undo へ通す
-    // レールの件数タグ・フッターの「編集したページ」・手順 4 のまとめは `S.edits3` から描くため、
-    // 編集のたびに state を取り直す。取り直さないと、削除・枠線・上書きを置いても件数が 0 のまま残る。
-    await reloadState();
-    render();
-  }
-
-  // Undo/Redo は現在ページ以外の編集も巻き戻す (別ページで削除してからページを移った後など)。
-  // 現在ページだけ作り直す `afterEdit` では他ページが古い SVG のまま残り、置換の有無が
-  // 変わった分も案内バーに反映されないので、キャッシュを全ページ分捨てて state も取り直す。
-  async function afterUndoRedo() {
-    invalidateAll();
     await reloadState();
     render();
   }
@@ -1008,8 +1003,8 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   function wireNav() {
     document.getElementById("btn-back").addEventListener("click", back);
     document.getElementById("btn-next").addEventListener("click", tryNext);
-    document.getElementById("btn-undo").addEventListener("click", async function () { await rpc("undo"); await afterUndoRedo(); });
-    document.getElementById("btn-redo").addEventListener("click", async function () { await rpc("redo"); await afterUndoRedo(); });
+    document.getElementById("btn-undo").addEventListener("click", async function () { await rpc("undo"); await afterEdit(); });
+    document.getElementById("btn-redo").addEventListener("click", async function () { await rpc("redo"); await afterEdit(); });
     app.querySelectorAll("#stepbar .step").forEach(function (st) {
       st.addEventListener("click", function () {
         var n = +st.dataset.step; if (n > S.phase || !S.TOTAL || !stepAllowed(n)) return;
@@ -1210,7 +1205,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
       if (isTextEntry(e.target)) return;
       if (!S.TOTAL || !S.PAGES[S.page]) return;
       e.preventDefault();
-      rpc(key === "z" ? "undo" : "redo").then(afterUndoRedo);
+      rpc(key === "z" ? "undo" : "redo").then(afterEdit);
     });
     // 進捗
     window.onProgress(function (msg) { setHint(esc(msg)); });
