@@ -4,7 +4,7 @@
 // フロントの可変変数を単一の状態オブジェクト `S` へ集約し、状態にしか触れない
 // 導出・遷移関数を同居させる。
 // DOM には一切触れない (書き出し範囲のテキスト入力値などは引数で受ける) ため、
-// vitest (`test/state.test.js`) が node 単体で状態機械を検証できる。
+// 実ブラウザの単体 (`test/test_pdftosvg_state_js.py`) が状態機械を検証できる。
 // 描画 (`render`) は呼ばない — 遷移後の再描画は呼び出し側 `app.js` の責務。
 
 // ── 1. 状態オブジェクト (唯一の可変状態) ──
@@ -14,13 +14,12 @@ var S = {
   PAGES: [],            // [{fileIndex, pageInFile}] (全ファイル通しの平坦列)
   FILE_START: [],       // fileIndex -> 通し先頭ページ index
   TOTAL: 0,
-  changed2: [], changed3: [],   // ページごとの「変更あり」(手順2=置換 / 手順3=削除)
-  status2: [], status3: [],     // ページごとの確認状態 (pending/reviewed/skipped/none。status2 のみ na = 置換対象外)
+  scanned: [],           // ページごとの純スキャン判定 (`state` の `scanned[]`)。手順 2 の対象外の判定源
+  matches2: [],          // ページごとの {applied, pending} (辞書に一致した箇所の 置換済み / 未置換 の件数)
+  edits3: [],            // ページごとの {removed, borders, covers} (削除 / 枠線 / 上書き の件数)
   phase: 1,             // ウィザード手順 (1=取込 / 2=置換 / 3=削除 / 4=書き出し)
   page: 0,              // 現在ページ (通し index)
-  guarding: false,      // 未確認ガードバー表示中か
-  filterFor: { 2: "all", 3: "pending" },
-  selFor: { 2: {}, 3: {} },     // ページレール選択 (global idx -> true)
+  filterFor: { 2: "matched", 3: "all" },   // レールの絞り込み (手順 2: matched|all / 手順 3: all|edited)
   collapsed: {},        // "step:fi" -> true (レールのファイル折り畳み)
   tool: null,           // 手順3 ツール (null=無選択 / crop / border / cover)。無選択でもクリックでの要素選択は効く
   cropDrag: null,       // 範囲ドラッグ中の状態 {origin,rubber,mode}
@@ -35,7 +34,7 @@ var S = {
   borderWidth: 1,       // 枠線ツールの太さ (pt。未選択のとき = 次に置く枠線の太さ)
   borderSel: null,      // 枠線ツールで選んでいる要素 id (null = 未選択。入力欄は次に置く値)
   borderDrag: null,     // 枠線の移動・伸縮中の状態 (`border.js` が使う)
-  expMode: "all",       // 書き出しモード: page/all/noskip/spec
+  expMode: "all",       // 書き出しモード: page/all/spec
   expFile: 0,           // spec モードの対象ファイル
   lastChanges: [],       // 直近の `planPage` 結果 (`renderConfirm` と SVG 差替え後の再描画で共有)
   // ── グレーモード (図だけをグレースケールで書き出す) ──
@@ -45,35 +44,10 @@ var S = {
   figDrag: null,        // ハンドル伸縮・空白ドラッグ中の状態 (figure.js が使う)
 };
 
-// ── 2. 純粋ヘルパ (S 非依存) ──
+// ── 2. 導出 (現在ページの別名参照) ──
 
-function counts(arr) {
-  var c = { done: 0, skip: 0, pend: 0, none: 0, na: 0 };
-  arr.forEach(function (s) {
-    if (s === "reviewed") c.done++; else if (s === "skipped") c.skip++;
-    else if (s === "pending") c.pend++; else if (s === "na") c.na++; else c.none++;
-  });
-  return c;
-}
-// "na" (置換対象外 = 純スキャンページ) は「すべて」でもレールに出さない。手順 2 で見せない
-// 根拠をここ 1 箇所に置く (レール・ファイル行の件数・全選択は全部 pass を通る)。
-function pass(st, filt) { if (st === "na") return false; return filt === "all" ? true : st === filt; }
-// scanned[i] が真なら changed に関わらず "na"。手順 3 の status3 は scanned を渡さないので na を持たない。
-function initStatus(ch, scanned) {
-  return ch.map(function (c, i) { return scanned && scanned[i] ? "na" : (c ? "pending" : "none"); });
-}
-
-// ── 3. 導出 (現在手順の別名参照・選択集合) ──
-
-function statusArr() { return S.phase === 2 ? S.status2 : S.status3; }
-function changedArr() { return S.phase === 2 ? S.changed2 : S.changed3; }
-function selSet() { return (S.selFor[S.phase] = S.selFor[S.phase] || {}); }
 function pkey() { var pg = S.PAGES[S.page]; return pg.fileIndex + ":" + pg.pageInFile; }
 function curElSel() { var k = pkey(); return (S.elSel[k] = S.elSel[k] || {}); }
-function statusOfCur() { return statusArr()[S.page]; }
-function selKeys() { var s = selSet(); return Object.keys(s).filter(function (k) { return s[k]; }); }
-function selCount() { return selKeys().length; }
-function clearSel() { var s = selSet(); Object.keys(s).forEach(function (k) { delete s[k]; }); }
 
 function figKey(pg) { return pg.fileIndex + ":" + pg.pageInFile; }
 /** ページ SVG キャッシュが取りうる 2 キー (カラー / グレー)。`invalidate` はモードを問わず
@@ -109,12 +83,11 @@ function seedFigSel(g, rects) {
   }
 }
 
-// ── 4. 状態遷移 ──
+// ── 3. 状態遷移 ──
 
-// 旧 status 配列とページ列が「同一ページ列に対する再取得」かを判定する。箇所単位の
-// 戻す/置換は 1 要素だけ変えて `state` を取り直すため、ファイル追加・削除が絡まない
-// 限りページ列自体は変わらない。この判定を通ったときだけ確認状態 (reviewed/skipped)
-// を引き継ぐ (`mergeStatus` 参照)。
+// 旧ページ列と新ページ列が同一かを判定する。箇所単位の戻す/置換は 1 要素だけ変えて
+// `state` を取り直すため、ファイル追加・削除が絡まない限りページ列自体は変わらない。
+// この判定を通ったときだけ折り畳み・図の候補・採用を引き継ぐ (`applyState` 参照)。
 function samePageList(oldPages, newPages) {
   if (oldPages.length !== newPages.length) return false;
   return oldPages.every(function (pg, i) {
@@ -122,49 +95,26 @@ function samePageList(oldPages, newPages) {
   });
 }
 
-// 再取得後の changed 列と旧 status 列から新 status 列を組む。ページ列が同一のときに
-// 使う (`applyState` 参照)。changed が立った (= 要確認になった) ページは pending へ、
-// 落ちた (= 変更が無くなった) ページは none へ倒し、それ以外は reviewed/skipped/pending
-// をそのまま引き継ぐ。第 3 引数 `scanned` (省略可) が真のページは changed や旧 status に
-// 関わらず `"na"` にする (スキャン判定はページの属性で変わらない)。
-function mergeStatus(changed, oldStatus, scanned) {
-  return changed.map(function (isChanged, i) {
-    if (scanned && scanned[i]) return "na";   // スキャン判定はページの属性で変わらない
-    var old = oldStatus[i];
-    // 再取得の `st.scanned` が無い、または `changed` より短いとき (旧形式の応答では
-    // `applyState` が `[]` を渡す) は、このページのスキャン判定を確かめられない。na は
-    // 利用者が確認した実績を意味しないので、古い na を残さず通常の changed/旧 status の
-    // 規則へ戻す (none 扱いへ倒す)。
-    if (old === "na") old = "none";
-    if (!isChanged) return "none";
-    return old === "none" ? "pending" : old;
-  });
-}
-
-/** サーバの `state` RPC 結果を取り込み、派生列 (status/FILE_START) とキャッシュを組み直す。
+/** サーバの `state` RPC 結果を取り込み、派生列 (FILE_START) とキャッシュを組み直す。
  *
- * status2/status3 (reviewed/skipped の確認進捗) は、箇所単位の戻す/置換のたびに
- * `reloadState` 経由で毎回呼ばれるようになったため、ページ列が変わっていなければ
- * 引き継ぐ (`mergeStatus`)。ファイル追加・削除でページ列自体が変わったときは
- * 従来どおり `initStatus` で作り直す。
+ * ページの確認状態は持たないので、件数 (`matches2` / `edits3`) とスキャン判定 (`scanned`) は
+ * 毎回そのまま取り込む。旧形式 (列なし) や短い列は 0 件・非スキャン扱いへ倒す (例外にしない)。
+ * ファイル追加・削除でページ列が変わったときだけ、通し index をキーに持つ折り畳み・図の
+ * 候補・採用を捨てる (持ち越すと別のページ・別のファイルを指す)。
  */
 function applyState(st) {
-  var oldPages = S.PAGES, oldStatus2 = S.status2, oldStatus3 = S.status3;
-  var samePages = samePageList(oldPages, st.pages)
-    && oldStatus2.length === st.pages.length && oldStatus3.length === st.pages.length;
+  var samePages = samePageList(S.PAGES, st.pages);
   S.FILES = st.files; S.PAGES = st.pages; S.TOTAL = st.total;
-  S.changed2 = st.changed2; S.changed3 = st.changed3;
-  var scanned = st.scanned || [];   // 旧形式 (列なし) は全ページ非スキャン扱い
-  if (samePages) {
-    S.status2 = mergeStatus(S.changed2, oldStatus2, scanned);
-    S.status3 = mergeStatus(S.changed3, oldStatus3);
-  } else {
-    S.status2 = initStatus(S.changed2, scanned); S.status3 = initStatus(S.changed3);
-    // レール選択は通しページ index、折り畳みは fileIndex をキーにするため、ページ列が
-    // 変わると別のページ・別のファイルを指す。持ち越すと意図しないページを一括操作する。
-    S.selFor = { 2: {}, 3: {} }; S.collapsed = {};
-    S.figCand = {}; S.figSel = {};
-  }
+  S.scanned = S.PAGES.map(function (_pg, g) { return !!(st.scanned && st.scanned[g]); });
+  S.matches2 = S.PAGES.map(function (_pg, g) {
+    var m = st.matches2 && st.matches2[g];
+    return { applied: m ? (m[0] | 0) : 0, pending: m ? (m[1] | 0) : 0 };
+  });
+  S.edits3 = S.PAGES.map(function (_pg, g) {
+    var e = st.edits3 && st.edits3[g];
+    return { removed: e ? (e[0] | 0) : 0, borders: e ? (e[1] | 0) : 0, covers: e ? (e[2] | 0) : 0 };
+  });
+  if (!samePages) { S.collapsed = {}; S.figCand = {}; S.figSel = {}; }
   S.FILE_START = []; var s = 0;
   S.FILES.forEach(function (f, i) { S.FILE_START[i] = s; s += f.pages; });
   S.svgCache = {}; S.elSel = {};
@@ -178,29 +128,74 @@ function applyState(st) {
  */
 function invalidateAll() { S.svgCache = {}; }
 
-/** 現在ページの次の「要確認」ページ (現在位置から一巡)。無ければ -1 */
-function nextPending(arr) {
-  for (var i = S.page + 1; i < S.TOTAL; i++) if (arr[i] === "pending") return i;
-  for (var j = 0; j < S.page; j++) if (arr[j] === "pending") return j;
+/** 通しページ g の辞書一致の件数 (置換済み + 未置換)。0 なら「辞書に一致しないページ」 */
+function matchCount(g) { var m = S.matches2[g]; return m ? m.applied + m.pending : 0; }
+/** 通しページ g の編集の件数 (削除 + 枠線 + 上書き)。0 なら「編集していないページ」 */
+function editCount(g) { var e = S.edits3[g]; return e ? e.removed + e.borders + e.covers : 0; }
+
+/** レールに出す通しページ index の配列。絞り込み (`S.filterFor`) を通した結果で、
+ *  手順 2 はスキャンページを絞り込みに関わらず出さない (辞書が構造的に当たらないため)。
+ *  手順 3 はスキャンページも出す (上書きの対象になる)。レールの行・ファイル行の件数はここを通す。 */
+function railPages(phase) {
+  var filt = S.filterFor[phase]; var out = [];
+  S.PAGES.forEach(function (_pg, g) {
+    if (phase === 2) {
+      if (S.scanned[g]) return;
+      if (filt === "matched" && !matchCount(g)) return;
+    } else if (filt === "edited" && !editCount(g)) return;
+    out.push(g);
+  });
+  return out;
+}
+/** 手順 2 の「次の一致ページ」。from より後ろで辞書に一致 (スキャン以外) のページ、無ければ先頭から。
+ *  無ければ -1 */
+function nextMatched(from) {
+  for (var i = from + 1; i < S.TOTAL; i++) if (!S.scanned[i] && matchCount(i)) return i;
+  for (var j = 0; j < from; j++) if (!S.scanned[j] && matchCount(j)) return j;
   return -1;
 }
-/** 先頭から最初の「要確認」ページ。無ければ 0 */
-function firstPending(arr) { for (var i = 0; i < S.TOTAL; i++) if (arr[i] === "pending") return i; return 0; }
-
-/** 全ページが置換対象外 (純スキャン) か。ページが無ければ false (手順 1 の「次へ」は別途無効) */
-function skipsPhase2() {
-  return S.TOTAL > 0 && S.status2.every(function (s) { return s === "na"; });
+/** ファイル fi のスキャンページ数 (手順 1 のカードのバッジ) */
+function scannedCountOf(fi) {
+  var f = S.FILES[fi]; if (!f) return 0;
+  var start = S.FILE_START[fi] || 0; var n = 0;
+  for (var p = 0; p < f.pages; p++) if (S.scanned[start + p]) n++;
+  return n;
 }
-/** 全ページが置換対象外 (純スキャン) のファイルの一覧 (`S.FILES` の順・同じ要素)。
- *  手順 2 省略の案内モーダルが「何を省略したか」を利用者に示すために使う。
- *  判定源は `status2` の `"na"` だけ (`skipsPhase2` と同じ) */
-function scannedFiles() {
-  return S.FILES.filter(function (f, i) {
-    var start = S.FILE_START[i] || 0;
-    for (var p = start; p < start + f.pages; p++) if (S.status2[p] !== "na") return false;
-    return true;
+/** スキャンページの総数 (手順 1 のバナー・手順 2 の見出し) */
+function scannedTotal() { return S.scanned.filter(Boolean).length; }
+/** 手順 2 のまとめ: 置換済み・未置換の箇所数、一致のあるページ数、スキャンページ数 */
+function matchTotals() {
+  var t = { applied: 0, pending: 0, pages: 0, scanned: scannedTotal() };
+  S.matches2.forEach(function (m, g) {
+    if (S.scanned[g]) return;
+    t.applied += m.applied; t.pending += m.pending;
+    if (m.applied + m.pending) t.pages++;
   });
+  return t;
 }
+/** 手順 3 のまとめ: 編集したページ数と、削除・枠線・上書きの件数 */
+function editTotals() {
+  var t = { pages: 0, removed: 0, borders: 0, covers: 0 };
+  S.edits3.forEach(function (e) {
+    t.removed += e.removed; t.borders += e.borders; t.covers += e.covers;
+    if (e.removed + e.borders + e.covers) t.pages++;
+  });
+  return t;
+}
+
+/** 全ページが純スキャンか。ページが無ければ false (手順 1 の「次へ」は別途無効) */
+function skipsPhase2() { return S.TOTAL > 0 && S.scanned.every(Boolean); }
+/** 手順 2 に入ったとき表示するページ: 辞書に一致 (スキャン以外) の最初、無ければスキャン以外の最初、
+ *  無ければ 0 */
+function firstEditablePage2() {
+  for (var i = 0; i < S.TOTAL; i++) if (!S.scanned[i] && matchCount(i)) return i;
+  for (var j = 0; j < S.TOTAL; j++) if (!S.scanned[j]) return j;
+  return 0;
+}
+/** 手順 2 に入る直前に呼ぶ。表示中のページがスキャンならレールに出ているページへ差し替える
+ *  (レールに無いページに立つと、キャンバスに画像だけが出て何の画面か分からない)。スキャン以外に
+ *  居るときは動かさない (「戻る」で見ていたページを保つ)。 */
+function landOnPhase2() { if (S.scanned[S.page]) S.page = firstEditablePage2(); }
 /** 手順 1 の「次へ」の行き先。グレーモードが最優先、次に手順 2 の省略 */
 function phaseAfterLoad() { return S.gray ? 4 : (skipsPhase2() ? 3 : 2); }
 /** 手順 3 の「戻る」の行き先。手順 2 を省略していれば手順 1 へ */
@@ -213,15 +208,6 @@ function stepAllowed(n) {
   if (skipsPhase2() && n === 2) return false;
   return true;
 }
-/** 手順 2 で表示してよい (置換対象外でない) 最初のページ。無ければ 0 */
-function firstEditablePage2() {
-  for (var i = 0; i < S.TOTAL; i++) if (S.status2[i] !== "na") return i;
-  return 0;
-}
-/** 手順 2 に入る直前に呼ぶ。表示中のページが置換対象外ならレールに出ているページへ差し替える
- * (レールに無いページに立つと、キャンバスに画像だけが出て何の画面か分からない)。対象ページに
- * 居るときは動かさない (「戻る」で見ていたページを保つ)。 */
-function landOnPhase2() { if (S.status2[S.page] === "na") S.page = firstEditablePage2(); }
 
 /** 手順を移るときに、手順 3 の編集で使う一時状態を既定へ戻す。再描画は呼び出し側。
  *
@@ -230,8 +216,8 @@ function landOnPhase2() { if (S.status2[S.page] === "na") S.page = firstEditable
  * なり、ツールも「上書き」や「範囲削除」のまま始まってしまう。`dragMoved` も一時状態の一つで、
  * ページ外の余白で mouseup したドラッグの直後は `wireEditTools` を経由せずここでツールが
  * `null` に戻ることがあり (「次へ」「戻る」・ステップバー)、そのときにフラグを残すと手順 3 へ
- * 戻ってからの最初の要素クリックが握り潰される。手順を移る経路 (「次へ」・「戻る」・ステップバー・
- * 未確認ガード) はすべてここを通す。表示中のページ (`S.page`) はここでは触らない (戻ったときに
+ * 戻ってからの最初の要素クリックが握り潰される。手順を移る経路 (「次へ」・「戻る」・ステップバー)
+ * はすべてここを通す。表示中のページ (`S.page`) はここでは触らない (戻ったときに
  * 見ていたページを保つため)。
  */
 function resetPhaseUi() {
@@ -242,22 +228,17 @@ function resetPhaseUi() {
   S.dragMoved = false;
 }
 
-/** 手順を 1 つ進める (2→3 / 3→4)。ガード解除・選択クリアも行う。再描画は呼び出し側 */
+/** 手順を 1 つ進める (2→3 / 3→4)。手順 3 の一時状態も戻す。再描画は呼び出し側 */
 function advancePhase() {
-  S.guarding = false;
   resetPhaseUi();
   if (S.phase === 2) { S.phase = 3; S.page = 0; } else if (S.phase === 3) S.phase = 4;
-  clearSel();
 }
 
-// ── 5. 書き出し範囲の算出 (spec 入力値は引数で受ける — DOM 非依存) ──
+// ── 4. 書き出し範囲の算出 (spec 入力値は引数で受ける — DOM 非依存) ──
 
 /** 現在のモードで書き出す [{fileIndex, pageInFile}] を返す (page モードは対象外) */
 function exportPageList(specValue, parseSpecFn) {
   if (S.expMode === "all") return S.PAGES.slice();
-  if (S.expMode === "noskip") {
-    return S.PAGES.filter(function (pg, g) { return S.status2[g] !== "skipped" && S.status3[g] !== "skipped"; });
-  }
   if (S.expMode === "spec") {
     var fi = S.expFile; if (!S.FILES[fi]) return [];
     return parseSpecFn(specValue, S.FILES[fi].pages)
@@ -333,10 +314,10 @@ function zipName(list) {
 }
 
 export {
-  S, counts, pass, initStatus, mergeStatus,
-  statusArr, changedArr, selSet, pkey, curElSel, statusOfCur, selKeys, selCount, clearSel,
+  S, pkey, curElSel,
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
-  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, scannedFiles, firstEditablePage2, landOnPhase2,
-  applyState, invalidateAll, nextPending, firstPending, resetPhaseUi, advancePhase,
+  matchCount, editCount, railPages, nextMatched, scannedCountOf, scannedTotal, matchTotals, editTotals,
+  phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
+  applyState, invalidateAll, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };

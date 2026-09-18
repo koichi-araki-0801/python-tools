@@ -1,9 +1,10 @@
 # =============================================================================
-# test_pdftosvg_state_js.py — resources/web/state.js の単体移植
+# test_pdftosvg_state_js.py — resources/web/state.js (件数ベースの状態モデル) の単体
 # =============================================================================
-# 旧 state.test.js (vitest) の describe 7 / it 27 と 1:1。期待値・入力は旧テストから
-# 逐語で写す。`S` はモジュールシングルトンのため、旧 beforeEach(reset) を window 関数
-# として一度だけ定義し、autouse fixture で毎テスト前に呼ぶ(ページ再読込はしない)。
+# ページの確認状態は持たず、サーバの `state` RPC が返す件数 (matches2/edits3) と
+# スキャン判定 (scanned) をそのまま取り込む状態機械を、実ブラウザ (Edge) で検証する。
+# `S` はモジュールシングルトンのため、`window.__reset` を一度だけ定義し、autouse
+# fixture で毎テスト前に呼ぶ (ページ再読込はしない)。
 import pytest
 
 from .pdftosvg_js_harness import js
@@ -20,11 +21,12 @@ window.__reset = () => {
       { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
     ],
     total: 5,
-    changed2: [true, false, true, true, false],
-    changed3: [false, false, false, false, false],
+    matches2: [[1, 0], [0, 0], [2, 1], [0, 1], [0, 0]],
+    edits3: [[0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 2, 1], [0, 0, 0]],
+    scanned: [false, false, false, false, false],
   });
-  m.S.phase = 2; m.S.page = 0; m.S.guarding = false;
-  m.S.selFor = { 2: {}, 3: {} };
+  m.S.phase = 2; m.S.page = 0;
+  m.S.filterFor = { 2: "matched", 3: "all" };
   m.S.expMode = "all"; m.S.expFile = 0;
   m.S.gray = false; m.S.figCand = {}; m.S.figSel = {};
   m.S.tool = null; m.S.coverSel = null; m.S.borderSel = null; m.S.elSel = {}; m.S.dragMoved = false;
@@ -44,35 +46,11 @@ def _reset_state(st):
     js(st, "window.__reset()")
 
 
-# ── 純粋ヘルパ ──
-
-
-def test_pure_helpers_counts_tallies_by_status(st):
-    result = js(st, "window.__st.counts(['pending', 'reviewed', 'skipped', 'none', 'pending'])")
-    assert result == {"done": 1, "skip": 1, "pend": 2, "none": 1, "na": 0}
-
-
-def test_pure_helpers_pass_all_always_passes_others_match_only(st):
-    assert js(st, "window.__st.pass('pending', 'all')") is True
-    assert js(st, "window.__st.pass('pending', 'pending')") is True
-    assert js(st, "window.__st.pass('reviewed', 'pending')") is False
-
-
-def test_pure_helpers_initstatus_derives_pending_none_from_changed(st):
-    assert js(st, "window.__st.initStatus([true, false])") == ["pending", "none"]
-
-
 # ── applyState ──
 
 
 def test_applystate_file_start_is_cumulative_page_counts(st):
     assert js(st, "window.__st.S.FILE_START") == [0, 2]
-
-
-def test_applystate_initializes_status_from_changed_and_discards_caches(st):
-    assert js(st, "window.__st.S.status2") == ["pending", "none", "pending", "pending", "none"]
-    assert js(st, "window.__st.S.svgCache") == {}
-    assert js(st, "window.__st.S.elSel") == {}
 
 
 def test_applystate_resets_current_page_when_page_count_shrinks(st):
@@ -82,84 +60,26 @@ def test_applystate_resets_current_page_when_page_count_shrinks(st):
         """window.__st.applyState({
           files: [{ name: "a.pdf", pages: 1 }],
           pages: [{ fileIndex: 0, pageInFile: 0 }],
-          total: 1, changed2: [false], changed3: [false],
+          total: 1, matches2: [[0, 0]], edits3: [[0, 0, 0]], scanned: [false],
         })""",
     )
     assert js(st, "window.__st.S.page") == 0
 
 
-def test_applystate_reload_of_same_page_list_preserves_confirmation_status(st):
-    js(st, "window.__st.S.status2 = ['reviewed', 'skipped', 'pending', 'pending', 'none']")
-    js(
-        st,
-        """window.__st.applyState({
-          files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }],
-          pages: [
-            { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
-            { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
-          ],
-          total: 5,
-          changed2: [true, true, true, true, false],
-          changed3: [false, false, false, false, false],
-        })""",
-    )
-    assert js(st, "window.__st.S.status2") == ["reviewed", "skipped", "pending", "pending", "none"]
-
-
-def test_applystate_toggles_status_to_pending_or_none_on_changed_flip(st):
-    js(st, "window.__st.S.status2 = ['reviewed', 'none', 'pending', 'pending', 'none']")
-    js(
-        st,
-        """window.__st.applyState({
-          files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }],
-          pages: [
-            { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
-            { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
-          ],
-          total: 5,
-          changed2: [false, true, true, true, false],
-          changed3: [false, false, false, false, false],
-        })""",
-    )
-    assert js(st, "window.__st.S.status2[0]") == "none"
-    assert js(st, "window.__st.S.status2[1]") == "pending"
-    assert js(st, "window.__st.S.status2[2]") == "pending"
-
-
-def test_applystate_rebuilds_status_via_initstatus_when_page_list_differs(st):
-    js(st, "window.__st.S.status2 = ['reviewed', 'skipped']")
-    js(
-        st,
-        """window.__st.applyState({
-          files: [{ name: "c.pdf", pages: 3 }],
-          pages: [
-            { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 }, { fileIndex: 0, pageInFile: 2 },
-          ],
-          total: 3,
-          changed2: [true, false, true],
-          changed3: [false, false, false],
-        })""",
-    )
-    assert js(st, "window.__st.S.status2") == ["pending", "none", "pending"]
-
-
 def test_applystate_discards_rail_selection_and_file_collapse_when_page_list_changes(st):
-    js(st, "window.__st.S.selFor[2] = { 0: true, 3: true }")
     js(st, "window.__st.S.collapsed['2:1'] = true")
     js(
         st,
         """window.__st.applyState({
           files: [{ name: "a.pdf", pages: 2 }],
           pages: [{ fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 }],
-          total: 2, changed2: [true, false], changed3: [false, false],
+          total: 2, matches2: [[1, 0], [0, 0]], edits3: [[0, 0, 0], [0, 0, 0]], scanned: [false, false],
         })""",
     )
-    assert js(st, "window.__st.S.selFor") == {"2": {}, "3": {}}
     assert js(st, "window.__st.S.collapsed") == {}
 
 
 def test_applystate_reload_of_same_page_list_preserves_selection_and_collapse(st):
-    js(st, "window.__st.S.selFor[2] = { 0: true }")
     js(st, "window.__st.S.collapsed['2:1'] = true")
     js(
         st,
@@ -169,10 +89,10 @@ def test_applystate_reload_of_same_page_list_preserves_selection_and_collapse(st
             { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
             { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
           ],
-          total: 5, changed2: [true, false, true, true, false], changed3: [false, false, false, false, false],
+          total: 5, matches2: [[1, 0], [0, 0], [2, 1], [0, 1], [0, 0]],
+          edits3: [[0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 2, 1], [0, 0, 0]], scanned: [false, false, false, false, false],
         })""",
     )
-    assert js(st, "window.__st.S.selFor[2]") == {"0": True}
     assert js(st, "window.__st.S.collapsed") == {"2:1": True}
 
 
@@ -185,15 +105,7 @@ def test_invalidateall_discards_svg_cache_for_all_pages(st):
     assert js(st, "window.__st.S.svgCache") == {}
 
 
-# ── 導出 (phase 別の別名参照と選択集合) ──
-
-
-def test_derived_statusarr_changedarr_switch_by_phase(st):
-    assert js(st, "window.__st.statusArr() === window.__st.S.status2") is True
-    assert js(st, "window.__st.changedArr() === window.__st.S.changed2") is True
-    js(st, "window.__st.S.phase = 3")
-    assert js(st, "window.__st.statusArr() === window.__st.S.status3") is True
-    assert js(st, "window.__st.changedArr() === window.__st.S.changed3") is True
+# ── 導出 ──
 
 
 def test_derived_pkey_curelsel_key_by_current_page_fi_pi(st):
@@ -203,53 +115,7 @@ def test_derived_pkey_curelsel_key_by_current_page_fi_pi(st):
     assert js(st, "window.__st.S.elSel['1:0']") == {"x": True}
 
 
-def test_derived_selkeys_selcount_clearsel_scope_to_current_phase(st):
-    js(st, "window.__st.selSet()[0] = true")
-    js(st, "window.__st.selSet()[3] = true")
-    js(st, "window.__st.S.selFor[3][1] = true")
-    assert sorted(js(st, "window.__st.selKeys()")) == ["0", "3"]
-    assert js(st, "window.__st.selCount()") == 2
-    js(st, "window.__st.clearSel()")
-    assert js(st, "window.__st.selCount()") == 0
-    assert js(st, "window.__st.S.selFor[3][1]") is True
-
-
-def test_derived_statusofcur_returns_status_of_current_page(st):
-    js(st, "window.__st.S.page = 1")
-    assert js(st, "window.__st.statusOfCur()") == "none"
-
-
 # ── 遷移 ──
-
-
-def test_transition_nextpending_prefers_ahead_and_wraps_to_start(st):
-    js(st, "window.__st.S.page = 2")
-    assert js(st, "window.__st.nextPending(window.__st.S.status2)") == 3
-    js(st, "window.__st.S.status2[3] = 'reviewed'")
-    assert js(st, "window.__st.nextPending(window.__st.S.status2)") == 0
-    js(st, "window.__st.S.status2[0] = 'skipped'")
-    js(st, "window.__st.S.status2[2] = 'reviewed'")
-    assert js(st, "window.__st.nextPending(window.__st.S.status2)") == -1
-
-
-def test_transition_firstpending_searches_from_start_default_zero(st):
-    assert js(st, "window.__st.firstPending(window.__st.S.status2)") == 0
-    js(st, "window.__st.S.status2 = ['reviewed', 'none', 'pending', 'none', 'none']")
-    assert js(st, "window.__st.firstPending(window.__st.S.status2)") == 2
-    assert js(st, "window.__st.firstPending(['none', 'none', 'none', 'none', 'none'])") == 0
-
-
-def test_transition_advancephase_moves_2_to_3_to_4_and_clears_guard_and_target_selection(st):
-    js(st, "window.__st.S.page = 4")
-    js(st, "window.__st.S.guarding = true")
-    js(st, "window.__st.S.selFor[3][1] = true")
-    js(st, "window.__st.advancePhase()")
-    assert js(st, "window.__st.S.phase") == 3
-    assert js(st, "window.__st.S.page") == 0
-    assert js(st, "window.__st.S.guarding") is False
-    assert js(st, "Object.keys(window.__st.S.selFor[3]).filter(k => window.__st.S.selFor[3][k])") == []
-    js(st, "window.__st.advancePhase()")
-    assert js(st, "window.__st.S.phase") == 4
 
 
 def test_transition_resetphaseui_clears_element_and_cover_selection_and_tool(st):
@@ -292,17 +158,6 @@ def test_export_range_all_mode_is_all_pages(st):
       return window.__st.exportPageList("", parseSpecStub).length;
     }})()"""
     assert js(st, expr) == 5
-
-
-def test_export_range_noskip_excludes_pages_skipped_in_either_step(st):
-    js(st, "window.__st.S.expMode = 'noskip'")
-    js(st, "window.__st.S.status2[1] = 'skipped'")
-    js(st, "window.__st.S.status3[4] = 'skipped'")
-    expr = f"""(() => {{
-      {_PARSE_SPEC_STUB}
-      return window.__st.exportPageList("", parseSpecStub).length;
-    }})()"""
-    assert js(st, expr) == 3
 
 
 def test_export_range_spec_mode_returns_pages_in_target_file_with_file_index(st):
@@ -377,25 +232,6 @@ def test_gray_skips_steps_2_and_3(st):
     assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, False, True]
 
 
-def test_scannedfiles_lists_files_whose_pages_are_all_na(st):
-    # a.pdf は 2 ページとも純スキャン、b.pdf はベクター、c.pdf は 1 ページだけスキャンの混在
-    js(st, """window.__st.applyState({files: [{name: 'a.pdf', pages: 2}, {name: 'b.pdf', pages: 1}, {name: 'c.pdf', pages: 2}],
-        pages: [[0,0],[0,1],[1,0],[2,0],[2,1]], total: 5,
-        changed2: [false, false, true, false, false], changed3: [false, false, false, false, false],
-        scanned: [true, true, false, true, false]})""")
-    assert js(st, "window.__st.scannedFiles().map(f => [f.name, f.pages])") == [["a.pdf", 2]]
-    assert js(st, "window.__st.skipsPhase2()") is False
-
-
-def test_scannedfiles_is_every_file_when_phase2_is_skipped(st):
-    js(st, """window.__st.applyState({files: [{name: 'a.pdf', pages: 1}, {name: 'b.pdf', pages: 3}],
-        pages: [[0,0],[1,0],[1,1],[1,2]], total: 4,
-        changed2: [false, false, false, false], changed3: [false, false, false, false],
-        scanned: [true, true, true, true]})""")
-    assert js(st, "window.__st.skipsPhase2()") is True
-    assert js(st, "window.__st.scannedFiles().map(f => f.name)") == ["a.pdf", "b.pdf"]
-
-
 def test_svg_cache_key_includes_gray(st):
     assert js(st, "window.__st.svgKey(1, 2)") == "1:2"
     js(st, "window.__st.S.gray = true")
@@ -441,7 +277,7 @@ def test_apply_state_with_new_page_list_drops_fig_state(st):
     js(st, "window.__st.figSelOf(0).push({x:1,y:1,w:1,h:1}); window.__st.S.figCand['0:0'] = []")
     js(st, """window.__st.applyState({
         files: [{ name: "c.pdf", pages: 1 }], pages: [{ fileIndex: 0, pageInFile: 0 }], total: 1,
-        changed2: [false], changed3: [false] })""")
+        matches2: [[0, 0]], edits3: [[0, 0, 0]], scanned: [false] })""")
     assert js(st, "Object.keys(window.__st.S.figSel)") == []
     assert js(st, "Object.keys(window.__st.S.figCand)") == []
 
@@ -488,131 +324,141 @@ def test_adopted_figures_is_empty_before_any_adoption(st):
     assert js(st, "window.__st.adoptedFigures()") == []
 
 
-# ── 手順 2 の省略 (純スキャンページ = status2 "na") ──
+# ── 手順 2 の省略 (純スキャンページ) ──
 
 
-def _apply_with_scanned(st, scanned, changed2=None):
-    """5 ページ構成のまま `scanned` 列だけ差し替えて applyState する (RESET と同じページ列)。"""
+def _apply(st, scanned, matches2=None, edits3=None):
     js(st, """(a) => window.__st.applyState({
         files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }],
         pages: [
           { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
           { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
         ],
-        total: 5,
-        changed2: a.changed2, changed3: [false, false, false, false, false],
-        scanned: a.scanned,
-    })""", {"scanned": scanned, "changed2": changed2 or [True, False, True, True, False]})
-
-
-def test_initstatus_marks_scanned_pages_na_regardless_of_changed(st):
-    result = js(st, "window.__st.initStatus([true, false, true], [true, true, false])")
-    assert result == ["na", "na", "pending"]
-    # 第 2 引数を省略した既存の呼び方は従来どおり
-    assert js(st, "window.__st.initStatus([true, false])") == ["pending", "none"]
-
-
-def test_mergestatus_keeps_na_even_when_changed_flips(st):
-    result = js(st, "window.__st.mergeStatus([true, true, false], ['reviewed', 'reviewed', 'none'], [true, false, false])")
-    assert result == ["na", "reviewed", "none"]
-
-
-def test_counts_tallies_na(st):
-    result = js(st, "window.__st.counts(['na', 'pending', 'na', 'none'])")
-    assert result == {"done": 0, "skip": 0, "pend": 1, "none": 1, "na": 2}
-
-
-def test_pass_never_shows_na_even_for_all(st):
-    assert js(st, "window.__st.pass('na', 'all')") is False
-    assert js(st, "window.__st.pass('na', 'none')") is False
-    assert js(st, "window.__st.pass('none', 'all')") is True
-
-
-def test_applystate_without_scanned_column_has_no_na(st):
-    # RESET は scanned を渡さない。旧サーバ・既存テストとの互換で全ページ非スキャン扱い
-    assert js(st, "window.__st.S.status2.includes('na')") is False
-    assert js(st, "window.__st.skipsPhase2()") is False
-
-
-def test_applystate_maps_scanned_to_na_and_preserves_status_on_reload(st):
-    _apply_with_scanned(st, [True, False, False, False, True])
-    assert js(st, "window.__st.S.status2") == ["na", "none", "pending", "pending", "na"]
-    js(st, "window.__st.S.status2[2] = 'reviewed'")
-    # 同じページ列で再取得しても na は na のまま、確認済みも引き継ぐ
-    _apply_with_scanned(st, [True, False, False, False, True])
-    assert js(st, "window.__st.S.status2") == ["na", "none", "reviewed", "pending", "na"]
-
-
-def test_skipsphase2_only_when_every_page_is_na(st):
-    _apply_with_scanned(st, [True, True, True, True, True])
-    assert js(st, "window.__st.skipsPhase2()") is True
-    assert js(st, "window.__st.phaseAfterLoad()") == 3
-    assert js(st, "window.__st.phaseBeforeTrim()") == 1
-    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, True, True]
-    _apply_with_scanned(st, [True, True, True, True, False])
-    assert js(st, "window.__st.skipsPhase2()") is False
-    assert js(st, "window.__st.phaseAfterLoad()") == 2
-    assert js(st, "window.__st.phaseBeforeTrim()") == 2
-    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, True, True, True]
-
-
-def test_skipsphase2_is_false_with_no_pages(st):
-    js(st, "window.__st.applyState({ files: [], pages: [], total: 0, changed2: [], changed3: [], scanned: [] })")
-    assert js(st, "window.__st.skipsPhase2()") is False
+        total: 5, matches2: a.matches2, edits3: a.edits3, scanned: a.scanned,
+    })""", {"scanned": scanned,
+            "matches2": matches2 or [[1, 0], [0, 0], [2, 1], [0, 1], [0, 0]],
+            "edits3": edits3 or [[0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 2, 1], [0, 0, 0]]})
 
 
 def test_gray_mode_wins_over_skipsphase2(st):
-    _apply_with_scanned(st, [True, True, True, True, True])
+    _apply(st, [True, True, True, True, True])
     js(st, "window.__st.S.gray = true")
     assert js(st, "window.__st.phaseAfterLoad()") == 4
     assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, False, True]
 
 
-def test_landonphase2_moves_off_a_scanned_page_to_the_first_editable_one(st):
-    _apply_with_scanned(st, [True, True, False, True, False])
-    js(st, "window.__st.S.page = 0; window.__st.landOnPhase2()")
-    assert js(st, "window.__st.S.page") == 2
-    # 対象ページに居るときは動かさない (戻ったときに見ていたページを保つ)
-    js(st, "window.__st.S.page = 4; window.__st.landOnPhase2()")
-    assert js(st, "window.__st.S.page") == 4
-    assert js(st, "window.__st.firstEditablePage2()") == 2
+# ── 件数ベースの状態モデル ──
 
 
-def test_nextpending_and_firstpending_never_land_on_na(st):
-    _apply_with_scanned(st, [True, False, True, False, True], [True, True, True, True, True])
-    assert js(st, "window.__st.S.status2") == ["na", "pending", "na", "pending", "na"]
-    js(st, "window.__st.S.page = 1")
-    assert js(st, "window.__st.nextPending(window.__st.S.status2)") == 3
-    assert js(st, "window.__st.firstPending(window.__st.S.status2)") == 1
+def test_applystate_keeps_counts_and_scanned_per_page(st):
+    assert js(st, "window.__st.S.matches2[2]") == {"applied": 2, "pending": 1}
+    assert js(st, "window.__st.S.edits3[3]") == {"removed": 0, "borders": 2, "covers": 1}
+    assert js(st, "window.__st.S.scanned") == [False] * 5
+    assert js(st, "window.__st.S.svgCache") == {}
+    assert js(st, "window.__st.S.elSel") == {}
+    assert js(st, "'status2' in window.__st.S") is False
+    assert js(st, "'selFor' in window.__st.S") is False
 
 
-def test_export_noskip_keeps_na_pages(st):
-    _apply_with_scanned(st, [True, False, False, False, False])
-    js(st, "window.__st.S.status2[1] = 'skipped'; window.__st.S.expMode = 'noskip'")
-    pages = js(st, "window.__st.exportPageList('', () => [])")
-    assert [p["pageInFile"] for p in pages if p["fileIndex"] == 0] == [0]
-    assert len(pages) == 4
-
-
-def test_initstatus_and_mergestatus_treat_a_short_scanned_column_as_not_scanned(st):
-    # サーバは pages と同じ長さで scanned を作るが、欠けていても非スキャン扱いへ倒れる (例外にしない)
-    assert js(st, "window.__st.initStatus([true, false, true], [true])") == ["na", "none", "pending"]
-    assert js(st, "window.__st.mergeStatus([true, true], ['reviewed', 'na'], [true])") == ["na", "pending"]
-
-
-def test_applystate_with_a_new_page_list_maps_scanned_via_initstatus(st):
-    # ページ列が変わる再取得 (ファイル追加) は initStatus 経路。scanned が na に写り、旧 status は捨てられる
-    js(st, "window.__st.S.status2[2] = 'reviewed'")
+def test_applystate_tolerates_missing_or_short_columns(st):
+    # 旧形式 (列なし) や短い列は 0 件・非スキャン扱いへ倒す (例外にしない)
     js(st, """window.__st.applyState({
-        files: [{ name: "a.pdf", pages: 2 }, { name: "b.pdf", pages: 3 }, { name: "c.pdf", pages: 1 }],
-        pages: [
-          { fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 },
-          { fileIndex: 1, pageInFile: 0 }, { fileIndex: 1, pageInFile: 1 }, { fileIndex: 1, pageInFile: 2 },
-          { fileIndex: 2, pageInFile: 0 },
-        ],
-        total: 6,
-        changed2: [true, false, true, true, false, true], changed3: [false, false, false, false, false, false],
-        scanned: [false, false, false, false, false, true],
-    })""")
-    assert js(st, "window.__st.S.status2") == ["pending", "none", "pending", "pending", "none", "na"]
+        files: [{ name: "a.pdf", pages: 2 }], pages: [{ fileIndex: 0, pageInFile: 0 }, { fileIndex: 0, pageInFile: 1 }],
+        total: 2, matches2: [[1, 1]], scanned: [true] })""")
+    assert js(st, "window.__st.S.matches2") == [{"applied": 1, "pending": 1}, {"applied": 0, "pending": 0}]
+    assert js(st, "window.__st.S.edits3") == [{"removed": 0, "borders": 0, "covers": 0}] * 2
+    assert js(st, "window.__st.S.scanned") == [True, False]
+
+
+def test_applystate_drops_collapse_and_figures_only_when_page_list_changes(st):
+    js(st, "window.__st.S.collapsed['2:1'] = true")
+    _apply(st, [False] * 5)
+    assert js(st, "window.__st.S.collapsed") == {"2:1": True}
+    js(st, """window.__st.applyState({ files: [{ name: "a.pdf", pages: 1 }], pages: [{ fileIndex: 0, pageInFile: 0 }],
+        total: 1, matches2: [[0, 0]], edits3: [[0, 0, 0]], scanned: [false] })""")
+    assert js(st, "window.__st.S.collapsed") == {}
+
+
+def test_matchcount_editcount_and_totals(st):
+    assert js(st, "[0,1,2,3,4].map(g => window.__st.matchCount(g))") == [1, 0, 3, 1, 0]
+    assert js(st, "[0,1,2,3,4].map(g => window.__st.editCount(g))") == [0, 1, 0, 3, 0]
+    assert js(st, "window.__st.matchTotals()") == {"applied": 3, "pending": 2, "pages": 3, "scanned": 0}
+    assert js(st, "window.__st.editTotals()") == {"pages": 2, "removed": 1, "borders": 2, "covers": 1}
+
+
+def test_railpages_phase2_matched_default_and_all_never_include_scanned(st):
+    _apply(st, [False, True, False, False, False])
+    assert js(st, "window.__st.S.filterFor[2]") == "matched"
+    assert js(st, "window.__st.railPages(2)") == [0, 2, 3]
+    js(st, "window.__st.S.filterFor[2] = 'all'")
+    assert js(st, "window.__st.railPages(2)") == [0, 2, 3, 4]   # 1 はスキャンなので出ない
+
+
+def test_railpages_phase3_all_default_includes_scanned_and_edited_filters(st):
+    _apply(st, [True, False, False, False, False])
+    assert js(st, "window.__st.railPages(3)") == [0, 1, 2, 3, 4]
+    js(st, "window.__st.S.filterFor[3] = 'edited'")
+    assert js(st, "window.__st.railPages(3)") == [1, 3]
+
+
+def test_nextmatched_searches_ahead_then_wraps_and_skips_scanned(st):
+    _apply(st, [False, False, True, False, False])
+    assert js(st, "window.__st.nextMatched(0)") == 3     # 2 は一致があるがスキャンなので飛ばす
+    assert js(st, "window.__st.nextMatched(3)") == 0     # 末尾まで無ければ先頭から
+    _apply(st, [False] * 5, [[0, 0]] * 5)
+    assert js(st, "window.__st.nextMatched(0)") == -1
+
+
+def test_scannedcountof_counts_per_file(st):
+    _apply(st, [True, False, True, True, False])
+    assert js(st, "[0, 1].map(fi => window.__st.scannedCountOf(fi))") == [1, 2]
+    assert js(st, "window.__st.scannedTotal()") == 3
+
+
+def test_skipsphase2_only_when_every_page_is_scanned(st):
+    _apply(st, [True] * 5)
+    assert js(st, "window.__st.skipsPhase2()") is True
+    assert js(st, "window.__st.phaseAfterLoad()") == 3
+    assert js(st, "window.__st.phaseBeforeTrim()") == 1
+    assert js(st, "[1,2,3,4].map(n => window.__st.stepAllowed(n))") == [True, False, True, True]
+    _apply(st, [True, True, True, True, False])
     assert js(st, "window.__st.skipsPhase2()") is False
+    assert js(st, "window.__st.phaseAfterLoad()") == 2
+
+
+def test_skipsphase2_is_false_with_no_pages(st):
+    js(st, "window.__st.applyState({ files: [], pages: [], total: 0, matches2: [], edits3: [], scanned: [] })")
+    assert js(st, "window.__st.skipsPhase2()") is False
+
+
+def test_firsteditablepage2_prefers_a_matched_page_then_a_non_scanned_one(st):
+    assert js(st, "window.__st.firstEditablePage2()") == 0
+    _apply(st, [True, False, False, False, False], [[0, 0], [0, 0], [0, 0], [1, 0], [0, 0]])
+    assert js(st, "window.__st.firstEditablePage2()") == 3
+    _apply(st, [True, False, False, False, False], [[0, 0]] * 5)
+    assert js(st, "window.__st.firstEditablePage2()") == 1
+
+
+def test_landonphase2_moves_off_a_scanned_page_only(st):
+    _apply(st, [True, True, False, True, False], [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]])
+    js(st, "window.__st.S.page = 0; window.__st.landOnPhase2()")
+    assert js(st, "window.__st.S.page") == 4
+    js(st, "window.__st.S.page = 2; window.__st.landOnPhase2()")
+    assert js(st, "window.__st.S.page") == 2   # 対象ページに居るときは動かさない
+
+
+def test_advancephase_moves_2_to_3_to_4_and_resets_ui(st):
+    js(st, "window.__st.S.page = 4; window.__st.S.tool = 'cover'")
+    js(st, "window.__st.advancePhase()")
+    assert js(st, "window.__st.S.phase") == 3
+    assert js(st, "window.__st.S.page") == 0
+    assert js(st, "window.__st.S.tool") is None
+    js(st, "window.__st.advancePhase()")
+    assert js(st, "window.__st.S.phase") == 4
+
+
+def test_export_modes_are_page_all_spec_only(st):
+    js(st, "window.__st.S.expMode = 'noskip'")
+    assert js(st, "window.__st.exportPageList('', () => [])") == []   # 未知のモードは空
+    assert js(st, "typeof window.__st.counts") == "undefined"
+    assert js(st, "typeof window.__st.nextPending") == "undefined"
