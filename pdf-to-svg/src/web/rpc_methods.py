@@ -78,11 +78,12 @@ def _page_match_counts(page: Page, store: DictionaryStore) -> Tuple[int, int]:
     )
     if not store.all():
         return applied, 0
-    pending_ids = {rep.element.id for rep in dict_apply.plan_replacements(page, store)}
+    # 候補 (未置換) は `plan_replacements` の結果から直接数える。`rpc_planPage` は候補を
+    # 「`dict_match` が無い文字要素」の側からも絞るが、`_iter_replacements` が返す要素は
+    # その条件を満たすものだけなので、再走査せずに数えても行数は一致する。
     pending = sum(
-        1 for e in page.elements
-        if isinstance(e, TextElement) and not e.deleted and not e.manual_cover
-        and e.dict_match is None and e.id in pending_ids
+        1 for rep in dict_apply.plan_replacements(page, store)
+        if rep.element.dict_match is None and not rep.element.deleted and not rep.element.manual_cover
     )
     return applied, pending
 

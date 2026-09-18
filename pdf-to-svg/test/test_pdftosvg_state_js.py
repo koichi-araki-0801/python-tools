@@ -96,15 +96,6 @@ def test_applystate_reload_of_same_page_list_preserves_selection_and_collapse(st
     assert js(st, "window.__st.S.collapsed") == {"2:1": True}
 
 
-# ── invalidateAll ──
-
-
-def test_invalidateall_discards_svg_cache_for_all_pages(st):
-    js(st, 'window.__st.S.svgCache = { "0:0": { svg: "<svg/>" }, "1:2": { svg: "<svg/>" } }')
-    js(st, "window.__st.invalidateAll()")
-    assert js(st, "window.__st.S.svgCache") == {}
-
-
 # ── 導出 ──
 
 

@@ -121,13 +121,6 @@ function applyState(st) {
   if (S.page >= S.TOTAL) S.page = 0;
 }
 
-/** ページ SVG のキャッシュを全ページ分捨てる。
- *
- * Undo/Redo は現在ページ以外への編集も巻き戻すため、現在ページだけ作り直すと
- * 他ページが古い SVG のまま残る。
- */
-function invalidateAll() { S.svgCache = {}; }
-
 /** 通しページ g の辞書一致の件数 (置換済み + 未置換)。0 なら「辞書に一致しないページ」 */
 function matchCount(g) { var m = S.matches2[g]; return m ? m.applied + m.pending : 0; }
 /** 通しページ g の編集の件数 (削除 + 枠線 + 上書き)。0 なら「編集していないページ」 */
@@ -169,16 +162,16 @@ function matchTotals() {
   S.matches2.forEach(function (m, g) {
     if (S.scanned[g]) return;
     t.applied += m.applied; t.pending += m.pending;
-    if (m.applied + m.pending) t.pages++;
+    if (matchCount(g)) t.pages++;
   });
   return t;
 }
 /** 手順 3 のまとめ: 編集したページ数と、削除・枠線・上書きの件数 */
 function editTotals() {
   var t = { pages: 0, removed: 0, borders: 0, covers: 0 };
-  S.edits3.forEach(function (e) {
+  S.edits3.forEach(function (e, g) {
     t.removed += e.removed; t.borders += e.borders; t.covers += e.covers;
-    if (e.removed + e.borders + e.covers) t.pages++;
+    if (editCount(g)) t.pages++;
   });
   return t;
 }
@@ -318,6 +311,6 @@ export {
   figKey, svgKey, svgKeys, figSelOf, figSelPeek, figCount, seedFigSel, exportFigureList, adoptedFigures,
   matchCount, editCount, railPages, nextMatched, scannedCountOf, scannedTotal, matchTotals, editTotals,
   phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
-  applyState, invalidateAll, resetPhaseUi, advancePhase,
+  applyState, resetPhaseUi, advancePhase,
   exportPageList, expCount, zipName, chunkBySize,
 };

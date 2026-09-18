@@ -180,7 +180,6 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
         render();
       });
     });
-    renderScanBanner();
   }
 
   /** 手順 1 のスキャン画像のバナー。スキャンページが 1 ページ以上あるときだけ出す。
@@ -331,8 +330,9 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
         warn + badge + act + "</div>";
     }).join("");
     var total = data.changes.length;
-    var desc = total === 0 ? "このページに辞書と一致する語はありません。"
-      : pending === 0 ? "辞書に一致した " + total + " か所をすべて置き換えました。"
+    // total === 0 (このページに辞書と一致する語が無い) は冒頭の if (!matchCount(S.page)) で
+    // 既に return しているため、ここでは扱わない。
+    var desc = pending === 0 ? "辞書に一致した " + total + " か所をすべて置き換えました。"
       : "一致 " + total + " か所のうち " + pending + " か所が未置換です。";
     el.innerHTML =
       '<div class="count-card"><div class="num">' + applied + '</div><div><div class="t">このページで置き換えた語</div>' +
@@ -616,20 +616,15 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
   }
 
   // ── 12. ページ送り (右パネル下部) ──
-  function wirePageFoot2() {
-    var prev = document.getElementById("prev-page-2"), next = document.getElementById("next-match-2");
+  /** 「前のページ」は通し −1。「次」は手順ごとの行き先関数 (無ければ -1) で決める:
+   *  手順 2 は辞書に一致した次のページ (`nextMatched`)、手順 3 は通し +1。
+   *  静的なボタンなので `onclick` 代入で配線し、再描画で多重登録にならないようにする。 */
+  function wirePageFoot(prevId, nextId, nextIndexFn) {
+    var prev = document.getElementById(prevId), next = document.getElementById(nextId);
     prev.disabled = S.page === 0;
-    var nm = nextMatched(S.page);
-    next.disabled = nm < 0;
+    next.disabled = nextIndexFn() < 0;
     prev.onclick = function () { if (S.page > 0) { S.page--; render(); } };
-    next.onclick = function () { var n = nextMatched(S.page); if (n >= 0) { S.page = n; render(); } };
-  }
-  function wirePageFoot3() {
-    var prev = document.getElementById("prev-page-3"), next = document.getElementById("next-page-3");
-    prev.disabled = S.page === 0;
-    next.disabled = S.page >= S.TOTAL - 1;
-    prev.onclick = function () { if (S.page > 0) { S.page--; render(); } };
-    next.onclick = function () { if (S.page < S.TOTAL - 1) { S.page++; render(); } };
+    next.onclick = function () { var n = nextIndexFn(); if (n >= 0) { S.page = n; render(); } };
   }
   function pageLabel() { var pg = S.PAGES[S.page]; return "<b>" + esc(S.FILES[pg.fileIndex].name) + "</b> ・ " + (pg.pageInFile + 1) + " ページ"; }
 
@@ -883,7 +878,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
     if (S.phase === 2 && S.TOTAL) {
       buildRail("pagenav");
-      wirePageFoot2();
+      wirePageFoot("prev-page-2", "next-match-2", function () { return nextMatched(S.page); });
       buildPageJump("pgnav-2");
       mountPage(document.getElementById("doc-master"), app.querySelector('[data-screen="2"] .editor'), false, function () {
         wireConfirmPick();
@@ -894,7 +889,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     }
     if (S.phase === 3 && S.TOTAL) {
       buildRail("pagenav-3");
-      wirePageFoot3();
+      wirePageFoot("prev-page-3", "next-page-3", function () { return S.page < S.TOTAL - 1 ? S.page + 1 : -1; });
       buildPageJump("pgnav-3");
       var ed3 = app.querySelector('[data-screen="3"] .editor');
       ed3.classList.toggle("tool-crop", S.tool === "crop");
