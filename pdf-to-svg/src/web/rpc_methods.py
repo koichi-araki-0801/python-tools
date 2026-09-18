@@ -17,7 +17,7 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from dictionary import apply as dict_apply
 from dictionary.store import DictionaryStore
@@ -66,17 +66,51 @@ class WebSession:
 
 # ---- 状態のスナップショット ----
 
-def _page_has_replacements(page: Page, store: DictionaryStore) -> bool:
-    """手順 2 で「要確認」にするか。置換済みが 1 件でもあるか、未適用の候補 (戻した箇所・
-    まだ当てていない箇所) が残るページ。候補も数えるのは、箇所単位で戻したページが一覧から
-    消えて再び置換できなくなるのを避けるため。"""
-    if any(
-        isinstance(e, TextElement) and not e.deleted and not e.manual_cover
+def _page_match_counts(page: Page, store: DictionaryStore) -> Tuple[int, int]:
+    """手順 2 のページ件数 `[置換済み, 未置換]`。`rpc_planPage` が返す行と同じ述語で数える
+    (置換済み = `dict_match` を持つ文字要素、未置換 = 辞書に一致するが未適用の候補)。
+    レールのタグ・件数カード・手順 4 のまとめはこの数から描くため、`planPage` の行数と
+    ここの数が食い違うと画面の中で件数が合わなくなる。"""
+    applied = sum(
+        1 for e in page.elements
+        if isinstance(e, TextElement) and not e.deleted and not e.manual_cover
         and e.dict_match is not None
-        for e in page.elements
-    ):
-        return True
-    return dict_apply.has_replacement_candidate(page, store)
+    )
+    if not store.all():
+        return applied, 0
+    pending_ids = {rep.element.id for rep in dict_apply.plan_replacements(page, store)}
+    pending = sum(
+        1 for e in page.elements
+        if isinstance(e, TextElement) and not e.deleted and not e.manual_cover
+        and e.dict_match is None and e.id in pending_ids
+    )
+    return applied, pending
+
+
+def _folded_ids(page: Page) -> set:
+    """辞書の折返し畳み込みで隠した後続行の id。利用者が削除したものではないので
+    「削除した要素」から除く (`rpc_removedList` と `_page_edit_counts` が共有する)。"""
+    folded = set()
+    for el in page.elements:
+        if isinstance(el, TextElement) and not el.deleted and el.dict_revert is not None:
+            folded.update(el.dict_revert.extra_ids)
+    return folded
+
+
+def _page_edit_counts(page: Page) -> Tuple[int, int, int]:
+    """手順 3 のページ件数 `[削除, 枠線, 上書き]`。`removedList` / `borderList` / `coverList`
+    と同じ述語で数える。"""
+    folded = _folded_ids(page)
+    removed = sum(1 for el in page.elements if el.deleted and el.id not in folded)
+    borders = sum(
+        1 for e in page.elements
+        if isinstance(e, RectElement) and e.manual_border and not e.deleted
+    )
+    covers = sum(
+        1 for e in page.elements
+        if isinstance(e, TextElement) and e.manual_cover and not e.deleted
+    )
+    return removed, borders, covers
 
 
 def _human_size(n: int) -> str:
@@ -100,11 +134,11 @@ def _file_size_str(doc: Document) -> str:
 
 
 def rpc_state(s: WebSession, _args: dict) -> dict:
-    """ファイル・ページ一覧と、各ページの初期レビュー要否 (changed) を返す。"""
+    """ファイル・ページ一覧と、各ページの置換・編集の件数を返す。"""
     files = []
     pages = []
-    changed2: List[bool] = []
-    changed3: List[bool] = []
+    matches2: List[List[int]] = []
+    edits3: List[List[int]] = []
     scanned: List[bool] = []
     for fi, d in enumerate(s.docs):
         files.append(
@@ -117,22 +151,22 @@ def rpc_state(s: WebSession, _args: dict) -> dict:
         )
         for pi, pg in enumerate(d.pages):
             pages.append({"fileIndex": fi, "pageInFile": pi})
-            # 手順2: 辞書置換が当たったページは「要確認」。
-            changed2.append(_page_has_replacements(pg, s.store))
-            # 手順3: トリミングは全ページが対象 (各ページを見て確認/スキップ)。
-            changed3.append(True)
+            # 手順 2: ページごとの置換済み・未置換の件数。手順 3: 削除・枠線・上書きの件数。
+            # クライアントはページの確認状態を持たず、レール・右パネル・まとめをこの数から描く。
+            matches2.append(list(_page_match_counts(pg, s.store)))
+            edits3.append(list(_page_edit_counts(pg)))
             # 手順2 の「置換対象外」: 文字要素を持たない純スキャンページ。辞書は構造的に
             # 当たらないので、クライアントはレールから外し全ページ該当なら手順 2 ごと省略する。
             # 不可視 OCR 文字のページは `is_scanned` ではない (辞書が当たりうる) ので含めない。
             scanned.append(bool(pg.is_scanned))
     total = len(pages)
     # suggestJoin は state には含めない (クライアントの読者は
-    # files/pages/total/changed2/changed3/scanned のみ。辞書設定は dictList 側ペイロードが正)。
+    # files/pages/total/matches2/edits3/scanned のみ。辞書設定は dictList 側ペイロードが正)。
     return {
         "files": files,
         "pages": pages,
-        "changed2": changed2,
-        "changed3": changed3,
+        "matches2": matches2,
+        "edits3": edits3,
         "scanned": scanned,
         # `scanned` の True の数。`app.js` の `reloadState` が読み込み直後のトーストに使う
         # (`ocrPages` と同じ差分抑止の経路)。
@@ -281,10 +315,7 @@ def rpc_removedList(s: WebSession, args: dict) -> dict:
     pg = s.page(args["fileIndex"], args["pageInFile"])
     # 辞書の折返し畳み込みで隠した後続行は利用者が削除したものではない。ここで戻せると
     # 連結済みテキストの下に旧 2 行目が再表示され、箇所単位の戻し (dict_revert) と食い違う。
-    folded = set()
-    for el in pg.elements:
-        if isinstance(el, TextElement) and not el.deleted and el.dict_revert is not None:
-            folded.update(el.dict_revert.extra_ids)
+    folded = _folded_ids(pg)
     removed = []
     for el in pg.elements:
         if not el.deleted or el.id in folded:

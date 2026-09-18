@@ -85,8 +85,45 @@ def test_state(session):
     st = rpc_methods.dispatch(session, "state", {})
     assert st["total"] == 1
     assert st["files"][0]["pages"] == 1
-    assert st["changed2"] == [True]   # dict_match のあるページは要確認
-    assert st["changed3"] == [True]   # トリミングは全ページ対象
+    # ページごとの件数だけを返す (確認状態は持たない)。changed2 / changed3 は廃止
+    assert st["matches2"] == [[1, 0]]   # dict_match のある要素 1 つ、未適用の候補 0
+    assert st["edits3"] == [[0, 0, 0]]
+    assert "changed2" not in st and "changed3" not in st
+
+
+def test_state_counts_pending_candidates_and_reverted_matches(session):
+    """未適用の候補は pending に数え、戻した箇所は applied から pending へ移る。"""
+    rpc_methods.dispatch(session, "dictAdd", {"source": "A-1042", "target": "ボルト"})
+    assert rpc_methods.dispatch(session, "state", {})["matches2"] == [[1, 1]]
+    rpc_methods.dispatch(session, "reapplyDictPage", {"fileIndex": 0, "pageInFile": 0})
+    assert rpc_methods.dispatch(session, "state", {})["matches2"] == [[2, 0]]
+    body = session.page(0, 0).elements[1]
+    rpc_methods.dispatch(session, "revertDictMatch",
+                         {"fileIndex": 0, "pageInFile": 0, "elId": body.id})
+    assert rpc_methods.dispatch(session, "state", {})["matches2"] == [[1, 1]]
+
+
+def test_state_counts_removed_borders_and_covers_per_page(session):
+    """削除・枠線・上書きの件数を、各一覧 RPC と同じ述語で数える。"""
+    page = session.page(0, 0)
+    body = page.elements[1]
+    rpc_methods.dispatch(session, "applyDelete",
+                         {"fileIndex": 0, "pageInFile": 0, "elIds": [body.id]})
+    rpc_methods.dispatch(session, "addBorder",
+                         {"fileIndex": 0, "pageInFile": 0,
+                          "rect": {"x": 5, "y": 5, "w": 100, "h": 80},
+                          "color": "#ff0000", "width": 2})
+    rpc_methods.dispatch(session, "addCover",
+                         {"fileIndex": 0, "pageInFile": 0,
+                          "rect": {"x": 10, "y": 100, "w": 60, "h": 12}, "text": "上書き"})
+    st = rpc_methods.dispatch(session, "state", {})
+    assert st["edits3"] == [[1, 1, 1]]
+    # 折返し畳み込みで隠した行は「削除」に数えない (removedList と同じ)
+    from model.elements import DictRevertInfo
+    hdr = page.elements[0]
+    hdr.dict_revert = DictRevertInfo(text="Item", bbox=hdr.bbox, wrap_align=None,
+                                     origin_y=hdr.origin_y, extra_ids=[body.id])
+    assert rpc_methods.dispatch(session, "state", {})["edits3"] == [[0, 1, 1]]
 
 
 def test_state_counts_scanned_pages_that_lost_their_background(session):
@@ -546,8 +583,8 @@ def test_revert_dict_match_single_and_plan_page_states(session):
     rows = {c["elId"]: c for c in plan["changes"]}
     assert rows[body.id]["state"] == "pending"
     assert rows[body.id]["source"] == "A-1042" and rows[body.id]["target"] == "ボルト"
-    # 戻した後もページは「要確認」のまま (一覧から消えない)
-    assert rpc_methods.dispatch(session, "state", {})["changed2"] == [True]
+    # 戻した後も候補は残る (一覧から消えない): hdr 適用 1 件 + body 未適用 1 件
+    assert rpc_methods.dispatch(session, "state", {})["matches2"] == [[1, 1]]
     # 戻しは Undo/Redo に乗る
     rpc_methods.dispatch(session, "undo", {})
     assert body.text == "ボルト"
@@ -592,14 +629,6 @@ def test_apply_dict_match_applies_only_one_element(session):
     r = rpc_methods.dispatch(session, "applyDictMatch",
                              {"fileIndex": 0, "pageInFile": 0, "elId": 999999})
     assert r["count"] == 0
-
-
-def test_state_changed2_true_for_pending_candidates(session):
-    """未適用の候補しか無いページも要確認 (戻した箇所を一覧から消さない)。"""
-    hdr = session.page(0, 0).elements[0]
-    hdr.dict_match = None  # 置換済みを消し、候補だけの状態にする
-    rpc_methods.dispatch(session, "dictAdd", {"source": "A-1042", "target": "ボルト"})
-    assert rpc_methods.dispatch(session, "state", {})["changed2"] == [True]
 
 
 def test_figure_candidates_empty_when_no_heading(session):
@@ -793,15 +822,15 @@ def test_manual_cover_is_not_a_dictionary_change(session):
     assert {"elId": el_id, "kind": "text", "label": "上書き「A」"} in removed
 
 
-def test_placing_cover_does_not_flag_page_as_changed2(session):
-    """上書きを置いただけでは手順 2 の「要確認」が立たない (`_page_has_replacements`
+def test_placing_cover_does_not_count_as_a_dictionary_match(session):
+    """上書きを置いただけでは手順 2 の件数に乗らない (`_page_match_counts`
     は `manual_cover` を辞書置換として数えない)。"""
     hdr = session.page(0, 0).elements[0]
     hdr.dict_match = None  # 既存の辞書置換を消し、上書きだけが残る状態にする
     rpc_methods.dispatch(
         session, "addCover", _cover_args(rect={"x": 10, "y": 100, "w": 80, "h": 20}, text="A")
     )
-    assert rpc_methods.dispatch(session, "state", {})["changed2"] == [False]
+    assert rpc_methods.dispatch(session, "state", {})["matches2"] == [[0, 0]]
 
 
 def test_dict_reapply_does_not_rewrite_a_matching_manual_cover(session):
