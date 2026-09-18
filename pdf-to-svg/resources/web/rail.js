@@ -14,7 +14,7 @@ var FILTERS = {
   2: [{ v: "matched", t: "辞書に一致したページだけ" }, { v: "all", t: "すべてのページ" }],
   3: [{ v: "all", t: "すべてのページ" }, { v: "edited", t: "編集したページだけ" }],
 };
-var EMPTY = { 2: "辞書に一致したページはありません", 3: "編集したページはありません" };
+var EMPTY_NOTE = "この絞り込みに該当するページはありません";
 
 // app.js から注入される再描画フック ({ render })
 var ui = { render: function () {} };
@@ -72,7 +72,7 @@ function buildRail(navId) {
       });
     }
   });
-  if (!anyRow) html += '<div class="empty-note" style="padding:48px 16px"><div class="et">' + EMPTY[S.phase] + "</div></div>";
+  if (!anyRow) html += '<div class="empty-note" style="padding:48px 16px"><div class="et">' + EMPTY_NOTE + "</div></div>";
   html += "</div>";
   var nav = document.getElementById(navId);
   nav.innerHTML = html;

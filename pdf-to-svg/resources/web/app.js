@@ -473,7 +473,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     var rows = removed.map(function (r) {
       return '<div class="edit-row" data-kind="removed"><span class="k">削除</span><span class="rlabel">' + esc(r.label) + '</span><button class="row-btn" data-restore="' + r.elId + '">戻す</button></div>';
     }).concat(borders.map(function (b) {
-      return '<div class="edit-row" data-kind="border"><span class="k">枠線</span><span class="rlabel">' + esc(b.color) + " ・ " + b.width + ' pt</span><button class="row-btn" data-del="' + b.elId + '">削除</button></div>';
+      return '<div class="edit-row" data-kind="border"><span class="k">枠線</span><span class="rlabel">' + esc(b.color) + " ・ " + esc(String(b.width)) + ' pt</span><button class="row-btn" data-del="' + b.elId + '">削除</button></div>';
     })).concat(covers.map(function (c) {
       return '<div class="edit-row" data-kind="cover"><span class="k">上書き</span><span class="rlabel">' + (c.text ? "「" + esc(c.text) + "」" : "（矩形だけ）") + '</span><button class="row-btn" data-del="' + c.elId + '">削除</button></div>';
     })).join("");
@@ -490,6 +490,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     });
     el.querySelectorAll("[data-del]").forEach(function (b) {
       b.addEventListener("click", async function () {
+        // 選択中の枠線・上書きを消すことがあるので、先に選択を解く。残すと `syncDeleteButton`
+        // が消えた id を選択中と見なし、入力欄も消えた要素の値のまま残る (`#btn-deletesel` と同じ)。
+        clearCoverSel();
+        clearBorderSel();
         await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: [+b.dataset.del] });
         await afterEdit();
       });

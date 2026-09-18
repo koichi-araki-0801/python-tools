@@ -384,6 +384,7 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     page.goto(f"/?token={TOKEN}")
     reset_session(page)
 
+    expect(page.locator("#mode-gray-box .d")).to_have_text("「当社のスチュワードシップ活動」の図を自動で見つけます。")
     page.check("#mode-gray")
     expect(page.locator("#gray-skipnote")).to_be_visible()
     with page.expect_file_chooser() as fc_info:
@@ -921,6 +922,14 @@ def test_border_overlay_resize_and_width_change(e2e_page, ocr_layer_pdf):
     expect(page.locator('#trim-dyn [data-kind="border"]')).to_have_count(1)
     expect(page.locator("#trim-dyn")).to_contain_text("枠線")
 
+    # 選択中の枠線を右パネルの行から削除しても、削除ボタン・入力欄が選択中のまま残らない
+    page.locator("#trim-stage .border-box").click()
+    expect(page.locator("#trim-stage .border-box.sel")).to_have_count(1)
+    page.locator('#trim-dyn [data-kind="border"] [data-del]').click()
+    expect(page.locator('#trim-dyn [data-kind="border"]')).to_have_count(0)
+    expect(page.locator("#btn-deletesel")).to_be_disabled()
+    assert page.evaluate("() => window.__state.borderSel") is None
+
 
 def test_border_selected_edit_does_not_leak_into_the_next_border(e2e_page, ocr_layer_pdf):
     """選択中に変えた太さが、選択を解いたあとに置く枠線へ紛れ込まない。"""
@@ -1249,6 +1258,7 @@ def test_page_jump_moves_by_number_and_arrows_including_pages_hidden_from_the_ra
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
     # 辞書が空なのでレールに行は無いが、番号で 2 ページ目へ行ける
     expect(page.locator("#pagenav .pg-row2")).to_have_count(0)
+    expect(page.locator("#pagenav .empty-note")).to_contain_text("この絞り込みに該当するページはありません")
     page.fill("#pgnav-2 .pj-num", "2")
     page.click("#pgnav-2 .pj-go")
     assert page.evaluate("() => window.__state.page") == 1
@@ -1267,3 +1277,36 @@ def test_page_jump_moves_by_number_and_arrows_including_pages_hidden_from_the_ra
     expect(page.locator("#pgnav-3 .pj-num")).to_have_value("1")
     page.click('#pgnav-3 [data-pj="next"]')
     expect(page.locator("#pgnav-3 .pj-num")).to_have_value("2")
+
+
+def test_page_jump_file_select_resets_number_and_arrows_cross_files(e2e_page, vector_pdf, ocr_layer_two_page_pdf):
+    """ファイル選択を変えても番号を 1 と上限に戻すだけで移動せず、「移動」で確定する。
+    前後ボタンは通し番号なのでファイルをまたぐ。"""
+    page = e2e_page
+    page.goto(f"/?token={TOKEN}")
+    reset_session(page)
+    with page.expect_file_chooser() as fc_info:
+        page.click("#btn-pick")
+    fc_info.value.set_files([str(vector_pdf), str(ocr_layer_two_page_pdf)])
+    expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
+    page.click("#btn-next")
+    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
+    # 2 つ目のファイルを選ぶ: 番号は 1、上限は 2 に変わるが、まだ移動しない
+    page.select_option("#pgnav-2 .pj-file", "1")
+    expect(page.locator("#pgnav-2 .pj-num")).to_have_value("1")
+    assert page.evaluate("() => document.querySelector('#pgnav-2 .pj-num').max") == "2"
+    assert page.evaluate("() => window.__state.page") == 0
+    # 「移動」で 2 つ目のファイルの 1 ページ目 (通し 1) へ
+    page.click("#pgnav-2 .pj-go")
+    assert page.evaluate("() => window.__state.page") == 1
+    expect(page.locator("#pgnav-2 .pj-file")).to_have_value("1")
+    # 「前」で通し 0 (1 つ目のファイル) へ戻る = ファイルをまたぐ
+    page.click('#pgnav-2 [data-pj="prev"]')
+    assert page.evaluate("() => window.__state.page") == 0
+    expect(page.locator("#pgnav-2 .pj-file")).to_have_value("0")
+    # 「次」を 2 回で通し 2 (2 つ目のファイルの 2 ページ目)。末尾で無効
+    page.click('#pgnav-2 [data-pj="next"]')
+    page.click('#pgnav-2 [data-pj="next"]')
+    assert page.evaluate("() => window.__state.page") == 2
+    expect(page.locator("#pgnav-2 .pj-num")).to_have_value("2")
+    expect(page.locator('#pgnav-2 [data-pj="next"]')).to_be_disabled()
