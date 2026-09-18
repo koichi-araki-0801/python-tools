@@ -14,7 +14,7 @@ import {
   phaseAfterLoad, phaseBeforeExport, phaseBeforeTrim, stepAllowed, skipsPhase2, firstEditablePage2, landOnPhase2,
   matchCount, nextMatched, scannedCountOf, scannedTotal, matchTotals, editTotals,
 } from "./state.js";
-import { fileIcon, xIcon, checkD, ckMark } from "./icons.js";
+import { fileIcon, xIcon, ckMark } from "./icons.js";
 import { initRail, buildRail } from "./rail.js";
 import { initFigure, buildFigRail, buildFigSelist, drawFigOverlay, installFigDrag } from "./figure.js";
 import { initCover, drawCoverOverlay, installCoverDrag, commitCoverText, clearCoverSel } from "./cover.js";
@@ -311,11 +311,14 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
         svg('<path d="M4 12h15M13 6l6 6-6 6"/>', 15) + '<span class="to">' + esc(ch.target) + "</span></span>" +
         warn + badge + act + "</div>";
     }).join("");
+    var total = data.changes.length;
+    var desc = total === 0 ? "このページに辞書と一致する語はありません。"
+      : pending === 0 ? "辞書に一致した " + total + " か所をすべて置き換えました。"
+      : "一致 " + total + " か所のうち " + pending + " か所が未置換です。";
     el.innerHTML =
-      '<div class="confirm-banner"><span class="ic">' + svg('<path d="' + checkD + '"/>', 22, 2.2) + '</span><div><div class="t">このページで ' +
-      applied + ' 件を置換</div>' + (pending ? '<div class="t sub">未置換 ' + pending + ' 件</div>' : "") +
-      '<div class="s">番号はページ上のマーカーと対応します</div></div></div>' +
-      '<div style="display:flex;flex-direction:column;min-height:0;flex:1;"><div class="field-label">変更の一覧（行に乗せると該当箇所を強調）</div><div class="change-list">' +
+      '<div class="count-card"><div class="num">' + applied + '</div><div><div class="t">このページで置き換えた語</div>' +
+      '<div class="lines s"><span>' + desc + "</span>" + (pending ? "<span>「置換」で当てられます。</span>" : "") + "</div></div></div>" +
+      '<div style="display:flex;flex-direction:column;min-height:0;flex:1;"><div class="field-label">辞書に一致した箇所（番号はページ上のマーカー）</div><div class="change-list">' +
       rows + "</div></div>";
     S.lastChanges = data.changes;
     drawChangeMarkers(S.lastChanges);

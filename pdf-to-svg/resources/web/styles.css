@@ -824,3 +824,9 @@ dialog.notice .skip-list li { word-break: break-all; }
 .opt-note { font-size: 12px; color: var(--muted); margin-top: 10px; }
 .note-line { display: flex; align-items: flex-start; gap: 6px; margin-top: 14px; font-size: 12px; color: var(--muted); }
 .note-line svg { width: 14px; height: 14px; flex: none; margin-top: 3px; }
+
+/* ---- 手順 2 の件数カード (0 件でも緑にしない) ---- */
+.count-card { display: flex; align-items: center; gap: 12px; background: var(--sunk); border-radius: var(--r-md); padding: 12px 14px; }
+.count-card .num { font-family: var(--font-round); font-size: 26px; font-weight: 700; color: var(--ink); flex: none; min-width: 22px; text-align: center; }
+.count-card .t { font-weight: 700; font-size: 13.5px; }
+.count-card .s { font-size: 12px; color: var(--muted); }

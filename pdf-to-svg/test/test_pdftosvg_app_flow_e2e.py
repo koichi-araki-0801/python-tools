@@ -130,10 +130,11 @@ def test_four_step_flow(e2e_page):
     expect(page.locator("#doc-master svg [data-editor-marks] > g")).to_have_count(rows.count())
     rows.first.locator(".act-revert").click()
     expect(page.locator("#doc-master")).to_contain_text("Revenue", timeout=15_000)
-    expect(page.locator("#confirm-dyn")).to_contain_text("未置換 1 件")
+    expect(page.locator("#confirm-dyn .count-card .num")).to_have_text("0")
+    expect(page.locator("#confirm-dyn .count-card")).to_contain_text("1 か所が未置換です")
     page.locator("#confirm-dyn .change-row").first.locator(".act-apply").click()
     expect(page.locator("#doc-master")).to_contain_text("売上高", timeout=15_000)
-    expect(page.locator("#confirm-dyn")).not_to_contain_text("未置換")
+    expect(page.locator("#confirm-dyn .count-card")).to_contain_text("すべて置き換えました")
 
     # 入力欄でのショートカットは文書の Undo を撃たない。辞書の語を打ち直そうと Ctrl+Z した
     # だけで直前の置換が消えると、消えたことに気付けないため。
