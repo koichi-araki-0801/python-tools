@@ -218,6 +218,12 @@ def main():
                 page.click("#btn-next")
                 page.wait_for_selector('.screen[data-screen="2"].on', timeout=10000)
                 page.wait_for_selector("#doc-master svg", timeout=15000)
+                # 辞書の語を当てたあとの画面を撮る。読み込んだ直後は未置換のままで、手順 2 の
+                # 説明（件数カードと「置換済み / 戻す」の行）と写真が合わないため。
+                page.click('[data-tab="dict"]')
+                page.click("#btn-reapply-page")
+                page.click('[data-tab="confirm"]')
+                page.wait_for_selector("#doc-master svg", timeout=15000)
                 time.sleep(1.0)
                 shot(page, "step2_replace.png")
 
