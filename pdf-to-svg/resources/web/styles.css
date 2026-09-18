@@ -754,12 +754,7 @@ a:focus-visible,
   }
 }
 
-/* ── グレーモード: 手順 1 のチェック・ステップバー・手順 4 の 3 ペイン ── */
-.modebox { margin-top: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 14px 16px; display: flex; gap: 14px; align-items: flex-start; cursor: pointer; }
-.modebox.on { border-color: var(--ink); background: var(--sunk); }
-.modebox input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--ink); flex: none; }
-.modebox .t { font-family: var(--font-round); font-weight: 700; font-size: 15px; }
-.modebox .d { color: var(--muted); font-size: 12.5px; margin-top: 4px; line-height: 1.6; }
+/* ── グレーモード: ステップバー・手順 4 の 3 ペイン ── */
 .stepbar.gray-mode .step[data-step="2"], .stepbar.gray-mode .step[data-step="3"],
 .stepbar.gray-mode .step[data-step="2"] + .step-sep, .stepbar.gray-mode .step[data-step="3"] + .step-sep { display: none; }
 .stepbar .skipnote { margin-left: 8px; color: var(--faint); font-size: 12px; }
@@ -767,16 +762,6 @@ a:focus-visible,
 /* 手順 2 の省略 (全ページが純スキャン)。グレーモードの `.gray-mode` と同じ隠し方で手順 2 だけ消す */
 .stepbar.skip2 .step[data-step="2"], .stepbar.skip2 .step[data-step="2"] + .step-sep { display: none; }
 
-/* 案内モーダル (本アプリで唯一の `<dialog>`)。色・角丸はガードバー / パネルに合わせる */
-dialog.notice { border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px 26px; max-width: 460px; color: var(--ink); background: var(--surface); box-shadow: 0 18px 48px rgba(0,0,0,.18); }
-dialog.notice::backdrop { background: rgba(20, 24, 32, .35); }
-dialog.notice h2 { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
-dialog.notice p { margin: 0 0 10px; font-size: 13px; line-height: 1.65; color: var(--muted); }
-dialog.notice p b { color: var(--ink); }
-dialog.notice .actions { display: flex; justify-content: flex-end; margin-top: 16px; }
-/* 省略した PDF の一覧。多いときは枠内でスクロールさせ、モーダルが画面からはみ出ないようにする */
-dialog.notice .skip-list { margin: 0 0 10px; padding: 8px 12px 8px 28px; max-height: 160px; overflow-y: auto; font-size: 13px; line-height: 1.6; color: var(--ink); background: var(--sunk); border: 1px solid var(--border); border-radius: 8px; }
-dialog.notice .skip-list li { word-break: break-all; }
 /* `.editor{display:grid}` / `.segment{display:inline-flex}` (author CSS) は UA の
    `[hidden]{display:none}` より詳細度が高く負けるため、色モードでも空の枠・重複した
    セグメントが描かれてしまう。他の `[hidden]` (`.border-opts`) と同様に上書きする。 */
@@ -845,3 +830,26 @@ dialog.notice .skip-list li { word-break: break-all; }
 .page-jump .pj-num::-webkit-outer-spin-button, .page-jump .pj-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .page-jump .pj-of { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .page-jump .pj-go { height: 30px; padding: 0 10px; font-size: 12px; }
+
+/* ---- 手順 1: 書き出し方の 2 択 ---- */
+.modepick { margin-top: 18px; }
+.modepick .lbl { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 8px; }
+.mode-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mode-card { display: flex; gap: 11px; align-items: flex-start; border: 1.5px solid var(--border); border-radius: var(--r-md); padding: 13px 14px; background: var(--surface); cursor: pointer; }
+.mode-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.mode-card input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); flex: none; }
+.mode-card .t { font-weight: 700; font-size: 14px; }
+.mode-card .d { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.mode-card .flow { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.mode-card .flow span { background: var(--sunk); border-radius: 999px; padding: 1px 8px; color: var(--ink); font-weight: 700; white-space: nowrap; }
+.mode-card .flow span.skip { text-decoration: line-through; color: var(--faint); background: transparent; border: 1px dashed var(--border-strong); }
+.mode-card .flow i { font-style: normal; color: var(--faint); }
+/* ---- 手順 1: スキャン画像のバナーとカードのバッジ ---- */
+.banner { display: flex; gap: 12px; padding: 12px 14px; border-radius: var(--r-md); background: var(--warn-soft); border: 1px solid var(--warn-line); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.banner[hidden] { display: none; }
+.banner svg { width: 20px; height: 20px; color: var(--warn-ink); flex: none; margin-top: 2px; }
+.banner b { color: var(--warn-ink); }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-ink); border: 1px solid var(--warn-line); white-space: nowrap; }
+.file-card .fsub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* ---- Undo / Redo の文字ラベル ---- */
+.iconbtn.labeled { width: auto; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-family: var(--font-ui); }

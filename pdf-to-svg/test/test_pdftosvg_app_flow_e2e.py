@@ -374,7 +374,7 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     page.goto(f"/?token={TOKEN}")
     reset_session(page)
 
-    page.check("#chk-gray")
+    page.check("#mode-gray")
     expect(page.locator("#gray-skipnote")).to_be_visible()
     with page.expect_file_chooser() as fc_info:
         page.click("#btn-pick")
@@ -467,7 +467,7 @@ def test_gray_figure_flow(e2e_page, stewardship_pdf):
     # 戻るは手順 1 へ (手順 3 ではない)
     page.click("#btn-back")
     expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
-    page.uncheck("#chk-gray")
+    page.check("#mode-normal")
 
 
 def _goto_step3(page, pdf_path):
@@ -1148,11 +1148,8 @@ def test_back_from_step3_to_step2_keeps_page(e2e_page, ocr_layer_two_page_pdf):
     expect(page.locator("#pgnav-2 .pj-num")).to_have_value("2")
 
 
-def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
-    """全ページが純スキャンなら、手順 1 の「次へ」でモーダルが出て手順 3 へ直行する。
-
-    手順 2 はステップバーから消え、「戻る」は 3→1 になる。手順 4 のまとめには「対象外」が出る。
-    """
+def test_all_scanned_pdf_shows_banner_and_skips_step2_without_a_dialog(e2e_page, scanned_pdf):
+    """全ページが純スキャン: 手順 1 にバナーとバッジが出て、「次へ」でそのまま手順 3 へ進む。"""
     page = e2e_page
     page.goto(f"/?token={TOKEN}")
     reset_session(page)
@@ -1160,52 +1157,30 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
         page.click("#btn-pick")
     fc_info.value.set_files(str(scanned_pdf))
     expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
-    # 読み込み直後のトースト (混在時にも出る通知)
-    expect(page.locator("#toast")).to_contain_text("1 ページはスキャン画像のため", timeout=30_000)
-    # 読み込んだ時点でステップバーの 2 が消え、注記が出る (グレーモードと同じ見せ方)
+    # 常設バナー (全ページ用の文言) とカードのバッジ。モーダルもトーストも無い
+    expect(page.locator("#scan-banner")).to_be_visible()
+    expect(page.locator("#scan-banner")).to_contain_text("すべてスキャン画像です（1 ページ）")
+    expect(page.locator("#scan-banner")).to_contain_text("手順 2「用語を置換」は省略し")
+    expect(page.locator("#file-cards .chip")).to_have_text(re.compile(r"スキャン画像 1 / 1 ページ"))
+    expect(page.locator("#skip2-dialog")).to_have_count(0)
+    expect(page.locator("#toast")).not_to_contain_text("スキャン画像")
+    # ステップバーの 2 が消え、注記が出る。流れ表示の「2 用語」も打ち消し
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
     expect(page.locator("#scan-skipnote")).to_be_visible()
+    expect(page.locator("#flow-step2")).to_have_class(re.compile("skip"))
+    expect(page.locator("#nav-hint")).to_contain_text("削除・枠線の編集に進みます")
 
     page.click("#btn-next")
-    dialog = page.locator("#skip2-dialog")
-    expect(dialog).to_be_visible()
-    expect(dialog).to_contain_text("上書き")
-    expect(page.locator("#skip2-n")).to_have_text("1")
-    # 省略した PDF の一覧 (ファイル名とページ数) を本文に出す
-    expect(page.locator("#skip2-list li")).to_have_count(1)
-    expect(page.locator("#skip2-list li")).to_contain_text("scanned_sample.pdf")
-    expect(page.locator("#skip2-list li")).to_contain_text("1 ページ")
-    # モーダルの間は手順 1 のまま
-    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
-    # OK 専用: Esc (2 回押しても) では閉じず、手順 1 に留まる
-    page.keyboard.press("Escape")
-    page.keyboard.press("Escape")
-    expect(dialog).to_be_visible()
-    expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
-    # 背景クリック (backdrop) でも閉じない
-    page.mouse.click(5, 5)
-    expect(dialog).to_be_visible()
-    page.click("#skip2-go")
-    expect(dialog).to_be_hidden()
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
-    expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
-
+    expect(page.locator("#trim-dyn")).to_contain_text("スキャン画像のページの使い方")
     # 「戻る」は手順 1 へ (手順 2 を飛ばしたので)
     page.click("#btn-back")
     expect(page.locator('[data-screen="1"]')).to_have_class(re.compile("on"))
-    # もう一度「次へ」でも案内は出る (OK を押すまで進めないのは同じ)
     page.click("#btn-next")
-    expect(dialog).to_be_visible()
-    page.click("#skip2-go")
-    expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
-
-    # 手順 3 から「書き出しへ」で手順 4
-    page.click("#btn-next")
+    page.click("#btn-next")  # 「書き出しへ」
     expect(page.locator('[data-screen="4"]')).to_have_class(re.compile("on"))
-    expect(page.locator("#export-summary")).to_contain_text("対象外 1")
-    # ステップバーの 2 は表示されない（クリック不可そのものは state.js 単体の stepAllowed(2) で固定）
+    expect(page.locator("#export-summary")).to_contain_text("対象外（スキャン画像） 1 ページ")
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_hidden()
-    # 手順 4 の「戻る」は手順 3 のまま (手順 2 の省略は 3→1 だけに効く)
     page.click("#btn-back")
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
 
@@ -1213,7 +1188,7 @@ def test_all_scanned_pdf_skips_step2_via_dialog(e2e_page, scanned_pdf):
 def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_page, scanned_pdf, vector_pdf):
     """スキャン PDF とベクター PDF が混在するときはモーダルを出さず手順 2 へ進む。
 
-    スキャンページはレールに出ず、手順 2 に入った時点の表示ページはベクター側になる
+    バナーとバッジは混在用の見せ方になり、手順 2 に入った時点の表示ページはベクター側になる
     (スキャンを先に読み込んで通し index 0 がスキャンページになる構成で確かめる)。
     """
     page = e2e_page
@@ -1223,22 +1198,22 @@ def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_pa
         page.click("#btn-pick")
     fc_info.value.set_files([str(scanned_pdf), str(vector_pdf)])
     expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
-    expect(page.locator("#toast")).to_contain_text("1 ページはスキャン画像のため", timeout=30_000)
+    # 混在: バナーは混在用の文言、スキャン PDF のカードだけにバッジ
+    expect(page.locator("#scan-banner")).to_contain_text("スキャン画像のページが 1 ページあります")
+    expect(page.locator("#scan-banner")).to_contain_text("手順 2 の一覧には出ません")
+    expect(page.locator("#file-cards .file-card").nth(0).locator(".chip")).to_have_count(1)
+    expect(page.locator("#file-cards .file-card").nth(1).locator(".chip")).to_have_count(0)
     # 混在ならステップバーの 2 は残る
     expect(page.locator('#stepbar .step[data-step="2"]')).to_be_visible()
     expect(page.locator("#scan-skipnote")).to_be_hidden()
+    expect(page.locator("#flow-step2")).not_to_have_class(re.compile("skip"))
 
     page.click("#btn-next")
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
-    expect(page.locator("#skip2-dialog")).to_be_hidden()
-    # レールにはベクター PDF の 1 行だけ。スキャン PDF はファイル行ごと出ない
-    expect(page.locator("#pagenav .pg-row2")).to_have_count(1)
-    expect(page.locator("#pagenav .pl-file")).to_have_count(1)
-    expect(page.locator("#pagenav .pl-file")).to_contain_text("vector_sample.pdf")
     # 表示中のページはスキャンページ (通し 0) ではなくベクター側
     expect(page.locator("#pgnav-2 .pj-file")).to_have_value("1")
     assert page.evaluate("() => window.__state.page") == 1
-    assert page.evaluate("() => window.__state.status2") == ["na", "none"]
+    assert page.evaluate("() => window.__state.scanned") == [True, False]
     # 手順 2 上部のまとめにも「対象外 1」
     expect(page.locator("#pagenav .pl-title")).to_contain_text("対象外 1")
 
@@ -1247,44 +1222,6 @@ def test_mixed_scanned_and_vector_pdfs_hide_scanned_rows_without_a_dialog(e2e_pa
     expect(page.locator('[data-screen="3"]')).to_have_class(re.compile("on"))
     page.click("#btn-back")
     expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
-    assert page.evaluate("() => window.__state.page") == 1
-
-
-def test_dialog_closed_after_a_vector_pdf_was_added_lands_on_step2(e2e_page, scanned_pdf, vector_pdf):
-    """案内モーダルの表示中に文字を持つ PDF が加わったら、閉じたときは手順 2 へ進む。
-
-    モーダルは手順 1 を離れる前に出すだけで、進行中の読み込み (`addFiles`) は止めない。
-    行き先を開いた時点の状態で決め打ちすると、混在になったのに手順 2 を飛ばしてしまう。
-    """
-    page = e2e_page
-    page.goto(f"/?token={TOKEN}")
-    reset_session(page)
-    with page.expect_file_chooser() as fc_info:
-        page.click("#btn-pick")
-    fc_info.value.set_files(str(scanned_pdf))
-    expect(page.locator("#filelist-count")).to_contain_text("1 ファイル", timeout=30_000)
-
-    page.click("#btn-next")
-    dialog = page.locator("#skip2-dialog")
-    expect(dialog).to_be_visible()
-
-    # モーダル表示中にベクター PDF を足す。モーダルは背景を inert にするため実クリックは
-    # 届かないが、スクリプトからの `click()` は inert でも通る (hit-test とフォーカスだけが
-    # 止まる)。これで実際の `addFiles` → `reloadState` の経路がモーダルの裏で走る。
-    with page.expect_file_chooser() as fc2_info:
-        page.evaluate("() => document.getElementById('btn-pick').click()")
-    fc2_info.value.set_files(str(vector_pdf))
-    expect(page.locator("#filelist-count")).to_contain_text("2 ファイル", timeout=30_000)
-    # 読み込みが済んでもモーダルは開いたまま (閉じるのは利用者の OK だけ)
-    expect(dialog).to_be_visible()
-    # 一覧は開いた時点のもの (足したベクター PDF は載らない)
-    expect(page.locator("#skip2-list li")).to_have_count(1)
-
-    page.click("#skip2-go")
-    expect(dialog).to_be_hidden()
-    # 混在になっているので手順 3 ではなく手順 2 へ進む
-    expect(page.locator('[data-screen="2"]')).to_have_class(re.compile("on"))
-    # 表示ページは対象外 (通し 0 のスキャンページ) を避けてベクター側へ寄る
     assert page.evaluate("() => window.__state.page") == 1
 
 

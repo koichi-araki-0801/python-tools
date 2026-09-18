@@ -114,7 +114,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
 
   // ── 4. 読み込み ──
   // 資源上限による劣化の直前値 (要素の切り捨て / 背景の欠落)。同じ状態で何度も通知しない。
-  var degradedNoticed = { truncated: 0, noBackground: 0, ocrPages: 0, scannedPages: 0 };
+  var degradedNoticed = { truncated: 0, noBackground: 0, ocrPages: 0 };
   async function reloadState() {
     var st = await rpc("state");
     applyState(st);
@@ -130,13 +130,9 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (st.ocrPages && st.ocrPages !== degradedNoticed.ocrPages) {
       msgs.push("画像 + OCR 文字のページを " + st.ocrPages + " ページ検出しました。置換箇所は画像の上に矩形で上書きします");
     }
-    if (st.scannedPages && st.scannedPages !== degradedNoticed.scannedPages) {
-      msgs.push(st.scannedPages + " ページはスキャン画像のため、用語の置換対象外です（手順 3 の「上書き」で置き換えられます）");
-    }
     degradedNoticed.truncated = st.truncated || 0;
     degradedNoticed.noBackground = st.noBackground || 0;
     degradedNoticed.ocrPages = st.ocrPages || 0;
-    degradedNoticed.scannedPages = st.scannedPages || 0;
     if (msgs.length) toast(msgs.join(" / "));
   }
 
@@ -169,9 +165,11 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("filelist-count").textContent =
       S.FILES.length + " ファイル・" + S.TOTAL + " ページ";
     document.getElementById("file-cards").innerHTML = S.FILES.map(function (f, i) {
+      var sc = scannedCountOf(i);
+      var chip = sc ? '<span class="chip">スキャン画像 ' + sc + " / " + f.pages + " ページ</span>" : "";
       return '<div class="file-card"><div class="fic">' + svg(fileIcon, 20) +
-        '</div><div class="fmeta"><div class="fname">' + esc(f.name) + '</div><div class="fsub">' +
-        f.pages + " ページ" + (f.size ? " ・ " + f.size : "") + "</div></div>" +
+        '</div><div class="fmeta"><div class="fname">' + esc(f.name) + '</div><div class="fsub"><span>' +
+        f.pages + " ページ" + (f.size ? " ・ " + f.size : "") + "</span>" + chip + "</div></div>" +
         '<button class="iconbtn" data-removefile="' + i + '" title="一覧から削除">' + svg(xIcon, 16) + "</button></div>";
     }).join("");
     document.getElementById("file-cards").querySelectorAll("[data-removefile]").forEach(function (b) {
@@ -182,6 +180,26 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
         render();
       });
     });
+    renderScanBanner();
+  }
+
+  /** 手順 1 のスキャン画像のバナー。スキャンページが 1 ページ以上あるときだけ出す。
+   *  グレーモードのときは出さない (手順 2 を通らないため)。文言は全ページ用と混在用の 2 系統。 */
+  function renderScanBanner() {
+    var el = document.getElementById("scan-banner"), text = document.getElementById("scan-banner-text");
+    var n = scannedTotal();
+    if (!n || S.gray) { el.hidden = true; return; }
+    var all = skipsPhase2();
+    var lines = all
+      ? ["<b>選んだ PDF はすべてスキャン画像です（" + n + " ページ）。</b>",
+         "文字を持たないため、用語の置換はできません。",
+         "手順 2「用語を置換」は省略し、「次へ」で手順 3「削除・枠線の編集」に進みます。",
+         "文字を置き換えたいときは、手順 3 の「上書き」で矩形と語を置きます。"]
+      : ["<b>スキャン画像のページが " + n + " ページあります。</b>",
+         "文字を持たないため、用語の置換はできません（手順 2 の一覧には出ません）。",
+         "文字を置き換えたいときは、手順 3 の「上書き」で矩形と語を置きます。"];
+    text.innerHTML = lines.map(function (s) { return "<span>" + s + "</span>"; }).join("");
+    el.hidden = false;
   }
   // ── 6. ページ SVG ──
   async function ensureSvg(fi, pi) {
@@ -809,7 +827,10 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     document.getElementById("exp-name-hint").textContent = S.gray
       ? "元ファイル名_p8_fig1_gray.svg …（複数は元ファイル名_gray_svg.zip）"
       : "元ファイル名_p1.svg, _p2.svg …";
-    document.getElementById("gray-mode-box").classList.toggle("on", S.gray);
+    document.getElementById("mode-normal-box").classList.toggle("on", !S.gray);
+    document.getElementById("mode-gray-box").classList.toggle("on", S.gray);
+    document.getElementById("flow-step2").classList.toggle("skip", skip2);
+    renderScanBanner();
     steps.forEach(function (st) {
       var n = +st.dataset.step; var done = n < S.phase, active = n === S.phase;
       st.classList.toggle("done", done); st.classList.toggle("active", active);
@@ -824,10 +845,11 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     btnNext.style.opacity = btnNext.disabled ? ".5" : "";
 
     if (S.phase === 1) {
+      var sc = scannedTotal();
       setHint(!S.TOTAL ? "変換するPDFを選びます"
         : S.gray ? "「次へ」で図の選択に進みます（手順 2・3 は省略）"
         : skip2 ? "「次へ」で削除・枠線の編集に進みます（スキャン画像のみのため用語の置換は省略）"
-        : "「次へ」で用語の置換に進みます");
+        : "「次へ」で用語の置換に進みます" + (sc ? "（スキャン画像の " + sc + " ページは対象外）" : ""));
       ctxText.textContent = S.TOTAL ? S.FILES.length + " ファイル・" + S.TOTAL + " ページ" : "ファイル未選択";
     } else if (S.phase === 4 && S.gray) {
       var pg4 = S.PAGES[S.page];
@@ -974,12 +996,14 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     ["dragover", "drop"].forEach(function (ev) {
       document.addEventListener(ev, function (e) { e.preventDefault(); });
     });
-    document.getElementById("chk-gray").addEventListener("change", function () {
-      S.gray = this.checked;
+    function setGray(on) {
+      S.gray = on;
       S.expMode = "all";  // グレーモードに spec は無い (手順 2・3 を通らない)
       S.svgCache = {};    // カラー/グレーで SVG が違う (キーも違うが、古い方を持ち続けない)
       render();
-    });
+    }
+    document.getElementById("mode-gray").addEventListener("change", function () { if (this.checked) setGray(true); });
+    document.getElementById("mode-normal").addEventListener("change", function () { if (this.checked) setGray(false); });
   }
 
   /** 手順2/3: キャンバス内ズーム (＋/−/リセット・Ctrl+ホイール) */

@@ -13,8 +13,8 @@
 - 辞書は一時ファイルに作り「Header A → 見出し A」を投入（本番 data/dictionary.json は汚さない）
 - ファイル選択は File System Access API を無効化し、隠し <input type=file> 経由で set_files
 - 出力 PNG: 色モード = step1_select / step2_replace / step2b_dict / step2c_dict_share /
-  step2d_guard / step3_edit / step3c_region / step3b_border / step4_export。
-  グレーモード = step1b_gray_check（チェック ON + 手順 2・3 省略の注記）/
+  step3_edit / step3c_region / step3b_border / step4_export。
+  グレーモード = step1b_gray_check（グレーの書き出し方を選んだ状態 + 手順 2・3 省略の注記）/
   step4b_gray_figure（3 ペインの図の選択画面）/ step4c_gray_panel（右ペインの拡大）。
 """
 from __future__ import annotations
@@ -131,17 +131,6 @@ def shot(page, name):
     print("  saved", path.name)
 
 
-def skip_guard_if_present(page):
-    """未確認ガードバーが出ていたら「未確認をすべてスキップして進む」を押す。"""
-    try:
-        if page.is_visible("#guard"):
-            page.click("#guard-skip")
-            return True
-    except Exception:
-        pass
-    return False
-
-
 def clear_session_files(page):
     """サーバ側セッションに残っているファイルを rpc で 1 件ずつ外す。サーバは色モード撮影
     (main) と共有しており `vector_sample.pdf` が読み込まれたままなので、グレーモード撮影の
@@ -171,7 +160,7 @@ def capture_gray(browser, url, sample_pdf):
         clear_session_files(page)
 
         # ---- ステップ1: グレーモードのチェックを ON にしてから PDF を選ぶ ----
-        page.check("#chk-gray")
+        page.check("#mode-gray")
         page.wait_for_selector("#gray-skipnote")  # 「手順 2・3 は省略されます」の注記
         with page.expect_file_chooser() as fc:
             page.click("#btn-pick")
@@ -244,14 +233,8 @@ def main():
                 print("  saved step2c_dict_share.png")
                 page.click('[data-tab="confirm"]')  # 確認タブに戻す
 
-                # ---- 未確認ガードバー (ステップ2で未確認のまま「次へ」) ----
-                page.click("#btn-next")
-                if page.is_visible("#guard"):
-                    time.sleep(0.4)
-                    shot(page, "step2d_guard.png")
-                skip_guard_if_present(page)
-
                 # ---- ステップ3: 削除・枠線の編集 ----
+                page.click("#btn-next")
                 page.wait_for_selector('.screen[data-screen="3"].on', timeout=10000)
                 page.wait_for_selector("#trim-stage svg", timeout=15000)
                 time.sleep(1.0)
@@ -286,7 +269,6 @@ def main():
 
                 # ---- ステップ4: SVG に書き出す ----
                 page.click("#btn-next")
-                skip_guard_if_present(page)
                 page.wait_for_selector('.screen[data-screen="4"].on', timeout=10000)
                 time.sleep(0.6)
                 shot(page, "step4_export.png")
