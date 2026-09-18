@@ -151,19 +151,19 @@ def test_four_step_flow(e2e_page):
     target = page.locator('#trim-stage svg [data-el]', has_text="DeleteMe")
     target.click()
     page.click("#btn-deletesel")
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（1）")
+    expect(page.locator('#trim-dyn [data-kind="removed"]')).to_have_count(1)
     page.click("#btn-undo")  # 直近の削除を取り消す
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
+    expect(page.locator('#trim-dyn [data-kind="removed"]')).to_have_count(0)
     page.locator('#trim-stage svg [data-el]', has_text="DeleteMe").click()
     page.click("#btn-deletesel")
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（1）")
+    expect(page.locator('#trim-dyn [data-kind="removed"]')).to_have_count(1)
 
     # 行ごとの「戻す」は直近の undo ではなく、その要素だけを戻す
     page.locator("#trim-dyn [data-restore]").first.click()
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
+    expect(page.locator('#trim-dyn [data-kind="removed"]')).to_have_count(0)
     page.locator('#trim-stage svg [data-el]', has_text="DeleteMe").click()
     page.click("#btn-deletesel")
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（1）")
+    expect(page.locator('#trim-dyn [data-kind="removed"]')).to_have_count(1)
 
     # ── 4. SVG に書き出す(1 ページ → 単一 SVG ダウンロード) ──
     page.click("#btn-next")  # 「書き出しへ」
@@ -320,13 +320,13 @@ def test_list_fetch_failure_clears_rows_and_offers_retry(e2e_page):
     expect(page.locator("#confirm-dyn .change-row")).to_have_count(1)
 
     page.click("#btn-next")
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
+    expect(page.locator("#trim-dyn")).to_contain_text("このページに編集はありません")
     break_rpc("removedList")
     page.locator('#pagenav-3 .pg-row2[data-g="0"]').click()
     expect(page.locator("#trim-dyn")).to_contain_text("取得できませんでした")
     heal_rpc()
     page.click("#trim-dyn [data-retry]")
-    expect(page.locator("#trim-dyn")).to_contain_text("削除した要素（0）")
+    expect(page.locator("#trim-dyn")).to_contain_text("このページに編集はありません")
 
 
 FIG_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "stewardship_sample.pdf")
@@ -906,6 +906,10 @@ def test_border_overlay_resize_and_width_change(e2e_page, ocr_layer_pdf):
     page.keyboard.press("Control+z")
     borders = _poll_borders(page, "function (bs) { return bs[0] && bs[0].width === 2; }")
     assert borders[0]["width"] == 2
+
+    # 置いた枠線は右パネル「このページの編集」にも行として出る
+    expect(page.locator('#trim-dyn [data-kind="border"]')).to_have_count(1)
+    expect(page.locator("#trim-dyn")).to_contain_text("枠線")
 
 
 def test_border_selected_edit_does_not_leak_into_the_next_border(e2e_page, ocr_layer_pdf):

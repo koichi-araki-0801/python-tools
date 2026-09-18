@@ -266,7 +266,7 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     if (onMounted) onMounted();
   }
 
-  // ── 8. 左: ページ一覧 — rail.js の buildRail/wireRail が担う (initRail で render/tryNext を注入) ──
+  // ── 8. 左: ページ一覧 — rail.js の buildRail が担う (initRail で render を注入) ──
 
   // ── 9. 確認ペイン (手順2) ──
   async function renderConfirm() {
@@ -424,40 +424,54 @@ import { initBorder, drawBorderOverlay, installBorderDrag, commitBorderStyle, cl
     svgEl.appendChild(g);
   }
 
-  // ── 10. 削除ペイン (手順3) ──
+  // ── 10. 編集ペイン (手順3): このページの編集 (削除・枠線・上書き) と使い方 ──
+  var HOWTO = {
+    normal: ["要素をクリックして「削除」。", "「範囲削除」はドラッグ範囲をまとめて削除。", "「枠線」「上書き」はドラッグで置きます。", "置いた後も動かせます。"],
+    scanned: ["画像の文字は辞書で置き換えられません。", "「上書き」を選び、置く所をドラッグします。", "上のボックスに置換語を入れます。", "画像の上に矩形と語が乗ります。", "置いた上書きは後から動かせます。"],
+  };
+  function howtoHTML() {
+    var scanned = !!S.scanned[S.page];
+    return '<div class="howto"><b>' + (scanned ? "スキャン画像のページの使い方" : "使い方") + "</b><ul>" +
+      HOWTO[scanned ? "scanned" : "normal"].map(function (s) { return "<li>" + s + "</li>"; }).join("") + "</ul></div>";
+  }
   async function renderTrim() {
     var el = document.getElementById("trim-dyn");
     var ed3 = app.querySelector('[data-screen="3"] .editor');
     ed3.classList.remove("nochange");
     var pg = S.PAGES[S.page];
     var token = pg.fileIndex + ":" + pg.pageInFile;
-    var data;
+    var args = { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile };
+    var lists;
     try {
-      data = await rpc("removedList", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile });
+      lists = await Promise.all([rpc("removedList", args), rpc("borderList", args), rpc("coverList", args)]);
     } catch (e) {
       if (token !== S.PAGES[S.page].fileIndex + ":" + S.PAGES[S.page].pageInFile) return; // ページが変わった
-      renderPaneError(el, "削除した要素の一覧を取得できませんでした: " + String((e && e.message) || e));
+      renderPaneError(el, "このページの編集の一覧を取得できませんでした: " + String((e && e.message) || e));
       return;
     }
     if (token !== S.PAGES[S.page].fileIndex + ":" + S.PAGES[S.page].pageInFile) return; // ページが変わった
-    var n = data.removed.length;
-    var head = '<div class="field-label">このページで削除した要素（' + n + "）</div>";
-    if (n === 0) {
-      el.innerHTML = head + '<div class="empty-note" style="flex:1"><div class="et" style="color:var(--faint)">要素を選んで「削除」、または「範囲削除」でドラッグした領域内の要素をまとめて削除します。</div></div>';
-      return;
-    }
-    var rows = data.removed.map(function (r) {
-      return '<div class="removed-row"><span class="ric">' + svg('<path d="M4 7h16M6 7v12.5A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7"/>', 15) +
-        '</span><span class="rlabel">' + esc(r.label) + '</span><button class="pa-link" data-restore="' + r.elId + '">戻す</button></div>';
-    }).join("");
-    el.innerHTML = head + '<div class="change-list">' + rows + "</div>";
+    var removed = lists[0].removed, borders = lists[1].borders, covers = lists[2].covers;
+    var rows = removed.map(function (r) {
+      return '<div class="edit-row" data-kind="removed"><span class="k">削除</span><span class="rlabel">' + esc(r.label) + '</span><button class="row-btn" data-restore="' + r.elId + '">戻す</button></div>';
+    }).concat(borders.map(function (b) {
+      return '<div class="edit-row" data-kind="border"><span class="k">枠線</span><span class="rlabel">' + esc(b.color) + " ・ " + b.width + ' pt</span><button class="row-btn" data-del="' + b.elId + '">削除</button></div>';
+    })).concat(covers.map(function (c) {
+      return '<div class="edit-row" data-kind="cover"><span class="k">上書き</span><span class="rlabel">' + (c.text ? "「" + esc(c.text) + "」" : "（矩形だけ）") + '</span><button class="row-btn" data-del="' + c.elId + '">削除</button></div>';
+    })).join("");
+    el.innerHTML = '<div class="field-label">このページの編集</div>' +
+      (rows ? '<div class="change-list">' + rows + "</div>" : '<div class="edit-empty">このページに編集はありません</div>') +
+      howtoHTML();
     el.querySelectorAll("[data-restore]").forEach(function (b) {
       b.addEventListener("click", async function () {
         // 行の要素だけを戻す。全体の undo は直近 1 件しか戻せず、複数回に分けて削除した
         // 後や別ページで削除した後に押すと無関係な操作を取り消してしまう。
-        await rpc("restoreElements", {
-          fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: [+b.dataset.restore],
-        });
+        await rpc("restoreElements", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: [+b.dataset.restore] });
+        await afterEdit();
+      });
+    });
+    el.querySelectorAll("[data-del]").forEach(function (b) {
+      b.addEventListener("click", async function () {
+        await rpc("applyDelete", { fileIndex: pg.fileIndex, pageInFile: pg.pageInFile, elIds: [+b.dataset.del] });
         await afterEdit();
       });
     });
